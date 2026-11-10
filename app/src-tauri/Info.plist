@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleURLTypes</key>
+    <array><dict><key>CFBundleURLName</key><string>Chauffeur workspace</string><key>CFBundleURLSchemes</key><array><string>chauffeur</string></array></dict></array>
+	<key>NSCameraUsageDescription</key>
+	<string>In the Office, your camera opens to the colleagues who come near you, once you turn it on.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>In the Office, your microphone opens to the colleagues who come near you, once you turn it on.</string>
+</dict>
+</plist>

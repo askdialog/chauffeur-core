@@ -1,0 +1,28 @@
+# 0002. Explorations: read-only workspaces at the base branch
+
+- **Date:** 2026-10-14 (also 2026-10-15, 2026-10-17, 2026-10-18, 2026-10-20)
+- **Status:** accepted
+
+## Context
+
+Asking how the code works should cost neither a workspace (branch, setup, ports, PR) nor any risk to the user's clones. An exploration checks the repos out at their fetched base branch and its agents only read.
+
+## Decision
+
+Copied from `docs/SPEC.md`, where it was recorded as settled with Justin; the date of each part is in its text.
+
+From `SPEC.md`, story 42:
+
+> As a developer, I want to start an exploration (⇧⌘N, `chauffeur new --explore`): my repos checked out at their freshly fetched base branch (e.g. `origin/staging`) in seconds, with no branch, setup script, ports, PR or Linear change, and chats that can only read (except their plan, written to the notes' `.chauffeur/plans/` by the agent only), so that I ask how the code works without paying for a workspace or risking my clones (added 2026-10-14; read-only enforced, decided with Justin; the plan, decided with Justin 2026-10-17).
+
+From `SPEC.md`, Explorations:
+
+> Read-only, enforced, whatever the client asks: chats are created in plan mode and cannot leave it. Claude runs without NotebookEdit and ExitPlanMode; Write and Edit only reach its plan: Claude Code's `plansDirectory` is the notes' `.chauffeur/plans/` (made by the daemon, for every Claude chat, so plans show in the Files tab and are kept on archive with the notes), and a `PreToolUse` path guard, also checked in the permission callback, refuses any other path with a reason (`..`, a folder that resolves outside it through a symlink, a symlinked or hard-linked target, a special file, a symlinked plans or notes folder), whatever a permission rule allows; plan mode writes the session's plan file without asking, any other file of the folder is asked for. Without that folder Write and Edit are taken away too. The user's Files tab still writes nothing in an exploration (decided with Justin 2026-10-17). Its shell commands run in Claude Code's OS sandbox (Seatbelt on macOS, bubblewrap and socat on Linux, required there: without them an exploration's Claude session refuses to start rather than run unsandboxed): writes only inside the workspace folder but never in its notes (the plans come through Write and the plan guard), and in the exploration's own temporary folder (the clones, their `.git` and refs, the state folder, `/tmp`, the user's files and Claude Code's shared `/tmp/claude-<uid>` are out of reach), no Unix socket (so no way to the daemon), no network but GitHub, no retry outside the sandbox, the Jev key withheld. That temporary folder is Claude Code's `CLAUDE_CODE_TMPDIR`, `/tmp/chauffeur-<uid>/<the end of the workspace id>`, 0700 and the user's at each level, made by the daemon when a Claude session starts; short, since Claude Code falls back to its shared folder past 44 bytes. Commands that Claude Code allows in plan mode run without asking (it runs a sandboxed command without asking even in plan mode), and what they create is removed afterwards: archive deletes the checkouts, the workspace folder and the temporary folder; Continue as a workspace deletes the temporary folder, and is refused while a checkout holds files its commit does not (changed, new or ignored), named per repo, until the user discards them (`chauffeur promote --discard`, the app's confirm step: `git reset --hard` and `git clean -ffdx` in those checkouts, nothing else) or keeps the exploration. Files written at the root of the workspace folder, outside the repos, stay until it is archived (decided with Justin 2026-10-18). Codex runs in its read-only sandbox with approvals off (`never`), so nothing escalates out of it. A `PreToolUse` guard (Claude and Codex) denies by name, with a reason, the shell commands that write git history or refs (commit, push, fetch, reset, branch, tag, stash, merge, rebase, worktree…) or GitHub (`gh pr create`, `gh api -X POST`, `curl -X POST api.github.com`…), even once approved; being a parser it is the explanation, the sandbox is the enforcement. An exploration's agents get neither the `chauffeur` CLI on their PATH nor `CHAUFFEUR_HOME`: the daemon cannot tell its callers apart, so an exploration must not be able to call it (decided with Justin 2026-10-15). Residual, accepted: a script that reads the user's own `gh` credentials and posts to GitHub from an approved command is stopped by the parser only.
+
+From `SPEC.md`, Explorations:
+
+> Continue as a workspace (header, `chauffeur promote`; decided with Justin 2026-10-15; also from the Read-only mode in the composer, where a workspace has its permission mode: a menu offers it, unavailable with the reason while an agent works, and opens the same confirmation; decided with Justin 2026-10-20): each repo gets a branch named as a new workspace's, from the commit it reads; then the files to copy, a port block and the setup scripts. Its chats leave plan mode and their sessions close, so the next message resumes them able to write, the conversation kept, and its temporary folder goes. Refused while an agent works, and while a checkout holds files its commit does not, unless discarded (above; decided with Justin 2026-10-18).
+
+## Consequences
+
+Read-only is enforced by the daemon and the sidecar (plan mode, the plan path guard, the OS sandbox, the git and GitHub write guard), whatever a client asks, and an exploration's agents get no `chauffeur` CLI. Continue as a workspace is the only way to write. Accepted residual risk: a script using the user's own `gh` credentials from an approved command is stopped by the parser only.

@@ -1,0 +1,56 @@
+[package]
+name = "chauffeur-app"
+description = "The Chauffeur desktop app: a Tauri shell around the React UI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "chauffeur-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-notification = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+chauffeur-protocol.workspace = true
+tokio.workspace = true
+libc.workspace = true
+url.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The versions wry links, for the canvas's screen snapshots (screen_snapshot.rs).
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSDictionary", "NSError", "NSObject", "NSString", "NSURL", "NSURLRequest", "NSValue"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGImage"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-graphics", "NSBitmapImageRep", "NSGraphicsContext", "NSImage", "NSImageRep", "NSResponder", "NSView"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "WKContentWorld", "WKFrameInfo", "WKNavigation", "WKNavigationDelegate", "WKSnapshotConfiguration", "WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The one wry links; `v2_38` for `enable-webrtc`.
+webkit2gtk = { version = "2", features = ["v2_38"] }
+# The tray icon is Linux's only (src/tray.rs).
+tauri = { version = "2", features = ["tray-icon"] }
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+# Tauri's own menus' crate, to check that the accelerators given to the menu parse (src/menu.rs):
+# Tauri drops one that does not, silently.
+muda = { version = "0.21", default-features = false }
+
+[features]
+# `tauri build` enables it: serve the bundled UI instead of the Vite dev server.
+custom-protocol = ["tauri/custom-protocol"]

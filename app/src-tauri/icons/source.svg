@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Chauffeur's mark in Dialog's colours: the ink tile (primary._600), the C in the brand's
+       lilac → rose → peach gradient (brand.edge), a white dot.
+       To change the icon: render this file to source.png (1024 px), app/src/share/icon.png
+       (256 px) and app/public/favicon.png (32 px), then in app/ run
+       `bun tauri icon src-tauri/icons/source.png -o <temp dir>` and copy the files
+       tauri.conf.json lists, plus icon.png, into this folder. -->
+  <defs>
+    <linearGradient id="edge" x1="215" y1="215" x2="760" y2="809" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F6D7FC"/>
+      <stop offset="0.55" stop-color="#F5BBBD"/>
+      <stop offset="1" stop-color="#F3B37D"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="184" fill="#141414"/>
+  <path d="M702.7 351.9 A249 249 0 1 0 702.7 672.1" fill="none" stroke="url(#edge)" stroke-width="96"/>
+  <circle cx="762" cy="512" r="51" fill="#FFFFFF"/>
+</svg>

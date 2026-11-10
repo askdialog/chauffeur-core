@@ -1,0 +1,31 @@
+# 0038. Sharing a workspace live, with suggestions
+
+- **Date:** 2026-10-29
+- **Status:** sign-in and team superseded by [share-with-any-email](share-with-any-email.md), sharing chosen chats allowed by [share-chosen-chats](share-chosen-chats.md)
+
+## Context
+
+Settling a decision together (a macro architecture, how to cut a project) with the agent in the loop, while the owner keeps the hand on what it is told.
+
+## Decision
+
+Copied from `docs/SPEC.md`, where it was recorded as settled with Justin; the date of each part is in its text.
+
+From `SPEC.md`, story 53:
+
+> As a developer, I want to share a workspace live with named colleagues, each either a viewer or allowed to suggest messages to its agents, their suggestions coming to me and sent only if I decide, so that we settle a decision together (a macro architecture, how to cut a project) with the agent in the loop while I keep the hand on what it is told (decided with Justin 2026-10-29). Sharing works as a design's (story 51), for a whole workspace: its menu's "Share workspace…", or `chauffeur share-workspace <workspace> [--with a,b] [--suggest a,b] [--team|--no-team] [--stop]`, opens `<share service>/w/<id>` to colleagues named by e-mail, each **Viewer** or **Can suggest** (changed at any time, from the dialog or the owner's page), or to the team (every member then a viewer), signed in with the Workspace's Google SSO; a new link each time, Stop sharing kills it and removes the hosted copy, archiving the workspace stops it. A guest sees every chat of the workspace, those created while it is shared too, live as the app shows them (messages, the folded tool calls and thinking, the plan, the step it is on, Working / Waiting for <owner> / Idle), its design chats as a design share shows their canvas, and the notes folder's markdown (`.chauffeur/`, rendered, read-only); who is viewing; "Live", or "Last update <ago>" while the Mac is asleep or offline (the share keeps its last state). Never the terminals, processes, diff, repos' files or settings; a permission or question card reads "Waiting for <owner>" and nothing on the page acts on a chat. A guest who can suggest writes under a chat ("Suggest a message"); the suggestion comes to the owner as a card above that chat's composer, with its author: **Send** (sent as the owner's own message: the agent is not told who suggested it), **Edit** (into the composer, appended below its draft; sending it marks the suggestion sent, edited), **Dismiss**; it badges the chat's tab and the workspace's row, and notifies when the window is not in front, as a reviewer's comment does. Every guest sees every suggestion and its fate (pending, sent, sent edited, dismissed), so the debate stays in view; in the transcript, a message sent from a suggestion names its author to the humans (owner and guests), never to the agent. Out of scope: a guest taking the workspace over, a guest answering permissions or questions or interrupting, sharing one chat alone, the terminals, the diff and the repos' files.
+
+From `SPEC.md`, Workspace shares:
+
+> **Workspace shares (story 53, decided with Justin 2026-10-29).**
+> - The design share service carries them (`crates/chauffeur-design-share`: one service, one database, one deploy): `workspace_shares`, their guests with a role (`viewer` / `suggest`), `suggestions`; the transcripts and the notes are stored in clear on the VM's disk as designs are (the same trust as a design share, not the mobile relay's end-to-end encryption: decided 2026-10-29), removed at once when the share stops.
+> - The daemon keeps one outbound WSS per shared workspace (`/v1/workspace-shares/{id}/daemon`, as a design share's: reconnects with backoff, `Hello` with a fresh ID token): `Chats` (the list, titles, kinds, statuses) after each change, `History {chat, events}` once per chat at start and at each chat's creation (what `events.history` returns), `Events {chat, events}` as they are logged (only kinds the event log keeps; a permission request or question reduced to its pending state, no input), `Notes` (the changed markdown files of the notes folder, each up to 1 MB), `Suggestions` whole after each change; back: a guest's `Suggestion {chat, text}` signed with their e-mail, `Viewers`, `Refused`. A design chat of a shared workspace is to be pushed as a design share's folder is (not built yet: a guest sees its transcript only, and no image of a message, which the daemon drops).
+> - What leaves the Mac is trimmed by the daemon: a tool's output cut to 8 KB, images and attachments dropped, a permission request's input and an MCP confirmation's schema and link dropped; the user's shell commands (`shell_started`, `shell_ended`) and what only side panels show (tasks' progress, context usage, MCP status, prompt suggestions) are not sent. Only open chats are shared.
+> - A workspace's `share` event and a chat's `suggestions` event go to registry subscriptions too, ephemeral as they are: the app's sidebar badges a workspace that is not open without following all of its live events.
+> - Suggestions live in the daemon's store (`suggestions`: id, chat, author, text, at, state `pending|sent|sent_edited|dismissed`) so that a card outlives a restart; `chat.suggestions`, `chat.suggestion_dismiss`, and `chat.send {suggestion}` marks it sent (edited when the text differs) and puts `suggested_by` on the user message's event, which the sidecar never passes to the agent.
+> - `workspace.share_state|share_start|share_update|share_stop` (`chauffeur share-workspace`), a `workspace_shares` row per workspace (share id, link, guests and roles, open to the team, stopped at); archiving or deleting the workspace stops it.
+> - The guest page: `app/share.html` grows a `/w/<id>` route: the sidebar of the workspace's chats and its notes, the app's chat view read-only (no composer; the suggest box for a guest who can suggest, with the suggestions and their states), a design chat's canvas as a design share's page shows it; the same banner (title, Live / Last update, viewers) and the same signed-out, not-named and stopped states.
+
+## Consequences
+
+Transcripts and notes are stored in clear on the share service's disk (the same trust as a design share, not the relay's end-to-end encryption), removed when the share stops; the agent is never told who suggested a message.

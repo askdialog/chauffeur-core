@@ -1,0 +1,134 @@
+name: Core CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: core-${{ github.ref }}
+  # A run on `main` is left to finish: cancelled, it would save no cache.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.scope.outputs.rust }}
+      javascript: ${{ steps.scope.outputs.javascript }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Repository checks
+        run: |
+          python3 .github/scripts/adr_index.py --check
+          python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - id: scope
+        name: Select checks
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/ci_scope.py
+
+  rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CHAUFFEUR_PORT_OVERRIDE: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      # Rust's lifecycle tests launch TypeScript sidecar stand-ins.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.3'
+      - run: rustup toolchain install --no-self-update
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          # Only `main` saves: a pull request's cache serves that pull request alone, and those
+          # filled the repository's 10 GB and evicted `main`'s, which every pull request restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Isolate test data
+        run: |
+          git config --global user.name 'Chauffeur CI'
+          git config --global user.email 'ci@example.invalid'
+          test_home="$RUNNER_TEMP/chauffeur-core"
+          mkdir -p "$test_home/home"
+          printf 'linear_enabled = false\n' > "$test_home/home/settings.toml"
+          {
+            echo "CHAUFFEUR_HOME=$test_home/home"
+            echo "CHAUFFEUR_WORKSPACES_DIR=$test_home/workspaces"
+            echo "CHAUFFEUR_REPOS_DIR=$test_home/repos"
+          } >> "$GITHUB_ENV"
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --locked --workspace --exclude chauffeur-app --all-targets -- -D warnings
+      - name: Rust tests
+        run: cargo test --locked -p chauffeurd -p chauffeur-cli -p chauffeur-protocol -- --skip docker --skip postgres
+
+  javascript:
+    needs: changes
+    if: needs.changes.outputs.javascript == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CHAUFFEUR_PORT_OVERRIDE: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.3'
+      - name: Restore Bun's package cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-install-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+          restore-keys: bun-install-${{ runner.os }}-
+      - name: Isolate test data
+        run: |
+          git config --global user.name 'Chauffeur CI'
+          git config --global user.email 'ci@example.invalid'
+          test_home="$RUNNER_TEMP/chauffeur-core"
+          mkdir -p "$test_home/home"
+          printf 'linear_enabled = false\n' > "$test_home/home/settings.toml"
+          {
+            echo "CHAUFFEUR_HOME=$test_home/home"
+            echo "CHAUFFEUR_WORKSPACES_DIR=$test_home/workspaces"
+            echo "CHAUFFEUR_REPOS_DIR=$test_home/repos"
+          } >> "$GITHUB_ENV"
+      - working-directory: app
+        run: bun install --frozen-lockfile && bun run typecheck && bun test && bun run build
+      - working-directory: sidecar
+        run: bun install --frozen-lockfile && bun run typecheck && bun test
+      - working-directory: packages/remote
+        run: bun install --frozen-lockfile && bun run typecheck && bun test
+      - working-directory: relay
+        run: bun install --frozen-lockfile && bun run typecheck && bun test
+      - working-directory: slack
+        run: bun install --frozen-lockfile && bun run typecheck && bun test
+      # Pull request caches are not reusable by other branches.
+      - name: Save Bun's package cache
+        if: ${{ github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-install-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+
+  # Keep the existing required status name; a failed or cancelled job must never pass this gate.
+  check:
+    needs: [changes, rust, javascript]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Require every selected check
+        env:
+          CHECK_NEEDS: ${{ toJSON(needs) }}
+        run: python3 .github/scripts/ci_scope.py

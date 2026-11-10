@@ -1,0 +1,19 @@
+{
+  "name": "@chauffeur/slack",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "start": "bun src/main.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.3",
+    "jose": "6",
+    "typescript": "~6.0.3"
+  },
+  "dependencies": {
+    "openid-client": "6"
+  }
+}

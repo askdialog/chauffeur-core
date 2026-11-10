@@ -1,0 +1,29 @@
+/* Chauffeur's theme tokens: Core's stylesheet emits every one of them (`theme(static)` in
+   src/index.css), and an extension's stylesheet refers to them without redefining them
+   (`theme(reference)`), so a separately built extension follows the theme of the running Core. */
+
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, monospace;
+  /* The code font's size (Settings › Appearance). */
+  --code-size: 12px;
+
+  --color-bg: #0f0f11;
+  --color-sidebar: #131316;
+  --color-panel: #17171a;
+  --color-raised: #1d1d21;
+  --color-hover: #222227;
+  --color-line: #26262b;
+  --color-line-strong: #34343a;
+  --color-fg: #e4e4e7;
+  --color-muted: #a0a0a8;
+  --color-faint: #6c6c75;
+  --color-accent: #7b83f6;
+  --color-accent-strong: #6670f0;
+  --color-working: #58a6ff;
+  --color-attention: #f0b545;
+  --color-danger: #f06363;
+  --color-success: #4cc38a;
+  --color-success-strong: #238636;
+  --color-success-hover: #2ea043;
+}

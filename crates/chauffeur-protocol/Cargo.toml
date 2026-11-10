@@ -1,0 +1,12 @@
+[package]
+name = "chauffeur-protocol"
+description = "Wire types between Chauffeur clients, the daemon and the agent sidecar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+ts-rs.workspace = true

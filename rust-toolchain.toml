@@ -1,0 +1,6 @@
+# The toolchain CI, release builds and every checkout compile with; rustup installs it on first use.
+# Raise it by hand to the current stable.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

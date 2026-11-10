@@ -1,0 +1,21 @@
+# Advisories `cargo audit --deny warnings` lets through, none with a fix reachable today. Drop an
+# entry as soon as `cargo update` (or a bump of the crate that pulls it in) makes it pass.
+[advisories]
+ignore = [
+    # rsa, Marvin attack: no fixed release exists. Pulled in by jsonwebtoken's rust_crypto backend
+    # (chauffeur-office, chauffeur-design-share), which only verifies Google's RS256 ID tokens
+    # with public keys; the timing leak concerns private-key operations.
+    "RUSTSEC-2023-0071",
+    # crypto-bigint 0.5, timing variability: the fix is 0.7, which elliptic-curve 0.13 (p256, p384
+    # under jsonwebtoken 11) cannot take. No P-256/P-384 key is ever used: tokens are RS256.
+    "RUSTSEC-2026-0387",
+    # zbus_names, zvariant, zvariant_derive unmaintained: zbus 5 (chauffeurd's Linux notifications,
+    # ashpd, tauri-plugin-notification) still depends on them; wait for zbus to move off them.
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0372",
+    # proc-macro-error unmaintained, glib 0.18 VariantStrIter unsound: the GTK 3 stack Tauri's Linux
+    # webview (webkit2gtk, gtk 0.18) is built on. Fixed only by Tauri moving to gtk-rs 0.20+.
+    "RUSTSEC-2024-0370",
+    "RUSTSEC-2024-0429",
+]

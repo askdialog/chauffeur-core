@@ -1,0 +1,17 @@
+[Unit]
+Description=Chauffeur Slack message imports
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+ExecStartPre=/usr/bin/install -d -m 0700 -o 65532 -g 65532 /var/lib/chauffeur-slack
+ExecStartPre=-/usr/bin/docker rm -f chauffeur-slack
+ExecStart=/usr/bin/docker run --rm --name chauffeur-slack --log-driver none --network host --read-only --mount type=bind,src=/var/lib/chauffeur-slack,dst=/data --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 256m --cpus 0.5 --env-file /etc/chauffeur-slack.env chauffeur-slack
+ExecStop=/usr/bin/docker stop chauffeur-slack
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

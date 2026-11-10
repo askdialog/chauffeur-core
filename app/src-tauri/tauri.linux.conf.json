@@ -1,0 +1,16 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Chauffeur",
+        "width": 1320,
+        "height": 840,
+        "minWidth": 900,
+        "minHeight": 560,
+        "backgroundColor": "#0f0f11",
+        "dragDropEnabled": true
+      }
+    ]
+  }
+}

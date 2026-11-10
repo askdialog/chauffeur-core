@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window: events (menu actions), notifications and its zoom. Everything else goes to the daemon.",
+  "windows": ["main"],
+  "permissions": ["core:default", "core:webview:allow-set-webview-zoom", "notification:default"]
+}

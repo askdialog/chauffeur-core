@@ -1,0 +1,43 @@
+# Weekly update PRs, titled the repo's way (`ci(deps): …`, `build(deps): …`): one for Rust, one for
+# the JavaScript folders, and one for the workflows, majors included. A
+# major that breaks the build holds back the others in its PR: split it out with an `ignore` or
+# `@dependabot ignore this major version` on that PR. Workflows pin actions by commit SHA with the tag in a comment, which
+# Dependabot keeps in step. protocol-ts is left out: it has no dependency and no bun.lock.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      cargo:
+        patterns: ["*"]
+
+  - package-ecosystem: bun
+    directories:
+      - /app
+      - /sidecar
+      - /relay
+      - /packages/remote
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      bun:
+        patterns: ["*"]

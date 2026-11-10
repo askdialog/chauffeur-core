@@ -1,0 +1,503 @@
+@import "tailwindcss";
+
+/* Every token, used by Core or not: extensions built separately use them too. */
+@import "../sdk/theme.css" theme(static);
+
+/* The code's and the terminal's colours: the app's own, or the user's terminal theme (Settings ›
+   Appearance), set on <html> by lib/palette.ts. */
+:root {
+  --code-bg: #121215;
+  --code-fg: #d4d4d8;
+  --terminal-bg: #0c0c0e;
+  --hl-comment: #6c6c75;
+  --hl-keyword: #c792ea;
+  --hl-string: #a5d6a7;
+  --hl-number: #f6b47a;
+  --hl-function: #82aaff;
+  --hl-type: #7fdbca;
+  --hl-property: #e6c07b;
+  --hl-tag: #ff8b8b;
+  --hl-deletion: #f07178;
+  --hl-meta: #9aa0b5;
+}
+
+/* Base styles live in the base layer so that Tailwind utilities override them. */
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+  }
+
+  body {
+    background: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+
+  /* Text the user reads or copies stays selectable. */
+  .selectable,
+  .md,
+  pre,
+  code,
+  textarea,
+  input {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* Selection gaps. When a selection spans lines or blocks, WebKit (the app's WKWebView; Chromium
+     does not do this) also fills the "gaps" around the selected text: beside each line, from its
+     start and from its end out to the edges of the selection root, and between blocks. The
+     selection root is the nearest block that scrolls or clips (overflow other than visible), is
+     out of flow, a float, a table cell, an inline-block, a flex or grid item or transformed
+     (RenderBlock::isSelectionRoot): for a message, the chat's scroller, so a band across the whole
+     chat. A gap beside a line takes the selection colour of the element holding the text at that
+     end of the line (so the text's own colour), a gap between blocks that of their parent block.
+
+     1. Only text the user can select has a selection colour, so the gaps between the chat's
+        non-selectable blocks (tool calls, the frames around messages) stay transparent. */
+  ::selection {
+    background: transparent;
+  }
+  :is(.selectable, .md, pre, code, textarea, input, [contenteditable="true"]) ::selection,
+  :is(.selectable, .md, pre, code, textarea, input, [contenteditable="true"])::selection {
+    background: color-mix(in srgb, var(--color-accent) 38%, transparent);
+  }
+  /* 2. Colour cannot separate a line's gaps from its text, so each selectable block is made a
+        transformed selection root: WebKit paints no gaps at all inside a transformed root
+        (RenderBlock::selectionGaps returns early for it, in every WebKit since 2007), and its
+        parent fills the gaps around it with its own, transparent, colour. Only the text itself
+        is highlighted. An identity transform changes no layout or pixel; it does make the block a
+        stacking context and the containing block of its positioned descendants, which nothing
+        inside these blocks relies on (the Lightbox is portalled to <body>). */
+  :is(.selectable, .md, pre) {
+    transform: translateX(0);
+  }
+
+  button {
+    cursor: default;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #2c2c32;
+    border-radius: 8px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #3a3a42;
+    background-clip: content-box;
+    border: 3px solid transparent;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *:focus-visible {
+    outline: 1px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+}
+
+/* Markdown from the agent. */
+.md {
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.md .md-image {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  margin: 0.5em 0;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+}
+/* A ```mermaid block, drawn. */
+.md .md-mermaid {
+  margin: 0.5em 0;
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  background: var(--color-panel);
+}
+.md .md-mermaid pre {
+  margin: 0;
+  border: 0;
+}
+.md .md-mermaid-svg svg {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  height: auto;
+  margin: 0 auto;
+}
+.md .md-block-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 5px;
+  background: var(--color-raised);
+  color: var(--color-muted);
+  font-size: 11px;
+}
+.md .md-block-button:hover {
+  color: var(--color-fg);
+}
+/* A code block, its Copy button over its top right corner. */
+.md .md-code {
+  margin: 0.5em 0;
+}
+.md .md-code pre {
+  margin: 0;
+}
+.md > *:first-child {
+  margin-top: 0;
+}
+.md > *:last-child {
+  margin-bottom: 0;
+}
+.md p,
+.md ul,
+.md ol,
+.md pre,
+.md table,
+.md blockquote {
+  margin: 0.5em 0;
+}
+.md ul,
+.md ol {
+  padding-left: 1.4em;
+}
+.md ul {
+  list-style: disc;
+}
+.md ol {
+  list-style: decimal;
+}
+.md li {
+  margin: 0.15em 0;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-weight: 600;
+  margin: 0.9em 0 0.4em;
+  line-height: 1.3;
+}
+.md h1 {
+  font-size: 1.3em;
+}
+.md h2 {
+  font-size: 1.15em;
+}
+.md h3,
+.md h4 {
+  font-size: 1em;
+}
+.md a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: #222228;
+  border: 1px solid #2c2c33;
+  border-radius: 4px;
+  padding: 0.05em 0.3em;
+}
+.md pre {
+  background: var(--code-bg);
+  color: var(--code-fg);
+  border: 1px solid var(--color-line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-size: var(--code-size);
+}
+.md pre code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+.md blockquote {
+  border-left: 2px solid var(--color-line-strong);
+  padding-left: 0.8em;
+  color: var(--color-muted);
+}
+.md blockquote.md-code-comment {
+  margin: 1em 0;
+  border: 1px solid var(--color-line-strong);
+  border-radius: 8px;
+  padding: 0.8em 1em;
+  color: inherit;
+}
+.md-code-comment > :first-child {
+  margin-top: 0;
+}
+.md-code-comment > :last-child {
+  margin-bottom: 0;
+}
+/* A table scrolls sideways rather than squeeze a column: `overflow-wrap: anywhere` (inherited from
+   .md) would let a cell shrink to one letter wide, so cells break only between words, and a table
+   wider than the message scrolls. */
+.md table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.md th,
+.md td {
+  border: 1px solid var(--color-line);
+  padding: 3px 8px;
+  text-align: left;
+  overflow-wrap: break-word;
+}
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--color-line);
+  margin: 1em 0;
+}
+
+/* The caret after streamed text. */
+.md-streaming > *:last-child::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 12px;
+  margin-left: 3px;
+  vertical-align: -1px;
+  background: var(--color-muted);
+  animation: pulse-dot 1s ease-in-out infinite;
+}
+
+/* highlight.js: a calm palette matching the UI, or the user's terminal theme (see :root). */
+.hljs-comment,
+.hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-doctag,
+.hljs-meta .hljs-keyword {
+  color: var(--hl-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: var(--hl-string);
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link,
+.hljs-variable.constant_ {
+  color: var(--hl-number);
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-title.class_ {
+  color: var(--hl-function);
+}
+.hljs-built_in,
+.hljs-type,
+.hljs-class .hljs-title {
+  color: var(--hl-type);
+}
+.hljs-attr,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-property {
+  color: var(--hl-property);
+}
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--hl-tag);
+}
+.hljs-deletion {
+  color: var(--hl-deletion);
+}
+.hljs-meta {
+  color: var(--hl-meta);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
+
+@keyframes pulse-dot {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.animate-pulse-dot {
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+.xterm {
+  padding: 6px 0 0 8px;
+  height: 100%;
+}
+.xterm .xterm-viewport {
+  background: transparent !important;
+}
+
+/* A file named in a chat: opens in the Files tab. */
+.md code.file-link {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-decoration-color: var(--color-faint);
+  text-underline-offset: 2px;
+}
+.md code.file-link:hover {
+  color: var(--color-accent);
+  text-decoration-color: var(--color-accent);
+}
+
+/* A design chat's screen that changed on disk: a short accent outline (story 47). */
+@keyframes canvas-flash {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.canvas-flash {
+  animation: canvas-flash 1s ease-out forwards;
+}
+
+/* The Office: an agent's "?", bobbing to catch the eye. */
+@keyframes office-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+.office-bob {
+  animation: office-bob 0.9s ease-in-out infinite;
+}
+
+/* The Office: a speech bubble pops up above its speaker. */
+@keyframes office-bubble {
+  0% { transform: translateY(4px) scale(0.92); opacity: 0; }
+  100% { transform: none; opacity: 1; }
+}
+.office-bubble {
+  animation: office-bubble 0.18s ease-out;
+}
+
+/* The Office: a sleeping colleague's z's, rising from their pillow one after the other. */
+@keyframes office-zzz {
+  0% { transform: translate(0, 0) scale(0.6); opacity: 0; }
+  25% { opacity: 1; }
+  100% { transform: translate(22px, -30px) scale(1.15); opacity: 0; }
+}
+.office-zzz span {
+  position: absolute;
+  left: 4px;
+  bottom: 0;
+  opacity: 0;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.6);
+  animation: office-zzz 2.4s ease-out infinite;
+}
+.office-zzz span:nth-child(1) { font-size: 14px; }
+.office-zzz span:nth-child(2) { font-size: 18px; animation-delay: 0.8s; }
+.office-zzz span:nth-child(3) { font-size: 23px; animation-delay: 1.6s; }
+
+/* The Office: a blow's damage jumps out above who took it, then floats up and fades. */
+@keyframes office-damage {
+  0% { transform: translate(-50%, 6px) scale(0.6); opacity: 0; }
+  15% { transform: translate(-50%, -8px) scale(1.25); opacity: 1; }
+  30% { transform: translate(-50%, -12px) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -48px) scale(1); opacity: 0; }
+}
+.office-damage {
+  animation: office-damage 1.1s ease-out forwards;
+  text-shadow: 0 1px 0 #000, 0 0 3px #000, 0 0 6px rgba(0, 0, 0, 0.6);
+}
+
+/* The Office: the edges of the screen redden a moment, lightly, when the user is hit. */
+@keyframes office-hurt {
+  0% { opacity: 0; }
+  12% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.office-hurt {
+  animation: office-hurt 0.7s ease-out forwards;
+  box-shadow: inset 0 0 70px 18px rgba(220, 38, 38, 0.28);
+}
+
+/* The Office: who knocked out whom drops in, stays a few seconds, and fades. */
+@keyframes office-knock-out {
+  0% { transform: translateY(-8px) scale(0.9); opacity: 0; }
+  6% { transform: none; opacity: 1; }
+  85% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.office-knock-out {
+  animation: office-knock-out 4s ease-out forwards;
+}
+
+/* The Office: the level-up window pops in. */
+@keyframes office-level-up {
+  0% { transform: scale(0.9); opacity: 0; }
+  100% { transform: none; opacity: 1; }
+}
+.office-level-up {
+  animation: office-level-up 0.22s ease-out;
+}
+
+/* Find in a chat (⌘F): every match in view, and the current one more strongly (ChatFind.tsx). */
+::highlight(chat-find) {
+  background-color: color-mix(in srgb, var(--color-attention) 35%, transparent);
+}
+::highlight(chat-find-current) {
+  background-color: var(--color-attention);
+  color: #1a1408;
+}
+
+/* A markdown file's commented passages in the Files tab, and the one whose thread is shown (FileComments.tsx). */
+::highlight(file-comments) {
+  background-color: color-mix(in srgb, var(--color-attention) 22%, transparent);
+}
+::highlight(file-comment-active) {
+  background-color: color-mix(in srgb, var(--color-attention) 50%, transparent);
+}

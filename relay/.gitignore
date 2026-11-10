@@ -1,0 +1,7 @@
+.env
+.env.*
+credentials.json
+*.pem
+*.key
+
+.*.bun-build

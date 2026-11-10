@@ -1,0 +1,6 @@
+# What a Chauffeur workspace runs for this repo.
+
+[scripts]
+# A new worktree has no node_modules, so `bun run typecheck` fails on a missing `tsc`.
+# The same packages as CI; relay's postinstall also install packages/remote.
+setup = "for dir in sidecar app relay slack; do (cd \"$dir\" && bun install --frozen-lockfile) || exit 1; done"

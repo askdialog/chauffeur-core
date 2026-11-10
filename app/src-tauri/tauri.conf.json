@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Chauffeur",
+  "version": "0.30.0",
+  "identifier": "com.askdialog.chauffeur",
+  "plugins": {
+    "deep-link": { "desktop": { "schemes": ["chauffeur"] } }
+  },
+  "build": {
+    "beforeDevCommand": "bun run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "bun run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Chauffeur",
+        "width": 1320,
+        "height": 840,
+        "minWidth": 900,
+        "minHeight": 560,
+        "backgroundColor": "#0f0f11",
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' http://127.0.0.1:*/extension-assets/; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:* ws://localhost:* http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob: asset: http://asset.localhost http://127.0.0.1:* http://localhost:*; style-src 'self' 'unsafe-inline' http://127.0.0.1:*/extension-assets/; font-src 'self' data:; media-src 'self' blob: https: http://127.0.0.1:* http://localhost:*; frame-src http://127.0.0.1:*"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "category": "DeveloperTool",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+  }
+}

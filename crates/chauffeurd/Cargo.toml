@@ -1,0 +1,64 @@
+[package]
+name = "chauffeurd"
+description = "The Chauffeur daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+chauffeur-extension-api = { path = "../chauffeur-extension-api" }
+chauffeur-protocol.workspace = true
+chauffeur-design.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util = { workspace = true, features = ["rt"] }
+futures-util.workspace = true
+axum.workspace = true
+rusqlite.workspace = true
+sqlite-vec.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+libc.workspace = true
+rand.workspace = true
+regex.workspace = true
+percent-encoding.workspace = true
+globset.workspace = true
+walkdir.workspace = true
+reqwest.workspace = true
+portable-pty.workspace = true
+base64.workspace = true
+sha2.workspace = true
+hex.workspace = true
+shlex.workspace = true
+semver.workspace = true
+tar.workspace = true
+flate2.workspace = true
+zstd.workspace = true
+zeroize.workspace = true
+ed25519-dalek.workspace = true
+bs58.workspace = true
+feed-rs.workspace = true
+sentry-types.workspace = true
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-native-roots"] }
+
+tempfile.workspace = true
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+# Asks the Secret Service whether a protected secret is locked, which `secret-tool` cannot say.
+zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
+
+[dev-dependencies]
+tokio-tungstenite.workspace = true
+chauffeur-design-share = { path = "../chauffeur-design-share" }
+
+[[bin]]
+name = "chauffeurd"
+path = "src/main.rs"
