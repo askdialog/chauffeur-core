@@ -18,7 +18,7 @@
     "ajv-formats": "^3.0.1"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "1.3.0",
+    "@anthropic-ai/sdk": "1.6.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@types/bun": "1.4.4",
     "typescript": "7.0.2",
