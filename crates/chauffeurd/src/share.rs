@@ -66,7 +66,7 @@ struct Link {
     last_comment: Option<ReviewerComment>,
 }
 
-/// What the link's folder looked like last: each file's change time.
+/// What the service holds of the link's folder: each file's change time when it was sent.
 pub(crate) type Listing = BTreeMap<String, u64>;
 
 /// What a markdown file's share is keyed by, where a design's is keyed by its chat.
@@ -838,7 +838,7 @@ impl Shares {
         let base = self
             .base_url()
             .ok_or("Sharing is off: set design_share.url in settings.toml")?;
-        let token = self.token().await?;
+        let mut token = self.token().await?;
         let ws_base = base
             .replacen("https://", "wss://", 1)
             .replacen("http://", "ws://", 1);
@@ -890,39 +890,46 @@ impl Shares {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    let now = source.scan();
+                    let mut now = source.scan();
                     let (changed, removed) = diff(listing.as_ref(), &now);
                     let mut uploaded = Vec::new();
                     for path in &changed {
-                        match tokio::fs::read(source.file(path)).await {
-                            Ok(bytes) => {
-                                let response = self
-                                    .http
-                                    .put(format!("{base}/v1/shares/{}/files/{}", row.share_id, crate::canvas::encode_path(path)))
-                                    .bearer_auth(&token)
-                                    .body(bytes)
-                                    .send()
-                                    .await
-                                    .map_err(|e| format!("Could not upload {path}: {e}"))?;
-                                if response.status() == reqwest::StatusCode::GONE {
-                                    return Ok(Ended::Stopped);
-                                }
-                                if !response.status().is_success() {
-                                    tracing::warn!(path, status = %response.status(), "the share service refused a file");
-                                    continue;
-                                }
-                                uploaded.push(path.clone());
+                        let bytes = match tokio::fs::read(source.file(path)).await {
+                            Ok(bytes) => bytes,
+                            Err(error) => {
+                                tracing::warn!(%error, path, "could not read a file to share");
+                                unsent(&mut now, listing.as_ref(), path);
+                                continue;
                             }
-                            Err(error) => tracing::warn!(%error, path, "could not read a file to share"),
+                        };
+                        let url = format!("{base}/v1/shares/{}/files/{}", row.share_id, crate::canvas::encode_path(path));
+                        let response = authorized(&mut token, || self.token(), |token| {
+                            self.http.put(&url).bearer_auth(token).body(bytes.clone())
+                        })
+                        .await
+                        .map_err(|e| format!("Could not upload {path}: {e}"))?;
+                        let status = response.status();
+                        if status == reqwest::StatusCode::GONE {
+                            return Ok(Ended::Stopped);
                         }
+                        if status == reqwest::StatusCode::UNAUTHORIZED {
+                            return Err(refusal(response.error_for_status().expect_err("a 401 is an error")));
+                        }
+                        if !status.is_success() {
+                            tracing::warn!(path, %status, "the share service refused a file");
+                            if status.is_server_error() || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                                unsent(&mut now, listing.as_ref(), path);
+                            }
+                            continue;
+                        }
+                        uploaded.push(path.clone());
                     }
                     for path in &removed {
-                        let _ = self
-                            .http
-                            .delete(format!("{base}/v1/shares/{}/files/{}", row.share_id, crate::canvas::encode_path(path)))
-                            .bearer_auth(&token)
-                            .send()
-                            .await;
+                        let url = format!("{base}/v1/shares/{}/files/{}", row.share_id, crate::canvas::encode_path(path));
+                        let _ = authorized(&mut token, || self.token(), |token| {
+                            self.http.delete(&url).bearer_auth(token)
+                        })
+                        .await;
                     }
                     *listing = Some(now);
                     if !uploaded.is_empty() || !removed.is_empty() {
@@ -1198,6 +1205,34 @@ pub fn diff(before: Option<&Listing>, now: &Listing) -> (Vec<String>, Vec<String
     (changed, removed)
 }
 
+/// The service's answer to a request made with the session's token, made again with a fresh one
+/// when the service refuses the sign-in: a Google ID token lasts an hour, a share's connection
+/// days. The fresh token stays the session's.
+async fn authorized<Renew, Fresh>(
+    token: &mut String,
+    renew: Renew,
+    request: impl Fn(&str) -> reqwest::RequestBuilder,
+) -> std::result::Result<reqwest::Response, String>
+where
+    Renew: FnOnce() -> Fresh,
+    Fresh: std::future::Future<Output = std::result::Result<String, String>>,
+{
+    let response = request(token).send().await.map_err(|e| e.to_string())?;
+    if response.status() != reqwest::StatusCode::UNAUTHORIZED {
+        return Ok(response);
+    }
+    *token = renew().await?;
+    request(token).send().await.map_err(|e| e.to_string())
+}
+
+/// Leaves `path` in the listing as it was before the scan, so that the next scan sends it again.
+fn unsent(now: &mut Listing, before: Option<&Listing>, path: &str) {
+    match before.and_then(|b| b.get(path)) {
+        Some(mtime) => now.insert(path.to_string(), *mtime),
+        None => now.remove(path),
+    };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1288,5 +1323,70 @@ mod tests {
         );
         assert_eq!(diff(None, &now).0.len(), 3, "everything, the first time");
         assert!(diff(None, &now).1.is_empty());
+    }
+
+    #[test]
+    fn a_file_the_service_did_not_take_is_sent_again_and_not_removed() {
+        let before: Listing = [("canvas.json".to_string(), 1u64)].into_iter().collect();
+        let scanned: Listing = [
+            ("canvas.json".to_string(), 2u64),
+            ("new.html".to_string(), 2),
+        ]
+        .into_iter()
+        .collect();
+        let mut kept = scanned.clone();
+        unsent(&mut kept, Some(&before), "canvas.json");
+        unsent(&mut kept, Some(&before), "new.html");
+        assert_eq!(kept, before);
+        assert_eq!(
+            diff(Some(&kept), &scanned),
+            (vec!["canvas.json".into(), "new.html".into()], vec![])
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expired_sign_in_is_renewed_and_the_request_sent_again() {
+        use axum::http::{HeaderMap, StatusCode};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/file", listener.local_addr().unwrap());
+        let router = axum::Router::new().route(
+            "/file",
+            axum::routing::put(|headers: HeaderMap| async move {
+                match headers["authorization"].to_str().unwrap() {
+                    "Bearer fresh" => StatusCode::NO_CONTENT,
+                    _ => StatusCode::UNAUTHORIZED,
+                }
+            }),
+        );
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let http = reqwest::Client::new();
+        let put = |token: &str| http.put(&url).bearer_auth(token);
+
+        let mut token = "expired".to_string();
+        let response = authorized(&mut token, || async { Ok("fresh".into()) }, put)
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(token, "fresh", "the session keeps the fresh token");
+
+        let renewed = std::cell::Cell::new(false);
+        let response = authorized(
+            &mut token,
+            || async {
+                renewed.set(true);
+                Ok("other".into())
+            },
+            put,
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert!(!renewed.get(), "a token the service takes is not renewed");
+
+        let mut token = "expired".to_string();
+        let refused = authorized(&mut token, || async { Ok("still-wrong".into()) }, put)
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
     }
 }
