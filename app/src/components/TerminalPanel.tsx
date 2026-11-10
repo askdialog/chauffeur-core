@@ -102,6 +102,22 @@ export function TerminalPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per request
   }, [request, ready]);
 
+  // The first time the tab is shown with no terminal, one opens: the user came here to type.
+  // Once only, so closing every terminal afterwards leaves the tab empty as asked.
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (autoOpened.current || !visible || !ready || terminals === null || error) return;
+    if (terminals.length > 0) {
+      autoOpened.current = true;
+      return;
+    }
+    // A login to redo asks for its own terminal.
+    if (request && request.nonce > lastRequest) return;
+    autoOpened.current = true;
+    void open();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, when the list is known
+  }, [visible, ready, terminals, error, request]);
+
   const open = async (command?: string) => {
     setOpening(true);
     try {
