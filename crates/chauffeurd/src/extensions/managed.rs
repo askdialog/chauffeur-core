@@ -77,14 +77,14 @@ pub fn registrations(bootstrap: PathBuf) -> Vec<Registration> {
             ExtensionId::Database,
             "Database",
             "Explore PostgreSQL tables, run SQL and bring results into a chat.",
-            "askdialog/chauffeur-extension-database",
+            "askdialog/chauffeur-core",
             *include_bytes!("database.pub"),
         ),
         (
             ExtensionId::Office,
             "Office",
             "Meet colleagues and see your team's agents in a 3D village.",
-            "askdialog/chauffeur-extension-office",
+            "askdialog/chauffeur-core",
             *include_bytes!("office.pub"),
         ),
     ]
@@ -1821,7 +1821,7 @@ while True:
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn a_newer_release_without_this_platform_does_not_hide_an_older_compatible_one() {
+    async fn shared_release_pages_offer_only_a_compatible_stable_release_of_this_extension() {
         use std::os::unix::fs::PermissionsExt;
         let (dir, daemon) = fixture();
         let runtime = daemon
@@ -1850,7 +1850,7 @@ while True:
                 }],
             })
             .unwrap();
-            let folder = releases.join(format!("v{version}"));
+            let folder = releases.join(format!("office-v{version}"));
             std::fs::create_dir_all(&folder).unwrap();
             std::fs::write(
                 folder.join(packages::SIGNATURE),
@@ -1865,14 +1865,14 @@ while True:
         sign("1.1.0", packages::platform().unwrap());
         std::fs::write(
             releases.join("tags.json"),
-            r#"[{"tagName":"v2.0.0"},{"tagName":"v1.1.0"}]"#,
+            r#"[[{"tag_name":"office-v10.0.0","draft":true,"prerelease":false},{"tag_name":"office-v9.0.0","draft":false,"prerelease":true},{"tag_name":"v9.0.0","draft":false,"prerelease":false},{"tag_name":"database-v9.0.0","draft":false,"prerelease":false},{"tag_name":"office-v2.0.0","draft":false,"prerelease":false}],[{"tag_name":"office-v1.1.0","draft":false,"prerelease":false}]]"#,
         )
         .unwrap();
         let gh = dir.path().join("bin/gh");
         std::fs::create_dir_all(gh.parent().unwrap()).unwrap();
         std::fs::write(
             &gh,
-            "#!/bin/sh\ncase \"$2\" in\nlist) cat \"$RELEASES/tags.json\";;\ndownload) tag=\"$3\"; while [ $# -gt 0 ]; do [ \"$1\" = \"--pattern\" ] && pattern=\"$2\"; shift; done; cat \"$RELEASES/$tag/$pattern\";;\nesac\n",
+            "#!/bin/sh\nif [ \"$1\" = api ]; then cat \"$RELEASES/tags.json\"; exit; fi\ncase \"$2\" in\ndownload) tag=\"$3\"; while [ $# -gt 0 ]; do [ \"$1\" = \"--pattern\" ] && pattern=\"$2\"; shift; done; cat \"$RELEASES/$tag/$pattern\";;\nesac\n",
         )
         .unwrap();
         std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o700)).unwrap();

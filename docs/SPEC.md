@@ -725,12 +725,14 @@ this demo does not imply store approval or verified live push delivery.
 
 Repo display order (2026-10-20): Settings → Workspaces lets the user reorder all available repos by dragging or moving them up/down. The creation picker and CLI use this saved order, independently of the default selection. Newly discovered repos follow in automatic order (defaults first, then recent activity and name); Reset restores automatic ordering.
 
-### Official extension sources (decided with Justin 2026-11-04)
+### Official extension sources (decided with Justin 2026-11-10)
 
-Core and the official Database and Office extensions have separate source repositories, with
-clean initial snapshots after extraction. A distribution (Dialog's, for one) assembles the DMG
-and worker bundle from pinned source commits.
-Both official extensions remain enabled by default. See [the decision](adr/separate-extension-repositories.md).
+Core is public under MIT. Office and Database are maintained in the private distribution,
+with independent signed engine/UI releases. Their downloads share Core's public release
+repository, using separate `office-v<version>` and `database-v<version>` tags. They never
+replace the latest application release. The daemon checks only the selected extension's
+stable releases and verifies its existing signing key. See
+[the decision](adr/independent-extension-releases-on-core.md).
 
 ### Mobile dictation (Justin, 2026-11-08)
 
