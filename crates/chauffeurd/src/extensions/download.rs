@@ -21,16 +21,10 @@ pub async fn tags(catalogue: &Catalogue, env: &BTreeMap<String, String>) -> Resu
         Duration::from_secs(60),
         command(env)
             .args([
-                "release",
-                "list",
-                "--repo",
-                catalogue.repository,
-                "--exclude-drafts",
-                "--exclude-pre-releases",
-                "--limit",
-                "100",
-                "--json",
-                "tagName",
+                "api",
+                &format!("repos/{}/releases?per_page=100", catalogue.repository),
+                "--paginate",
+                "--slurp",
             ])
             .output(),
     )
@@ -42,15 +36,19 @@ pub async fn tags(catalogue: &Catalogue, env: &BTreeMap<String, String>) -> Resu
         return Err(github_error(&output.stderr));
     }
     #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
     struct Tag {
         tag_name: String,
+        draft: bool,
+        prerelease: bool,
     }
-    let tags: Vec<Tag> = serde_json::from_slice(&output.stdout)?;
+    let tags: Vec<Vec<Tag>> = serde_json::from_slice(&output.stdout)?;
+    let prefix = format!("{}-v", packages::slug(catalogue.id));
     let mut versions: Vec<_> = tags
         .into_iter()
+        .flatten()
+        .filter(|tag| !tag.draft && !tag.prerelease)
         .filter_map(|tag| {
-            let version = semver::Version::parse(tag.tag_name.strip_prefix('v')?).ok()?;
+            let version = semver::Version::parse(tag.tag_name.strip_prefix(&prefix)?).ok()?;
             (version.pre.is_empty() && version.build.is_empty()).then_some((version, tag.tag_name))
         })
         .collect();
@@ -175,7 +173,7 @@ pub async fn manifest(
     .await?;
     let signed = SignedRelease::read(directory.path())?;
     let release = signed.verify(catalogue)?;
-    if format!("v{}", release.version) != tag {
+    if format!("{}-v{}", packages::slug(catalogue.id), release.version) != tag {
         return Err(Error::BadRequest(
             "The extension release tag does not match its signed version; use another release"
                 .into(),

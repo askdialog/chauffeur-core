@@ -93,6 +93,8 @@ export function TerminalPanel({
     void refresh();
   }, [refresh]);
 
+  const autoOpened = useRef(false);
+
   // A login to redo in a terminal (an agent's, an MCP server's), asked from elsewhere in the app.
   const request = useApp((s) => s.terminalRequest[workspace.id]);
   useEffect(() => {
@@ -102,7 +104,22 @@ export function TerminalPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per request
   }, [request, ready]);
 
+  // The first time the tab is shown with no terminal, one opens: the user came here to type.
+  // Once only, so closing every terminal afterwards leaves the tab empty as asked.
+  useEffect(() => {
+    if (autoOpened.current || !visible || !ready || terminals === null || error) return;
+    if (terminals.length > 0) {
+      autoOpened.current = true;
+      return;
+    }
+    autoOpened.current = true;
+    void open();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once, when the list is known
+  }, [visible, ready, terminals, error]);
+
   const open = async (command?: string) => {
+    // A requested login or manual opening also satisfies the initial terminal, before its RPC returns.
+    autoOpened.current = true;
     setOpening(true);
     try {
       const info = await client.call("terminal.open", {

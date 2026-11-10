@@ -146,3 +146,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [One design comment thread is sent to the agent alone](send-one-comment-thread.md) | 2026-11-09 | accepted |
 | [Core CI checks the changed surface and packages Linux on a separate schedule](core-ci-by-changed-surface.md) | 2026-11-10 | accepted |
 | [Core starts with a new GitHub repository and a single initial commit](core-fresh-public-history.md) | 2026-11-10 | accepted |
+| [Independent extension releases share the Core download repository](independent-extension-releases-on-core.md) | 2026-11-10 | accepted |
