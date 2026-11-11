@@ -8,6 +8,9 @@ if [[ -f distribution/build-env.sh ]]; then
   # shellcheck source=/dev/null
   source distribution/build-env.sh
 fi
+# shellcheck source=release-channel.sh
+source scripts/release-channel.sh
+UPDATE_DMG="$CHAUFFEUR_DMG_PREFIX-99.0.0.dmg"
 cargo build -q -p "$DAEMON_PACKAGE" -p chauffeur-cli
 BIN="$PWD/target/debug"
 T=$(mktemp -d)
@@ -302,6 +305,11 @@ case "\$1 \$2" in
   "repo view") echo '{"squashMergeAllowed":true,"mergeCommitAllowed":true,"rebaseMergeAllowed":false,"viewerPermission":"WRITE"}' ;;
   # Every repo the account reaches: one of its own, one of an organization named like a clone.
   "api --paginate")
+    if [ "\$3" = --slurp ]; then
+      [ -d "$T/release" ] || exit 1
+      echo '[[{"tag_name":"core-v99.0.0","draft":false,"prerelease":false,"assets":[{"name":"$UPDATE_DMG"},{"name":"$UPDATE_DMG.sha256"}]}]]'
+      exit 0
+    fi
     echo '{"name":"blog","full_name":"octocat/blog","private":true,"owner_type":"User","default_branch":"main","description":"Mine","pushed_at":"2026-11-01T00:00:00Z"}'
     echo '{"name":"alpha","full_name":"someorg/alpha","private":false,"owner_type":"Organization","default_branch":"main","description":null,"pushed_at":null}' ;;
   "repo clone") git clone -q "$T/origin/alpha.git" "\$4" ;;
@@ -309,7 +317,7 @@ case "\$1 \$2" in
   "pr merge") echo "\$(basename "\$PWD") \$3 \$4" >> "$T/merges.log" ;;
   # A newer release, once the update step below published one in $T/release.
   "release view") [ -d "$T/release" ] || exit 1
-    echo '{"tagName":"v99.0.0","assets":[{"name":"Chauffeur-99.0.0.dmg"},{"name":"Chauffeur-99.0.0.dmg.sha256"}]}' ;;
+    echo '{"tagName":"v99.0.0","assets":[{"name":"$UPDATE_DMG"},{"name":"$UPDATE_DMG.sha256"}]}' ;;
   "release download") for arg in "\$@"; do [ "\$prev" = --dir ] && dir=\$arg; prev=\$arg; done
     cp "$T/release/"* "\$dir/" ;;
   *) exit 1 ;;
@@ -428,8 +436,8 @@ if [ "$(uname)" = Darwin ]; then
   mkdir -p "$T/image/Chauffeur.app/Contents/MacOS" "$T/staged" "$T/Applications/Chauffeur.app/Contents/MacOS"
   echo new > "$T/image/Chauffeur.app/Contents/MacOS/chauffeurd"
   echo old > "$T/Applications/Chauffeur.app/Contents/MacOS/chauffeurd"
-  hdiutil create -quiet -format UDZO -srcfolder "$T/image" "$T/staged/Chauffeur-99.0.0.dmg"
-  (cd "$T/staged" && shasum -a 256 Chauffeur-99.0.0.dmg > Chauffeur-99.0.0.dmg.sha256)
+  hdiutil create -quiet -format UDZO -srcfolder "$T/image" "$T/staged/$UPDATE_DMG"
+  (cd "$T/staged" && shasum -a 256 "$UPDATE_DMG" > "$UPDATE_DMG.sha256")
   c daemon stop >/dev/null
   # The daemon passes for one run from $T/Applications/Chauffeur.app. Nothing is published yet.
   CHAUFFEUR_RELEASE_REPO=acme/chauffeur CHAUFFEUR_APP_BUNDLE="$T/Applications/Chauffeur.app" SHELL="$T/login-shell" c daemon start >/dev/null

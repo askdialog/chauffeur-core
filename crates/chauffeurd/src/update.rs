@@ -214,8 +214,8 @@ enum Channel {
 impl Channel {
     fn current() -> Self {
         match option_env!("CHAUFFEUR_RELEASE_CHANNEL") {
-            Some("core") => Self::Core,
-            _ => Self::Dialog,
+            Some("dialog") => Self::Dialog,
+            _ => Self::Core,
         }
     }
     fn prefix(self) -> &'static str {
@@ -490,6 +490,18 @@ mod tests {
     }
 
     #[test]
+    fn source_builds_default_to_core_downloads() {
+        if option_env!("CHAUFFEUR_RELEASE_CHANNEL").is_none() {
+            assert_eq!(release_tag("0.37.0"), "core-v0.37.0");
+            assert_eq!(dmg_name("0.37.0"), "Chauffeur-Core-0.37.0.dmg");
+            assert_eq!(
+                worker_bundle_name("0.37.0"),
+                "chauffeur-core-0.37.0-linux-x64.tar.gz"
+            );
+        }
+    }
+
+    #[test]
     fn core_updates_ignore_dialog_extensions_drafts_and_incomplete_downloads() {
         let release = |tag: &str, name: &str, draft: bool| {
             serde_json::json!({
@@ -527,18 +539,29 @@ mod tests {
 
     #[test]
     fn a_release_is_offered_only_with_its_disk_image_and_checksum() {
-        let both = ["Chauffeur-0.10.0.dmg", "Chauffeur-0.10.0.dmg.sha256"];
-        assert_eq!(
-            published_version(&release("v0.10.0", &both)).as_deref(),
-            Some("0.10.0")
-        );
-        assert_eq!(
-            published_version(&release("v0.10.0", &["Chauffeur-0.10.0.dmg"])),
-            None
-        );
-        assert_eq!(published_version(&release("v0.10.0-rc.1", &both)), None);
-        assert_eq!(published_version(&release("0.10.0", &both)), None);
-        assert_eq!(published_version(b"not json"), None);
+        for channel in [Channel::Core, Channel::Dialog] {
+            let name = channel.dmg("0.10.0");
+            let checksum = format!("{name}.sha256");
+            let both = [name.as_str(), checksum.as_str()];
+            let tag = format!("{}0.10.0", channel.prefix());
+            assert_eq!(
+                published_version_for(&release(&tag, &both), channel).as_deref(),
+                Some("0.10.0")
+            );
+            assert_eq!(
+                published_version_for(&release(&tag, &[&name]), channel),
+                None
+            );
+            assert_eq!(
+                published_version_for(&release(&format!("{tag}-rc.1"), &both), channel),
+                None
+            );
+            assert_eq!(
+                published_version_for(&release("0.10.0", &both), channel),
+                None
+            );
+            assert_eq!(published_version_for(b"not json", channel), None);
+        }
     }
 
     #[test]
@@ -594,12 +617,13 @@ mod tests {
     #[test]
     fn a_disk_image_that_does_not_match_its_checksum_is_refused() {
         let root = tempfile::tempdir().unwrap();
+        let name = dmg_name("0.10.0");
         let assets = root.path().join("assets");
         std::fs::create_dir_all(&assets).unwrap();
-        std::fs::write(assets.join("Chauffeur-0.10.0.dmg"), "tampered").unwrap();
+        std::fs::write(assets.join(&name), "tampered").unwrap();
         std::fs::write(
-            assets.join("Chauffeur-0.10.0.dmg.sha256"),
-            format!("{}  Chauffeur-0.10.0.dmg\n", "0".repeat(64)),
+            assets.join(format!("{name}.sha256")),
+            format!("{}  {name}\n", "0".repeat(64)),
         )
         .unwrap();
         let env = fake_gh(root.path(), &assets);
@@ -612,10 +636,10 @@ mod tests {
         .unwrap_err();
         assert!(format!("{error:#}").contains("does not match its published SHA-256"));
 
-        let good = sha256_of(&assets.join("Chauffeur-0.10.0.dmg")).unwrap();
+        let good = sha256_of(&assets.join(&name)).unwrap();
         std::fs::write(
-            assets.join("Chauffeur-0.10.0.dmg.sha256"),
-            format!("{good}  Chauffeur-0.10.0.dmg\n"),
+            assets.join(format!("{name}.sha256")),
+            format!("{good}  {name}\n"),
         )
         .unwrap();
         let dmg = download(
