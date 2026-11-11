@@ -1346,6 +1346,11 @@ mod tests {
             "# Rollout\nPhase deux : bascule",
         )
         .unwrap();
+        // Both bodies have the same size; the index uses millisecond modification times.
+        let note = std::fs::File::open(notes.join("plans/rollout.md")).unwrap();
+        let changed =
+            note.metadata().unwrap().modified().unwrap() + std::time::Duration::from_secs(1);
+        note.set_modified(changed).unwrap();
         f.index.sync_notes(true).unwrap();
         assert!(keywords(&f.index, "migration", &all()).is_empty());
         assert_eq!(keywords(&f.index, "bascule", &all()).len(), 1);
