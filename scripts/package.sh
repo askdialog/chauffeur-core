@@ -11,6 +11,7 @@
 # of another build, whatever the version number says.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/release-channel.sh
 DAEMON_PACKAGE=chauffeurd
 DAEMON_BINARY=chauffeurd
 if [[ -f distribution/build-env.sh ]]; then
@@ -40,7 +41,7 @@ if ! cmp -s scripts/dmg/requirements.txt "$DMGBUILD/requirements.txt" ||
 fi
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 APP=target/release/bundle/macos/Chauffeur.app
-OUT=target/release/Chauffeur-$VERSION.dmg
+OUT=target/release/$CHAUFFEUR_DMG_PREFIX-$VERSION.dmg
 COMMIT=$(git rev-parse --short HEAD)
 # Compiled into the daemon and the app (chauffeurd::BUILD).
 CHAUFFEUR_BUILD="$VERSION+$COMMIT$(git diff --quiet HEAD || echo .dirty).$(date +%Y%m%d%H%M%S)"
@@ -65,6 +66,7 @@ for f in target/release/chauffeur sidecar/dist/chauffeur-sidecar relay/dist/chau
   cp "$f" "$APP/Contents/MacOS/"
 done
 cp "target/release/$DAEMON_BINARY" "$APP/Contents/MacOS/chauffeurd"
+scripts/package-core-notices.sh "$APP/Contents/Resources/licenses"
 scripts/sign-macos.sh app "$APP"
 
 rm -f "$OUT"

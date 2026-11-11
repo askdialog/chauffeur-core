@@ -5,8 +5,9 @@
 #        (default: the one scripts/package-linux.sh builds); SMOKE_IMAGE overrides the image.
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
+source "$repo/scripts/release-channel.sh"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -1)
-archive=${1:-$repo/dist/chauffeur-$version-linux-x64.tar.gz}
+archive=${1:-$repo/dist/$CHAUFFEUR_PACKAGE_PREFIX-$version-linux-x64.tar.gz}
 [ -f "$archive" ] || { echo "No bundle at $archive: build it with scripts/package-linux.sh." >&2; exit 1; }
 image=${SMOKE_IMAGE:-ubuntu:22.04}
 

@@ -30,10 +30,10 @@ macOS (Apple Silicon) and Linux (x86_64). Windows is not supported. What differs
 
 ## Download
 
-Download Chauffeur from [chauffeur.askdialog.com/download](https://chauffeur.askdialog.com/download)
-or the [latest release](https://github.com/askdialog/chauffeur-core/releases/latest).
-Packaged downloads are available for macOS (Apple Silicon) and Ubuntu 24.04 (amd64).
-You can also build Core from source below.
+Core-only packages are listed in [Core releases](https://github.com/askdialog/chauffeur-core/releases?q=core-v&expanded=true),
+with `core-v` tags and `Chauffeur-Core` / `chauffeur-core` filenames.
+The packages target macOS (Apple Silicon) and Ubuntu 24.04 (amd64).
+See [release and packaging details](docs/releases.md), or build Core from source below.
 
 ## Prerequisites
 

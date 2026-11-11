@@ -1,6 +1,5 @@
 //! Updates of a packaged Chauffeur.app (scripts/package.sh) from the GitHub releases of the
-//! build's `CHAUFFEUR_RELEASE_REPO`, a public repository of binaries only (Dialog's build:
-//! `askdialog/chauffeur-releases`), read through the user's own `gh` login. The daemon looks at
+//! build's `CHAUFFEUR_RELEASE_REPO`, a repository with separate Core and Dialog releases, read through the user's own `gh` login. The daemon looks at
 //! start, every 10 minutes, and when asked (`update.check`: the app's window regains the focus,
 //! `chauffeur update`); `update.install` downloads the disk image, checks it against the SHA-256
 //! published beside it, and puts its app in place of the one this daemon runs from, whatever the
@@ -205,8 +204,50 @@ fn bundle_of(exe: &Path) -> Option<PathBuf> {
     .then(|| bundle.to_path_buf())
 }
 
+/// A build cannot switch edition through its runtime environment.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Channel {
+    Core,
+    Dialog,
+}
+
+impl Channel {
+    fn current() -> Self {
+        match option_env!("CHAUFFEUR_RELEASE_CHANNEL") {
+            Some("core") => Self::Core,
+            _ => Self::Dialog,
+        }
+    }
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Core => "core-v",
+            Self::Dialog => "v",
+        }
+    }
+    fn dmg(self, version: &str) -> String {
+        match self {
+            Self::Core => format!("Chauffeur-Core-{version}.dmg"),
+            Self::Dialog => format!("Chauffeur-{version}.dmg"),
+        }
+    }
+    fn worker_bundle(self, version: &str) -> String {
+        match self {
+            Self::Core => format!("chauffeur-core-{version}-linux-x64.tar.gz"),
+            Self::Dialog => format!("chauffeur-{version}-linux-x64.tar.gz"),
+        }
+    }
+}
+
+pub(crate) fn release_tag(version: &str) -> String {
+    format!("{}{version}", Channel::current().prefix())
+}
+
+pub(crate) fn worker_bundle_name(version: &str) -> String {
+    Channel::current().worker_bundle(version)
+}
+
 fn dmg_name(version: &str) -> String {
-    format!("Chauffeur-{version}.dmg")
+    Channel::current().dmg(version)
 }
 
 fn gh(env: &Env) -> Command {
@@ -233,6 +274,18 @@ fn run(command: &mut Command, what: &str) -> anyhow::Result<Vec<u8>> {
 /// The latest release's version when it carries the disk image and its checksum (a release whose
 /// files are still uploading has none yet); `None` otherwise.
 fn latest_release(env: &Env, repo: &str) -> anyhow::Result<Option<String>> {
+    if Channel::current() == Channel::Core {
+        let stdout = run(
+            gh(env).args([
+                "api",
+                "--paginate",
+                "--slurp",
+                &format!("repos/{repo}/releases?per_page=100"),
+            ]),
+            "gh api releases",
+        )?;
+        return core_release_version(&stdout);
+    }
     let stdout = run(
         gh(env).args([
             "release",
@@ -247,10 +300,27 @@ fn latest_release(env: &Env, repo: &str) -> anyhow::Result<Option<String>> {
     Ok(published_version(&stdout))
 }
 
+fn core_release_version(json: &[u8]) -> anyhow::Result<Option<String>> {
+    let pages: Vec<Vec<serde_json::Value>> = serde_json::from_slice(json)?;
+    Ok(pages
+        .into_iter()
+        .flatten()
+        .filter(|release| release["draft"] == false && release["prerelease"] == false)
+        .filter_map(|release| {
+            published_version_for(&serde_json::to_vec(&release).ok()?, Channel::Core)
+        })
+        .max_by_key(|version| parse_version(version)))
+}
+
 fn published_version(json: &[u8]) -> Option<String> {
+    published_version_for(json, Channel::current())
+}
+
+fn published_version_for(json: &[u8], channel: Channel) -> Option<String> {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct Release {
+        #[serde(alias = "tag_name")]
         tag_name: String,
         #[serde(default)]
         assets: Vec<Asset>,
@@ -260,9 +330,9 @@ fn published_version(json: &[u8]) -> Option<String> {
         name: String,
     }
     let release: Release = serde_json::from_slice(json).ok()?;
-    let version = release.tag_name.strip_prefix('v')?;
+    let version = release.tag_name.strip_prefix(channel.prefix())?;
     parse_version(version)?;
-    let dmg = dmg_name(version);
+    let dmg = channel.dmg(version);
     let has = |name: &str| release.assets.iter().any(|asset| asset.name == name);
     (has(&dmg) && has(&format!("{dmg}.sha256"))).then(|| version.to_string())
 }
@@ -289,7 +359,7 @@ fn download(env: &Env, repo: &str, version: &str, dir: &Path) -> anyhow::Result<
     let checksum = format!("{dmg}.sha256");
     run(
         gh(env)
-            .args(["release", "download", &format!("v{version}"), "--repo"])
+            .args(["release", "download", &release_tag(version), "--repo"])
             .args([repo, "--pattern", &dmg, "--pattern", &checksum])
             .arg("--dir")
             .arg(dir)
@@ -417,6 +487,42 @@ mod tests {
             .map(|name| serde_json::json!({ "name": name, "size": 1 }))
             .collect();
         serde_json::to_vec(&serde_json::json!({ "tagName": tag, "assets": assets })).unwrap()
+    }
+
+    #[test]
+    fn core_updates_ignore_dialog_extensions_drafts_and_incomplete_downloads() {
+        let release = |tag: &str, name: &str, draft: bool| {
+            serde_json::json!({
+                "tag_name": tag, "draft": draft, "prerelease": false,
+                "assets": [{"name": name}, {"name": format!("{name}.sha256")}]
+            })
+        };
+        let pages = serde_json::json!([
+            [
+                release("v0.99.0", "Chauffeur-0.99.0.dmg", false),
+                release("office-v0.99.0", "Chauffeur-Core-0.99.0.dmg", false),
+                release("core-v0.99.0", "Chauffeur-Core-0.99.0.dmg", true),
+                release("core-v0.98.0", "Chauffeur-0.98.0.dmg", false)
+            ],
+            [release("core-v0.37.0", "Chauffeur-Core-0.37.0.dmg", false)]
+        ]);
+        assert_eq!(
+            core_release_version(&serde_json::to_vec(&pages).unwrap())
+                .unwrap()
+                .as_deref(),
+            Some("0.37.0")
+        );
+        let core = serde_json::to_vec(&release("core-v0.37.0", "Chauffeur-Core-0.37.0.dmg", false))
+            .unwrap();
+        assert_eq!(published_version_for(&core, Channel::Dialog), None);
+        assert_eq!(
+            Channel::Core.worker_bundle("0.37.0"),
+            "chauffeur-core-0.37.0-linux-x64.tar.gz"
+        );
+        assert_eq!(
+            Channel::Dialog.worker_bundle("0.37.0"),
+            "chauffeur-0.37.0-linux-x64.tar.gz"
+        );
     }
 
     #[test]

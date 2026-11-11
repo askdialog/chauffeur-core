@@ -6,8 +6,9 @@
 #        (default: the one scripts/package-linux-desktop.sh builds); SMOKE_IMAGE overrides the image.
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
+source "$repo/scripts/release-channel.sh"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -1)
-package=${1:-$repo/dist/chauffeur_${version}_ubuntu24.04_amd64.deb}
+package=${1:-$repo/dist/${CHAUFFEUR_PACKAGE_PREFIX}_${version}_ubuntu24.04_amd64.deb}
 [ -f "$package" ] || { echo "No package at $package: build it with scripts/package-linux-desktop.sh." >&2; exit 1; }
 image=${SMOKE_IMAGE:-ubuntu:24.04}
 

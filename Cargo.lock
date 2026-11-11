@@ -646,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "chauffeur-app"
-version = "0.30.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "block2",
@@ -676,7 +676,7 @@ dependencies = [
 
 [[package]]
 name = "chauffeur-cli"
-version = "0.30.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "chauffeur-protocol",
@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "chauffeur-design"
-version = "0.30.0"
+version = "0.37.0"
 dependencies = [
  "chauffeur-protocol",
  "serde",
@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "chauffeur-design-share"
-version = "0.30.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -732,7 +732,7 @@ dependencies = [
 
 [[package]]
 name = "chauffeur-extension-api"
-version = "0.30.0"
+version = "0.37.0"
 dependencies = [
  "chauffeur-protocol",
  "futures-util",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "chauffeur-protocol"
-version = "0.30.0"
+version = "0.37.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -752,7 +752,7 @@ dependencies = [
 
 [[package]]
 name = "chauffeurd"
-version = "0.30.0"
+version = "0.37.0"
 dependencies = [
  "anyhow",
  "axum",

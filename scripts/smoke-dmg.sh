@@ -4,8 +4,9 @@
 # Usage: scripts/smoke-dmg.sh [path to the .dmg] (default: the one scripts/package.sh builds).
 set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
+source "$repo/scripts/release-channel.sh"
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/Cargo.toml" | head -1)
-dmg=${1:-$repo/target/release/Chauffeur-$version.dmg}
+dmg=${1:-$repo/target/release/$CHAUFFEUR_DMG_PREFIX-$version.dmg}
 [ -f "$dmg" ] || { echo "No disk image at $dmg: build it with scripts/package.sh." >&2; exit 1; }
 
 work=$(mktemp -d)

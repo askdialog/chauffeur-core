@@ -748,7 +748,7 @@ async fn bundle(daemon: &Daemon) -> anyhow::Result<PathBuf> {
         );
     };
     let version = env!("CARGO_PKG_VERSION");
-    let asset = format!("chauffeur-{version}-linux-x64.tar.gz");
+    let asset = crate::update::worker_bundle_name(version);
     let dir = daemon.paths.home.join("workers");
     let path = dir.join(&asset);
     if path.is_file() {
@@ -762,7 +762,12 @@ async fn bundle(daemon: &Daemon) -> anyhow::Result<PathBuf> {
         .env_clear()
         .envs(daemon.shell_env.vars())
         .stdin(Stdio::null())
-        .args(["release", "download", &format!("v{version}"), "--repo"])
+        .args([
+            "release",
+            "download",
+            &crate::update::release_tag(version),
+            "--repo",
+        ])
         .arg(&repo)
         .args(["--pattern", &asset, "--pattern", &checksum, "--dir"])
         .arg(&download);

@@ -8,6 +8,7 @@
 # [workers] to the tarball.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source scripts/release-channel.sh
 DAEMON_PACKAGE=chauffeurd
 DAEMON_BINARY=chauffeurd
 if [[ -f distribution/build-env.sh ]]; then
@@ -23,7 +24,7 @@ done
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
 target=x86_64-unknown-linux-gnu
 work=target/package-linux
-name=chauffeur-$version-linux-x64.tar.gz
+name=$CHAUFFEUR_PACKAGE_PREFIX-$version-linux-x64.tar.gz
 
 rustup target add "$target" >/dev/null
 cargo zigbuild --release --target "$target.2.35" -p "$DAEMON_PACKAGE" -p chauffeur-cli
@@ -36,10 +37,11 @@ ln -s "$PWD/protocol-ts" "$work/protocol-ts"
 
 cp "target/$target/release/chauffeur" "$work/sidecar/dist/chauffeur-sidecar" "$work/bin/"
 cp "target/$target/release/$DAEMON_BINARY" "$work/bin/chauffeurd"
+scripts/package-core-notices.sh "$work/bin/licenses"
 mkdir -p dist
 # Without macOS metadata, which GNU tar on the worker would warn about; GNU tar adds none.
 mac_only=()
 [ "$(uname)" = Darwin ] && mac_only=(--no-xattrs --no-mac-metadata)
-COPYFILE_DISABLE=1 tar "${mac_only[@]}" -czf "dist/$name" -C "$work/bin" chauffeur chauffeurd chauffeur-sidecar
+COPYFILE_DISABLE=1 tar "${mac_only[@]}" -czf "dist/$name" -C "$work/bin" chauffeur chauffeurd chauffeur-sidecar licenses
 (cd dist && shasum -a 256 "$name" > "$name.sha256")
 echo "dist/$name"

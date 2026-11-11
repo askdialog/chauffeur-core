@@ -1,0 +1,126 @@
+name: Build Core packages
+on:
+  pull_request:
+    paths:
+      - .github/workflows/build-core.yml
+      - scripts/core_release.py
+      - scripts/release-channel.sh
+      - scripts/package*.sh
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      signing_environment:
+        type: string
+        default: core-release
+      source_sha:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+    secrets:
+      APPLE_DEVELOPER_ID_P12:
+        required: false
+      APPLE_DEVELOPER_ID_P12_PASSWORD:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      APPLE_NOTARY_KEY_P8:
+        required: false
+      APPLE_NOTARY_KEY_ID:
+        required: false
+      APPLE_NOTARY_ISSUER_ID:
+        required: false
+permissions:
+  contents: read
+jobs:
+  package:
+    environment: ${{ inputs.signing_environment || 'core-release' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: mac
+            runner: macos-15
+          - kind: linux
+            runner: ubuntu-24.04
+          - kind: desktop
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      CHAUFFEUR_RELEASE_CHANNEL: core
+      CHAUFFEUR_RELEASE_REPO: askdialog/chauffeur-core
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: askdialog/chauffeur-core
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.12'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: '1.4.3'
+      - name: Verify public source and release version
+        env:
+          EXPECTED_VERSION: ${{ inputs.version }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          if [ -n "$SOURCE_SHA" ]; then test "$(git rev-parse HEAD)" = "$SOURCE_SHA"; fi
+          python3 scripts/core_release.py --expect-version "$EXPECTED_VERSION"
+          python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+      - run: rustup toolchain install --no-self-update
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          key: core-release-${{ matrix.kind }}
+      - name: Install Linux bundle toolchain
+        if: matrix.kind == 'linux'
+        run: |
+          bash scripts/install-linux-toolchain.sh
+      - name: Install desktop prerequisites
+        if: matrix.kind == 'desktop'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+      - name: Build and verify the macOS image
+        if: matrix.kind == 'mac'
+        env:
+          APPLE_DEVELOPER_ID_P12: ${{ github.event_name != 'pull_request' && secrets.APPLE_DEVELOPER_ID_P12 || '' }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.APPLE_DEVELOPER_ID_P12_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ github.event_name != 'pull_request' && secrets.APPLE_TEAM_ID || '' }}
+          APPLE_NOTARY_KEY_P8: ${{ github.event_name != 'pull_request' && secrets.APPLE_NOTARY_KEY_P8 || '' }}
+          APPLE_NOTARY_KEY_ID: ${{ github.event_name != 'pull_request' && secrets.APPLE_NOTARY_KEY_ID || '' }}
+          APPLE_NOTARY_ISSUER_ID: ${{ github.event_name != 'pull_request' && secrets.APPLE_NOTARY_ISSUER_ID || '' }}
+        run: |
+          scripts/with-apple-signing.sh scripts/package.sh
+          scripts/smoke-dmg.sh
+      - name: Build and verify the Linux worker
+        if: matrix.kind == 'linux'
+        run: |
+          scripts/package-linux.sh
+          scripts/smoke-linux-bundle.sh
+      - name: Build and verify the Ubuntu desktop
+        if: matrix.kind == 'desktop'
+        run: |
+          scripts/package-linux-desktop.sh
+          if dpkg-deb --contents dist/chauffeur-core_*.deb | grep -q '/extensions/'; then
+            echo 'Core must not contain private extensions.' >&2
+            exit 1
+          fi
+          scripts/smoke-linux-desktop.sh
+      - name: Stage this platform's package and checksum
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(target/release/Chauffeur-Core-*.dmg* dist/chauffeur-core-*-linux-x64.tar.gz* dist/chauffeur-core_*_ubuntu24.04_amd64.deb*)
+          test "${#files[@]}" -eq 2
+          mkdir -p "$RUNNER_TEMP/core-package"
+          cp "${files[@]}" "$RUNNER_TEMP/core-package/"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: core-${{ matrix.kind }}
+          path: ${{ runner.temp }}/core-package/
+          if-no-files-found: error

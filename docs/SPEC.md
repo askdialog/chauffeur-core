@@ -745,3 +745,5 @@ links, in a private in-app browser through the paired Mac's encrypted session.
 Resources stay scoped to the design folder; designs are never published automatically,
 and no Mac server capability or pairing key is given to HTML. The viewer closes its
 private resource access when hidden or disconnected. See [mobile-private-canvas](adr/mobile-private-canvas.md).
+
+**Core releases (decided with Justin 2026-11-11).** Core-only artifacts use their own `core-vX.Y.Z` tags and names in the public repository. Their source and binary versions agree. Their updater and worker downloads select only Core artifacts; Dialog keeps the legacy `vX.Y.Z` channel for existing installations. Core releases do not become GitHub’s latest release. See [separate releases](adr/separate-core-and-dialog-releases.md).

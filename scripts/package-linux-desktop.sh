@@ -10,6 +10,7 @@ source /etc/os-release
 [[ $ID == ubuntu && $VERSION_ID == 24.04 ]] || {
   echo 'This package targets Ubuntu 24.04; use scripts/install.sh on other distributions.' >&2; exit 1;
 }
+source scripts/release-channel.sh
 DAEMON_PACKAGE=chauffeurd
 DAEMON_BINARY=chauffeurd
 if [[ -f distribution/build-env.sh ]]; then source distribution/build-env.sh; fi
@@ -57,8 +58,9 @@ Description: Workspaces and conversations for coding agents
  Includes the desktop client, CLI, daemon, agent sidecar and mobile host.
 Installed-Size: $(du -sk "$stage/usr" | cut -f1)
 CONTROL
+scripts/package-core-notices.sh "$stage/usr/share/doc/chauffeur/licenses"
 mkdir -p dist
-output="dist/chauffeur_${version}_ubuntu24.04_amd64.deb"
+output="dist/${CHAUFFEUR_PACKAGE_PREFIX}_${version}_ubuntu24.04_amd64.deb"
 dpkg-deb --root-owner-group --build "$stage" "$output"
 (cd dist && sha256sum "$(basename "$output")" > "$(basename "$output").sha256")
 echo "$output"
