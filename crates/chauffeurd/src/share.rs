@@ -242,6 +242,84 @@ impl Shares {
         );
     }
 
+    pub(crate) fn notes_dir(&self, workspace: &str) -> Result<PathBuf> {
+        let d = self.d();
+        let row = d.workspaces.row(workspace)?;
+        let live = Path::new(&row.path).join(crate::paths::NOTES_DIR);
+        let archived = d.paths.archive_dir.join(&row.slug);
+        let archived_source = matches!(
+            row.state,
+            chauffeur_protocol::model::WorkspaceState::Archived
+                | chauffeur_protocol::model::WorkspaceState::CleanupFailed
+                | chauffeur_protocol::model::WorkspaceState::Archiving
+        );
+        Ok(if archived_source && archived.exists() {
+            archived
+        } else {
+            live
+        })
+    }
+
+    /// Inventory from persisted owner rows, independent of the open workspace/chat tabs.
+    pub fn list(&self) -> Result<Vec<chauffeur_protocol::client::OutgoingShare>> {
+        use chauffeur_protocol::client::{OutgoingShare, OutgoingShareSource};
+        let d = self.d();
+        let mut result = Vec::new();
+        for row in d.store.design_shares_live()? {
+            let (workspace_id, name, source, closed) =
+                if let Some((workspace, path)) = file_of(&row.chat_id) {
+                    (
+                        workspace.to_string(),
+                        Path::new(path)
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.to_string()),
+                        OutgoingShareSource::File {
+                            path: path.to_string(),
+                        },
+                        false,
+                    )
+                } else {
+                    let Some(chat) = d.store.chat(&row.chat_id)? else {
+                        continue;
+                    };
+                    (
+                        chat.workspace_id,
+                        chat.title.unwrap_or_else(|| "Untitled design".into()),
+                        OutgoingShareSource::Design { chat: chat.id },
+                        chat.closed,
+                    )
+                };
+            let workspace = d.workspaces.row(&workspace_id)?;
+            result.push(OutgoingShare {
+                id: row.share_id,
+                url: row.url,
+                name,
+                workspace: workspace.id,
+                workspace_name: workspace.title.unwrap_or(workspace.slug),
+                archived: closed || workspace.archived_at.is_some(),
+                source,
+                connection: self.state_of(&row.chat_id).connection,
+            });
+        }
+        for row in d.store.workspace_shares_live()? {
+            let workspace = d.workspaces.row(&row.workspace_id)?;
+            let name = workspace.title.unwrap_or(workspace.slug);
+            result.push(OutgoingShare {
+                id: row.share_id,
+                url: row.url,
+                name: name.clone(),
+                workspace: workspace.id,
+                workspace_name: name,
+                archived: workspace.archived_at.is_some(),
+                source: OutgoingShareSource::Workspace,
+                connection: d.workspace_shares.state(&row.workspace_id)?.connection,
+            });
+        }
+        result.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        Ok(result)
+    }
+
     /// The share's state as the app shows it.
     pub fn state(&self, chat_key: &str) -> Result<DesignShareState> {
         let chat = self.d().chats.resolve(chat_key)?;
@@ -346,7 +424,7 @@ impl Shares {
     }
 
     fn spawn(self: &Arc<Self>, row: DesignShareRow) {
-        let Some((workspace_id, source)) = self.source(&row.chat_id) else {
+        let Some((workspace_id, _)) = self.source(&row.chat_id) else {
             // A shared file gone (deleted or moved while the daemon was away): its last copy
             // must not stay readable on the service.
             if let Some((workspace_id, path)) = file_of(&row.chat_id) {
@@ -375,7 +453,7 @@ impl Shares {
         }
         let shares = self.clone();
         tokio::spawn(async move {
-            shares.run(row, workspace_id, source, stop).await;
+            shares.run(row, workspace_id, stop).await;
         });
     }
 
@@ -398,13 +476,12 @@ impl Shares {
         }
         let chat = d.store.chat(key).ok()??;
         let workspace = d.workspaces.row(&chat.workspace_id).ok()?;
-        let dir = crate::design::design_dir(&workspace.path, &chat.id).ok()?;
-        Some((
-            chat.workspace_id,
-            Source::Design {
-                dir: PathBuf::from(dir),
-            },
-        ))
+        let dir = self
+            .notes_dir(&workspace.id)
+            .ok()?
+            .join(crate::paths::DESIGNS_DIR)
+            .join(&chat.id);
+        Some((chat.workspace_id, Source::Design { dir }))
     }
 
     /// Shares a design chat: a new share on the service, a link for it.
@@ -760,14 +837,9 @@ impl Shares {
         tokio::spawn(async move { shares.end(&row, &workspace_id).await });
     }
 
-    /// A workspace archived: its design chats' and its files' shares stop.
+    /// A workspace archived: file shares stop; design links remain active.
     pub fn stop_for_workspace(self: &Arc<Self>, workspace_id: &str) {
         let d = self.d();
-        if let Ok(chats) = d.store.chats_of(workspace_id) {
-            for chat in chats.into_iter().filter(|c| c.kind == ChatKind::Design) {
-                self.stop_for_chat(&chat.id, workspace_id);
-            }
-        }
         let files = d.store.design_shares_live().unwrap_or_default();
         for row in files
             .into_iter()
@@ -780,20 +852,14 @@ impl Shares {
     }
 
     /// The link: connects and connects again while the share lives.
-    async fn run(
-        self: Arc<Self>,
-        row: DesignShareRow,
-        workspace_id: String,
-        source: Source,
-        stop: Arc<Notify>,
-    ) {
+    async fn run(self: Arc<Self>, row: DesignShareRow, workspace_id: String, stop: Arc<Notify>) {
         let mut backoff = Duration::from_secs(1);
         let mut listing: Option<Listing> = None;
         loop {
             self.update_link(&row.chat_id, |l| l.connection = ShareConnection::Connecting);
             self.publish(&workspace_id, &row.chat_id);
             let outcome = tokio::select! {
-                outcome = self.session(&row, &workspace_id, &source, &mut listing) => outcome,
+                outcome = self.session(&row, &workspace_id, &mut listing) => outcome,
                 _ = stop.notified() => return,
             };
             match outcome {
@@ -832,7 +898,6 @@ impl Shares {
         &self,
         row: &DesignShareRow,
         workspace_id: &str,
-        source: &Source,
         listing: &mut Option<Listing>,
     ) -> std::result::Result<Ended, String> {
         let base = self
@@ -890,6 +955,8 @@ impl Shares {
         loop {
             tokio::select! {
                 _ = interval.tick() => {
+                    if self.d().workspaces.row(workspace_id).is_ok_and(|w| w.state == chauffeur_protocol::model::WorkspaceState::Archiving) { continue; }
+                    let Some((_, source)) = self.source(&row.chat_id) else { continue };
                     let mut now = source.scan();
                     let (changed, removed) = diff(listing.as_ref(), &now);
                     let mut uploaded = Vec::new();
@@ -969,7 +1036,7 @@ impl Shares {
                             let me = self.email().unwrap_or_default();
                             let mine = comment.author.email == me;
                             let mentioned = comment.mentions.iter().any(|m| m.email == me);
-                            if let Err(error) = source.keep(comment.clone()) {
+                            if let Some((_, source)) = self.source(&row.chat_id) && let Err(error) = source.keep(comment.clone()) {
                                 tracing::warn!(%error, "a reviewer's comment could not be kept");
                                 continue;
                             }
@@ -988,7 +1055,7 @@ impl Shares {
                             self.publish(workspace_id, &row.chat_id);
                         }
                         ToDaemon::CommentRemoved { id } => {
-                            let _ = source.remove(&id);
+                            if let Some((_, source)) = self.source(&row.chat_id) { let _ = source.remove(&id); }
                             self.update_link(&row.chat_id, |l| l.comments_rev += 1);
                             self.publish(workspace_id, &row.chat_id);
                         }
@@ -1285,6 +1352,7 @@ mod tests {
             ("canvas.json", "{}"),
             ("comments.json", "{\"comments\": []}"),
             ("notes.txt", "x"),
+            ("private.pdf", "%PDF-1.4"),
             ("exports/shot.png", "png"),
             (".claude/settings.local.json", "{}"),
         ] {

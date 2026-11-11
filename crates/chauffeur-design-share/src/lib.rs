@@ -459,10 +459,23 @@ impl Service {
             .is_some_and(|l| l.daemon.is_some())
     }
 
+    pub(crate) fn share_url(&self, share: &ShareRow) -> String {
+        let base = if share.document.as_deref().is_some_and(|name| {
+            [".html", ".htm", ".pdf"]
+                .iter()
+                .any(|ext| name.to_ascii_lowercase().ends_with(ext))
+        }) {
+            self.workspace_url()
+        } else {
+            &self.config.public_url
+        };
+        format!("{base}/s/{}", share.id)
+    }
+
     pub(crate) fn status(&self, share: &ShareRow) -> ShareStatus {
         ShareStatus {
             id: share.id.clone(),
-            url: format!("{}/s/{}", self.config.public_url, share.id),
+            url: self.share_url(share),
             title: share.title.clone(),
             owner: share.owner.clone(),
             reviewers: share.reviewers.clone(),
@@ -480,7 +493,7 @@ impl Service {
     pub(crate) fn listed(&self, share: &ShareRow, me: &Identity) -> SharedDesign {
         SharedDesign {
             id: share.id.clone(),
-            url: format!("{}/s/{}", self.config.public_url, share.id),
+            url: self.share_url(share),
             title: share.title.clone(),
             owner: share.owner.clone(),
             named: share.named(&me.email),
@@ -655,7 +668,7 @@ impl Service {
         share: &ShareRow,
         already: &[&str],
     ) -> Result<Option<String>, Reject> {
-        let link = format!("{}/s/{}", self.config.public_url, share.id);
+        let link = self.share_url(share);
         self.invite(
             &share.owner,
             mail::invitees(
@@ -669,8 +682,14 @@ impl Service {
                     to,
                     &share.title,
                     &link,
-                    if share.document.is_some() {
+                    if share.document.as_deref().is_some_and(|name| {
+                        [".md", ".mdx", ".markdown"]
+                            .iter()
+                            .any(|ext| name.to_ascii_lowercase().ends_with(ext))
+                    }) {
                         mail::Shared::Document
+                    } else if share.document.is_some() {
+                        mail::Shared::File
                     } else {
                         mail::Shared::Design
                     },
@@ -738,17 +757,21 @@ fn valid_reviewers(reviewers: &[String], max: usize) -> Result<Vec<String>, Reje
     Ok(out)
 }
 
-/// A markdown file's name as a share holds it: one name, no folder, ending in `.md`, `.mdx` or
-/// `.markdown`.
+/// A document name, without folders: markdown, HTML or PDF.
 fn valid_document(name: &str) -> Result<String, Reject> {
     let name = name.trim();
-    let markdown = [".md", ".mdx", ".markdown"]
+    let supported = [".md", ".mdx", ".markdown", ".html", ".htm", ".pdf"]
         .iter()
         .any(|ext| name.to_ascii_lowercase().ends_with(ext));
-    if !markdown || name.contains(['/', '\\']) || name.starts_with('.') || name.len() > 200 {
+    if !supported
+        || name.contains(['/', '\\'])
+        || name.starts_with('.')
+        || name.chars().any(char::is_control)
+        || name.len() > 200
+    {
         return Err(Reject(
             StatusCode::BAD_REQUEST,
-            format!("{name} is not a markdown file's name"),
+            format!("{name} is not a markdown, HTML or PDF file name"),
         ));
     }
     Ok(name.to_string())
@@ -1095,17 +1118,26 @@ fn file_response(
     path: &str,
     query: Option<&str>,
 ) -> Result<Response, Reject> {
-    let (bytes, media_type) = service.files.read(id, path).ok_or_else(|| {
-        Reject(
-            StatusCode::NOT_FOUND,
-            format!("{path} is not in this design"),
-        )
-    })?;
+    let document = service.share(id)?.document;
+    let (bytes, media_type) = service
+        .files
+        .read(id, path, document.as_deref() == Some(path))
+        .ok_or_else(|| {
+            Reject(
+                StatusCode::NOT_FOUND,
+                format!("{path} is not in this design"),
+            )
+        })?;
+    let policy = if document.is_some() {
+        "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; frame-ancestors 'self'; form-action 'none'; base-uri 'none'"
+    } else {
+        files::SCREEN_CSP
+    };
     let bytes = files::with_capture(bytes, media_type, query);
     Ok((
         [
             (header::CONTENT_TYPE, media_type),
-            (header::CONTENT_SECURITY_POLICY, files::SCREEN_CSP),
+            (header::CONTENT_SECURITY_POLICY, policy),
             (header::CACHE_CONTROL, "no-store"),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             (header::REFERRER_POLICY, "no-referrer"),

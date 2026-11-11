@@ -146,10 +146,7 @@ pub(crate) async fn design_link(
         && !share.stopped()
         && share.named(&email)
     {
-        let page = format!(
-            "{}/s/{}{}",
-            service.config.public_url, share.id, target_query
-        );
+        let page = format!("{}{}", service.share_url(&share), target_query);
         service.send_sign_in_link(&email, &share.owner, &share.title, &page)?;
     }
     Ok(on_its_way())

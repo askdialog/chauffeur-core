@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
 import { type PluggableList, unified } from "unified";
+import { parseDeliverable } from "./deliverables";
 import { remarkFileCitations } from "./fileCitations";
 import { remarkCodeComments } from "./codeComments";
 
@@ -37,6 +38,10 @@ export function markdownText(markdown: string): string {
     }
     if (node.type !== "root" && node.type !== "element") return;
     if (node.type === "element" && isMermaid(node.properties.className)) return;
+    if (node.type === "element" && node.tagName === "code" && Array.isArray(node.properties.className) && node.properties.className.includes("language-deliverable")) {
+      const document = parseDeliverable(node.children.map((child) => child.type === "text" ? child.value : "").join(""));
+      if (document) { text += document.title; return; }
+    }
     const table = node.type === "element" && TABLE.has(node.tagName);
     for (const child of node.children) walk(child, table);
   };

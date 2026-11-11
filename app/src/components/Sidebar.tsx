@@ -59,6 +59,7 @@ import {
   moveSection,
   openCreate,
   openSettings,
+  showSharing,
   openSwitcher,
   renameSection,
   resizeSidebar,
@@ -122,6 +123,7 @@ type Dragging = { kind: "workspace" | "section"; id: string } | null;
 type Drop = { kind: "row" | "heading"; id: string; below: boolean } | null;
 
 export function Sidebar() {
+  const sharingShown = useApp((s) => s.sharingShown);
   const workspaces = useApp(useShallow((s) => s.workspaces));
   const sections = useApp((s) => s.sections);
   const loaded = useApp((s) => s.workspacesLoaded);
@@ -376,6 +378,9 @@ export function Sidebar() {
       {pickedWorkspaces.length > 0 && (
         <SelectionBar count={pickedWorkspaces.length} onTransfer={() => setTransferring(pickedWorkspaces)} />
       )}
+      <button onClick={showSharing} data-testid="sharing-button" className={cx("mx-2 mb-2 flex items-center gap-2 rounded-md px-2 py-2 text-xs hover:bg-hover", sharingShown ? "bg-hover text-accent" : "text-muted")}>
+        <Users size={14} /> Sharing
+      </button>
       <UsageMeter />
       <UpdateCard />
       <SignInBanner />

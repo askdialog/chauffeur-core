@@ -40,6 +40,7 @@ pub mod daily_review;
 pub mod design;
 pub mod design_export;
 pub mod diff;
+pub mod downloads;
 pub mod envreload;
 pub mod error;
 pub mod error_reports;
@@ -179,6 +180,7 @@ pub struct Daemon {
     pub shell_env: shellenv::ShellEnv,
     /// Where design chats' screens are served (story 47).
     pub designs: canvas::DesignServer,
+    pub downloads: downloads::Downloads,
     /// Design shares (story 51).
     pub shares: Arc<share::Shares>,
     /// Workspace shares (story 53).
@@ -268,6 +270,7 @@ impl Daemon {
             events,
             shell_env,
             designs: canvas::DesignServer::default(),
+            downloads: downloads::Downloads::default(),
             extension_web: Default::default(),
             error_reports,
             shutdown,

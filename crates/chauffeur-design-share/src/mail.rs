@@ -48,6 +48,8 @@ pub enum Shared {
     Design,
     /// A markdown file of a workspace (story 57).
     Document,
+    /// An HTML or PDF document, viewed directly.
+    File,
     Workspace(GuestRole),
 }
 
@@ -133,6 +135,7 @@ pub fn invitation(
     let can = match shared {
         Shared::Design => "look at its screens and comment on them",
         Shared::Document => "read it and comment on its passages",
+        Shared::File => "read it in your browser",
         Shared::Workspace(GuestRole::Viewer) => "follow its chats and read its notes, live",
         Shared::Workspace(GuestRole::Suggest) => {
             "follow its chats, read its notes and suggest messages to its agents"

@@ -5,6 +5,8 @@ import { codeBlockText } from "@/lib/codeBlock";
 import { highlight } from "@/lib/highlight";
 import { markdownBlocks, remarkPlugins } from "@/lib/markdown";
 import { openExternal } from "@/lib/native";
+import { parseDeliverable } from "@/lib/deliverables";
+import { DeliverableCard } from "./DeliverableCard";
 import { CopyCodeButton } from "./CopyCodeButton";
 import { CopyTableButton } from "./CopyTableButton";
 import { tableTsv } from "@/lib/tableTsv";
@@ -17,18 +19,21 @@ const StreamingContext = createContext(false);
 /** Inside a link: an image follows the link rather than opening full screen. */
 const LinkedContext = createContext(false);
 
-/** The source of a ```mermaid block, or null for any other block. */
-function mermaidSource(pre: Element | undefined): string | null {
+/** The source of a fenced block of this language, or null for another block. */
+function fencedSource(pre: Element | undefined, language: string): string | null {
   const code = pre?.children[0];
   if (!code || code.type !== "element" || code.tagName !== "code") return null;
   const classes = code.properties?.className;
-  if (!Array.isArray(classes) || !classes.includes("language-mermaid")) return null;
+  if (!Array.isArray(classes) || !classes.includes(`language-${language}`)) return null;
   return code.children.map((child) => (child.type === "text" ? child.value : "")).join("");
 }
 
 function Pre({ node, children }: { node?: Element; children?: React.ReactNode }) {
   const streaming = useContext(StreamingContext);
-  const source = mermaidSource(node);
+  const source = fencedSource(node, "mermaid");
+  const declaration = fencedSource(node, "deliverable");
+  const document = declaration == null ? null : parseDeliverable(declaration);
+  if (document) return <DeliverableCard document={document} streaming={streaming} />;
   if (source != null) return <MermaidDiagram source={source} streaming={streaming} />;
   return (
     <div className="md-code group/code relative">

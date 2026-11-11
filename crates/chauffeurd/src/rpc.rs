@@ -329,6 +329,7 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::DesignCommentsSend(params) => {
             to_value(crate::comments::send(daemon, &params).await?)
         }
+        ClientCall::SharesList(_) => to_value(daemon.shares.list()?),
         ClientCall::DesignShareState(params) => to_value(daemon.shares.state(&params.chat)?),
         ClientCall::DesignShareStart(params) => to_value(daemon.shares.start(&params).await?),
         ClientCall::DesignShareUpdate(params) => to_value(daemon.shares.update(&params).await?),
@@ -544,6 +545,15 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
             to_value(FilesListResult {
                 roots: files::list(&git, &roots).await?,
             })
+        }
+        ClientCall::FilesDownload(params) => {
+            if !crate::server::deliverable_path(&params.path) {
+                return Err(Error::BadRequest(
+                    "choose an HTML or PDF document under .chauffeur/artifacts/".into(),
+                ));
+            }
+            let row = daemon.workspaces.row(&params.workspace)?;
+            to_value(daemon.downloads.issue(&row.id, &params.path)?)
         }
         ClientCall::FilesRead(params) => {
             let (row, roots) = file_roots(daemon, &params.workspace)?;

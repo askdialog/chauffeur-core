@@ -56,16 +56,41 @@ fn target(daemon: &Arc<Daemon>, workspace: &str, path: &str) -> Result<Target> {
     Ok(Target { row, notes, real })
 }
 
-/// A markdown file of a workspace, as a share holds it.
+/// A document of a workspace, as a share holds it.
 pub struct SharedFile {
     pub workspace_id: String,
     pub notes: PathBuf,
     pub real: PathBuf,
 }
 
-/// The markdown file `path` of `workspace`, checked as a comment's is.
+/// Markdown files and HTML/PDF deliverables may be shared independently of a canvas.
 pub fn shared_file(daemon: &Arc<Daemon>, workspace: &str, path: &str) -> Result<SharedFile> {
-    let target = target(daemon, workspace, path)?;
+    let target = if is_markdown(path) {
+        target(daemon, workspace, path)?
+    } else {
+        if !crate::server::deliverable_path(path) {
+            return Err(Error::BadRequest(
+                "Share a markdown file or an HTML/PDF document under .chauffeur/artifacts".into(),
+            ));
+        }
+        let (row, roots) = crate::rpc::file_roots(daemon, workspace)?;
+        let real = crate::files::resolve(&roots, path)?;
+        let metadata = std::fs::metadata(&real)?;
+        if !metadata.is_file() || metadata.len() > chauffeur_design::MAX_FILE_BYTES {
+            return Err(Error::BadRequest(
+                "Shared documents must be files no larger than 25 MB".into(),
+            ));
+        }
+        if path.to_ascii_lowercase().ends_with(".pdf")
+            && crate::files::media_type(&real, path) != Some("application/pdf")
+        {
+            return Err(Error::BadRequest(
+                "This document is not a PDF: regenerate it before sharing".into(),
+            ));
+        }
+        let notes = Path::new(&row.path).join(NOTES_DIR);
+        Target { row, notes, real }
+    };
     Ok(SharedFile {
         workspace_id: target.row.id,
         notes: target.notes,

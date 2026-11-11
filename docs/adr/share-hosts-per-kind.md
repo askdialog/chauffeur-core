@@ -26,3 +26,5 @@ Decided with Justin 2026-11-06:
 - A distribution ships both: Dialog's defaults set `url` to the design host and `link_urls` to the workspace host and `design.askdialog.ai`, and its `[slack] url` moves to the design host (one Slack service, reached on every host).
 - Shares made before keep the link stored with them, on the former host, which redirects.
 - By hand, once: DNS records for the two new hosts, and the web OAuth client's authorized JavaScript origins for both.
+
+HTML/PDF document shares use the workspace share host at `/s/<id>` (2026-11-10; [document deliverables](chat-document-deliverables.md)); design canvases and Markdown shares retain the design host.

@@ -104,6 +104,34 @@ assert any(screen.get("url") for p in canvas["pages"] for s in p["sections"] for
   c archive "$slug" --force >/dev/null
 }
 
+check_document_request() {
+  c new --name document-request >/dev/null
+  c --json chat document-request --agent claude --model "$MODEL" --prompt \
+    'Create a beautiful English one-pager about our fictional catalog feature: shoppers ask questions, missing product information is detected, and merchants fill the gaps. Deliver a standalone HTML page, not application mockups. Keep it concise, and present the finished document in this conversation.' \
+    > "$T/document-chat.json"
+  c --json wait document-request --timeout 300 > "$T/document-wait.json"
+  python3 - "$T/document-wait.json" "$CHAUFFEUR_WORKSPACES_DIR/document-request" <<'PYDOC'
+import json,pathlib,re,sys
+result=json.load(open(sys.argv[1]))
+assert not result.get("timed_out"), result
+blocks=re.findall(r"```deliverable\s*\n(.*?)\n```", result.get("last_text") or "", re.S)
+assert blocks, ("the model did not declare its document", result)
+document=json.loads(blocks[-1]); path=document["path"]
+assert path.startswith(".chauffeur/artifacts/") and path.endswith(".html"), document
+assert ".." not in pathlib.PurePosixPath(path).parts, document
+html=(pathlib.Path(sys.argv[2])/path).read_text()
+assert "<html" in html.lower(), html
+PYDOC
+  c --json chats document-request | python3 -c 'import sys,json; chats=json.load(sys.stdin)["chats"]; assert all(c["kind"] != "design" for c in chats), chats'
+  c archive document-request --force >/dev/null
+}
+
+if [ "${DOCUMENT_REQUEST_ONLY:-}" = 1 ]; then
+  check_document_request
+  echo "E2E DOCUMENT REQUEST OK"
+  exit 0
+fi
+
 # Repeat just the request-to-canvas scenarios after changing their session instructions.
 if [ "${DESIGN_REQUEST_ONLY:-}" = 1 ]; then
   check_design_request design-request claude "$MODEL"
@@ -806,6 +834,9 @@ if ! committed; then
   exit 1
 fi
 c archive explore-two --force >/dev/null
+
+echo "== 4f-doc. a styled one-pager stays a document in its source conversation"
+check_document_request
 
 echo "== 4f0. a mockup request creates and starts a design chat from its conversation"
 check_design_request design-request claude "$MODEL"

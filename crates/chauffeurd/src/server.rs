@@ -133,6 +133,7 @@ pub async fn serve(daemon: Arc<Daemon>) -> anyhow::Result<()> {
             .route("/attachments/{workspace}/{file}", get(attachment_handler))
             .route("/images/{workspace}", get(image_handler))
             .route("/media/{workspace}", get(media_handler))
+            .route("/deliverables/{workspace}", get(deliverable_handler))
             .route("/tunnel/{workspace}/{offset}", get(tunnel_handler))
             .route("/preview/{workspace}/{offset}", get(preview_handler))
             .route("/workspace-file/{workspace}", get(workspace_file_handler))
@@ -422,24 +423,7 @@ async fn relayed(
         }
     };
     let status = StatusCode::from_u16(answer.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let mut kept = HeaderMap::new();
-    for name in [
-        header::CONTENT_TYPE,
-        header::CONTENT_LENGTH,
-        header::CONTENT_RANGE,
-        header::ACCEPT_RANGES,
-        header::CACHE_CONTROL,
-        header::X_CONTENT_TYPE_OPTIONS,
-        header::CONTENT_SECURITY_POLICY,
-    ] {
-        if let Some(value) = answer
-            .headers()
-            .get(name.as_str())
-            .and_then(|v| header::HeaderValue::from_bytes(v.as_bytes()).ok())
-        {
-            kept.insert(name, value);
-        }
-    }
+    let kept = relay_response_headers(answer.headers());
     // An error ends the body: the next read is not tried.
     let chunks = futures_util::stream::unfold(Some(answer), |answer| async move {
         let mut answer = answer?;
@@ -451,6 +435,29 @@ async fn relayed(
     });
     let body = axum::body::Body::from_stream(chunks);
     (status, kept, body).into_response()
+}
+
+/// Preserve download and media semantics without forwarding cookies or upstream capabilities.
+fn relay_response_headers(headers: &reqwest::header::HeaderMap) -> HeaderMap {
+    let mut kept = HeaderMap::new();
+    for name in [
+        header::CONTENT_TYPE,
+        header::CONTENT_LENGTH,
+        header::CONTENT_RANGE,
+        header::CONTENT_DISPOSITION,
+        header::ACCEPT_RANGES,
+        header::CACHE_CONTROL,
+        header::X_CONTENT_TYPE_OPTIONS,
+        header::CONTENT_SECURITY_POLICY,
+    ] {
+        if let Some(value) = headers
+            .get(name.as_str())
+            .and_then(|v| header::HeaderValue::from_bytes(v.as_bytes()).ok())
+        {
+            kept.insert(name, value);
+        }
+    }
+    kept
 }
 
 /// No script ever runs in what `/media` serves. A PDF is shown by WebKit's PDF viewer in a frame,
@@ -481,6 +488,124 @@ fn byte_range(header: &str, size: u64) -> Option<(u64, u64)> {
         }
     };
     (start < end).then_some((start, end))
+}
+
+/// Downloads declared HTML/PDF documents as attachments, never executable pages on the RPC origin.
+async fn deliverable_handler(
+    State(state): State<AppState>,
+    Path(workspace): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    headers: HeaderMap,
+) -> HttpResponse {
+    use tokio::io::AsyncReadExt;
+
+    let path = if state.require_token {
+        query
+            .get("ticket")
+            .and_then(|ticket| state.daemon.downloads.take(ticket, &workspace))
+    } else {
+        // Only a peer on the owner's private Unix socket can request a path without a ticket.
+        query.get("path").cloned()
+    };
+    let Some(asked) = path.as_ref().filter(|path| deliverable_path(path)) else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "download link expired: download the document again from its chat",
+        )
+            .into_response();
+    };
+    if let Ok(row) = state.daemon.workspaces.row(&workspace)
+        && let Some(machine) = crate::relay::machine_of(&state.daemon, &row.id)
+    {
+        let route = format!("/deliverables/{}", row.id);
+        return relayed(&state, &machine, &route, &[("path", asked)], &headers).await;
+    }
+    let not_found = || {
+        (
+            StatusCode::NOT_FOUND,
+            "document not found: regenerate it in its chat",
+        )
+            .into_response()
+    };
+    let Ok((_, roots)) = crate::rpc::file_roots(&state.daemon, &workspace) else {
+        return not_found();
+    };
+    let Ok(path) = crate::files::resolve(&roots, asked) else {
+        return not_found();
+    };
+    let Ok(file) = tokio::fs::File::open(&path).await else {
+        return not_found();
+    };
+    const MAX_BYTES: u64 = 32 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    if file
+        .take(MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .is_err()
+    {
+        return not_found();
+    }
+    if bytes.len() as u64 > MAX_BYTES {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "document exceeds 32 MB: ask for a smaller export",
+        )
+            .into_response();
+    }
+    let pdf = asked.to_ascii_lowercase().ends_with(".pdf");
+    if pdf && !crate::files::is_media("application/pdf", &bytes) {
+        return not_found();
+    }
+    let filename: String = asked
+        .rsplit('/')
+        .next()
+        .unwrap_or("document")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                if pdf {
+                    "application/pdf".to_string()
+                } else {
+                    "text/html; charset=utf-8".to_string()
+                },
+            ),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+            (header::CACHE_CONTROL, "no-store".to_string()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "sandbox; default-src 'none'".to_string(),
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+pub(crate) fn deliverable_path(path: &str) -> bool {
+    path.len() <= 1024
+        && path.starts_with(".chauffeur/artifacts/")
+        && !path
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '\\' | '%' | '?' | '#'))
+        && path.split('/').all(|p| !matches!(p, "" | "." | ".."))
+        && [".html", ".htm", ".pdf"]
+            .iter()
+            .any(|ext| path.to_ascii_lowercase().ends_with(ext))
 }
 
 /// A workspace's file as the Files tab's preview serves it, for the daemon of the machine it moved
@@ -1188,6 +1313,179 @@ async fn stored(
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[tokio::test]
+    async fn deliverable_downloads_require_auth_and_serve_only_scoped_documents_as_attachments() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = crate::paths::Paths::new(
+            temp.path().join("home"),
+            temp.path().join("workspaces"),
+            temp.path().join("repos"),
+        );
+        paths.ensure().unwrap();
+        std::fs::write(
+            &paths.settings,
+            "linear_enabled = false\ngithub_sources = false\n",
+        )
+        .unwrap();
+        let daemon = Daemon::open(paths.clone()).unwrap();
+        let workspace = paths.workspaces_dir.join("documents");
+        let artifacts = workspace.join(".chauffeur/artifacts");
+        std::fs::create_dir_all(&artifacts).unwrap();
+        daemon
+            .store
+            .insert_workspace(&crate::store::WorkspaceRow {
+                id: "docs".into(),
+                slug: "documents".into(),
+                path: workspace.to_string_lossy().into_owned(),
+                branch: "docs".into(),
+                parent_id: None,
+                state: chauffeur_protocol::model::WorkspaceState::Ready,
+                tickets: vec![],
+                created_at: String::new(),
+                archived_at: None,
+                last_error: None,
+                attention_at: None,
+                seen_at: None,
+                explore: false,
+                title: None,
+                auto_title: false,
+                title_source: None,
+                pinned: false,
+                position: 0.0,
+                section_id: None,
+                house_position: None,
+            })
+            .unwrap();
+        std::fs::write(artifacts.join("page.html"), "<h1>One page</h1>").unwrap();
+        std::fs::write(artifacts.join("page.pdf"), "%PDF-1.4\nfixture").unwrap();
+        std::fs::write(artifacts.join("fake.pdf"), "<script>bad()</script>").unwrap();
+        let outside = temp.path().join("outside.html");
+        std::fs::write(&outside, "outside").unwrap();
+        std::os::unix::fs::symlink(outside, artifacts.join("escape.html")).unwrap();
+        let state = AppState {
+            daemon: daemon.clone(),
+            token: Arc::new("secret".into()),
+            require_token: true,
+        };
+        for (path, issue_ticket, expected) in [
+            (
+                ".chauffeur/artifacts/page.html",
+                false,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (".chauffeur/artifacts/page.html", true, StatusCode::OK),
+            (".chauffeur/artifacts/page.pdf", true, StatusCode::OK),
+            (".chauffeur/artifacts/fake.pdf", true, StatusCode::NOT_FOUND),
+            (
+                ".chauffeur/artifacts/escape.html",
+                true,
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                ".chauffeur/artifacts/missing.html",
+                true,
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                ".chauffeur/artifacts/../page.html",
+                true,
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                ".chauffeur/artifacts/%2e%2e/page.html",
+                true,
+                StatusCode::UNAUTHORIZED,
+            ),
+            ("/tmp/page.html", true, StatusCode::UNAUTHORIZED),
+        ] {
+            let ticket = if issue_ticket {
+                daemon.downloads.issue("docs", path).unwrap()
+            } else {
+                String::new()
+            };
+            let response = deliverable_handler(
+                State(state.clone()),
+                Path("docs".into()),
+                Query(HashMap::from([
+                    ("path".into(), path.into()),
+                    ("ticket".into(), ticket),
+                ])),
+                HeaderMap::new(),
+            )
+            .await;
+            assert_eq!(response.status(), expected, "{path}");
+            if expected == StatusCode::OK {
+                assert!(
+                    response.headers()[header::CONTENT_DISPOSITION]
+                        .to_str()
+                        .unwrap()
+                        .starts_with("attachment;")
+                );
+                assert_eq!(
+                    response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+                    "nosniff"
+                );
+                assert!(
+                    !axum::body::to_bytes(response.into_body(), 1024)
+                        .await
+                        .unwrap()
+                        .is_empty()
+                );
+            }
+        }
+        let response = deliverable_handler(
+            State(state.clone()),
+            Path("docs".into()),
+            Query(HashMap::from([
+                ("token".into(), "secret".into()),
+                ("path".into(), ".chauffeur/artifacts/page.html".into()),
+            ])),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let ticket = daemon
+            .downloads
+            .issue("docs", ".chauffeur/artifacts/page.html")
+            .unwrap();
+        let response = deliverable_handler(
+            State(state),
+            Path("docs".into()),
+            Query(HashMap::from([
+                ("ticket".into(), ticket),
+                ("path".into(), ".chauffeur/artifacts/page.pdf".into()),
+            ])),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap(),
+            "<h1>One page</h1>"
+        );
+        daemon.shutdown.cancel();
+    }
+
+    #[test]
+    fn a_remote_document_keeps_its_attachment_disposition_without_upstream_cookies() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=report.html".parse().unwrap(),
+        );
+        headers.insert(header::CONTENT_TYPE, "text/html".parse().unwrap());
+        headers.insert(header::SET_COOKIE, "private=value".parse().unwrap());
+        let forwarded = relay_response_headers(&headers);
+        assert_eq!(
+            forwarded[header::CONTENT_DISPOSITION],
+            "attachment; filename=report.html"
+        );
+        assert_eq!(forwarded[header::CONTENT_TYPE], "text/html");
+        assert!(!forwarded.contains_key(header::SET_COOKIE));
+    }
 
     fn extension_event(id: chauffeur_protocol::extensions::ExtensionId) -> Event {
         Event::Extension {

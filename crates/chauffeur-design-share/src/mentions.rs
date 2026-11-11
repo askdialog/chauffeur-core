@@ -391,10 +391,7 @@ impl Service {
                         share_id: share.id.clone(),
                         share_title: share.title.clone(),
                         owner: share.owner.clone(),
-                        url: format!(
-                            "{}/s/{}?thread={}",
-                            self.config.public_url, share.id, row.thread_id
-                        ),
+                        url: format!("{}?thread={}", self.share_url(share), row.thread_id),
                         chat: None,
                         comment: row.comment_id,
                         thread: row.thread_id,

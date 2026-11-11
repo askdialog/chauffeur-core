@@ -4344,6 +4344,15 @@ fn plans_dir(workspace: &WorkspaceRow) -> Option<String> {
     }
 }
 
+/// Documents stay in their source conversation, independently of either agent's skills.
+const DOCUMENT_NOTICE: &str = r#"Documents and deliverables: a one-pager, report, styled HTML page, PDF or presentation is a deliverable in this conversation, not an interface mockup. Do not create a Design chat for it. Preserve the user's language, audience, format and page count across follow-ups: 'make it beautiful' changes styling, not a one-pager into a deck. Choose the deliverable format from the user's request and intended use: HTML, PDF, or both when useful. If unspecified, use your judgment; do not automatically generate both. Use editorial layout, typography and diagrams appropriate to its content; do not reproduce application navigation or loading/error UI. Use the appropriate document skill for an explicitly requested PDF or slides.
+Keep documents under .chauffeur/artifacts/<document-name>/. An HTML download must work independently: inline its CSS, images and required assets. Check its rendered layout. For a PDF, generate a real PDF, render and inspect it, and verify the requested page count and readable text. Keep the same primary file when revising; regenerate any exports you list so they match that revision. A request for slides creates a separate deliverable and preserves the original document. Do not publish or share externally unless requested.
+Once files exist and have been checked, present HTML/PDF deliverables in a fenced `deliverable` block containing JSON, for example:
+```deliverable
+{"title":"Data Loop — Feature overview","path":".chauffeur/artifacts/data-loop/index.html"}
+```
+The primary path can be HTML or PDF. Add optional exports only for other versions you chose to generate and checked; omit exports for a single-format deliverable. Chauffeur does not convert files or require a pair of formats. Paths must be workspace-relative under .chauffeur/artifacts/, with .html, .htm or .pdf extensions. Chauffeur renders this as a document card that opens beside this chat, with format choices and download. It is not a canvas. Other file types use normal file links. Never put HTML markup in the declaration. Keep responding in this conversation to revise the document or produce another format."#;
+
 /// What every session of the workspace is told: that a design chat designs, or that an
 /// exploration is read-only; that a delegated chat answers its parent; the tickets and reply format.
 fn system_prompt(
@@ -4376,6 +4385,7 @@ fn system_prompt(
         Some("When mentioning a pull request in a reply, including in tables and summaries, use a clickable Markdown link to its actual URL, such as [#351](https://github.com/owner/repo/pull/351), rather than a bare PR number. Resolve the URL from the correct repository or `gh pr view <number> --repo <owner/repo> --json url`; never guess the repository when it is ambiguous.".to_string()),
         Some("You are replying in Chauffeur. It does not render the `visualize` skill's inline content references: never emit a visualize marker or rely on the Codex inline visualization runtime. Interface mockups belong in a Chauffeur design chat's canvas, as self-contained HTML screens, not HTML fragments written into the notes and referenced in a reply.".to_string()),
         notice,
+        (!workspace.explore && design.is_none()).then(|| DOCUMENT_NOTICE.to_string()),
         subagent.map(str::to_string),
         plan.map(str::to_string),
         ticket_briefing(&workspace.path),

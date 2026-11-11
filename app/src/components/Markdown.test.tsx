@@ -21,3 +21,11 @@ test("a message streamed in pieces is drawn as the whole message", () => {
   ].join("\n\n");
   expect(drawn(text, true)).toBe(drawn(text, false));
 });
+
+test("only a declared document becomes a card; HTML and malformed declarations stay code", () => {
+  const declaration = '{"title":"Feature overview","path":".chauffeur/artifacts/feature/index.html"}';
+  expect(drawn(`\`\`\`deliverable\n${declaration}\n\`\`\``, false)).toContain('data-testid="deliverable-card"');
+  for (const text of [`\`\`\`json\n${declaration}\n\`\`\``, "```html\n<h1>Report</h1>\n```", "```deliverable\n{\"title\":\n```", "`deliverable`"]) {
+    expect(drawn(text, false)).not.toContain('data-testid="deliverable-card"');
+  }
+});

@@ -210,6 +210,7 @@ import type { OpenAppsResult } from "./OpenAppsResult";
 import type { OpenParams } from "./OpenParams";
 import type { OpenResult } from "./OpenResult";
 import type { OpenTerminalParams } from "./OpenTerminalParams";
+import type { OutgoingShare } from "./OutgoingShare";
 import type { PackageCryptParams } from "./PackageCryptParams";
 import type { PackageCryptResult } from "./PackageCryptResult";
 import type { PeerHelloParams } from "./PeerHelloParams";
@@ -353,7 +354,7 @@ import type { WorktreeCreateParams } from "./WorktreeCreateParams";
 import type { WorktreeCreateResult } from "./WorktreeCreateResult";
 import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 
-export const PROTOCOL_VERSION = 14;
+export const PROTOCOL_VERSION = 15;
 export const MIN_PROTOCOL_VERSION = 1;
 export const PEER_PROTOCOL_VERSION = 3;
 
@@ -504,6 +505,7 @@ export type ClientMethods = {
   "design.comment_delete": [CommentParams, EmptyParams];
   "design.comment_resolve": [CommentResolveParams, DesignComment];
   "design.comments_send": [CommentsSendParams, CommentsSendResult];
+  "shares.list": [EmptyParams, Array<OutgoingShare>];
   "design.share_state": [ChatParams, DesignShareState];
   "design.share_start": [ShareStartParams, DesignShareState];
   "design.share_update": [ShareStartParams, DesignShareState];
@@ -528,6 +530,7 @@ export type ClientMethods = {
   "diff.get": [DiffParams, DiffResult];
   "files.list": [WorkspaceParams, FilesListResult];
   "files.read": [FileReadParams, FileContent];
+  "files.download": [FileReadParams, string];
   "files.write": [FileWriteParams, FileContent];
   "files.comments": [FileCommentsParams, FileCommentsResult];
   "files.comment_add": [FileCommentAddParams, DesignComment];
@@ -877,6 +880,7 @@ export const METHOD_NAMES = [
   "design.comment_delete",
   "design.comment_resolve",
   "design.comments_send",
+  "shares.list",
   "design.share_state",
   "design.share_start",
   "design.share_update",
@@ -901,6 +905,7 @@ export const METHOD_NAMES = [
   "diff.get",
   "files.list",
   "files.read",
+  "files.download",
   "files.write",
   "files.comments",
   "files.comment_add",

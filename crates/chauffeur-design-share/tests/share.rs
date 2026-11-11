@@ -1093,7 +1093,7 @@ async fn a_share_open_to_the_team_is_read_and_listed_by_every_member() {
 }
 
 #[tokio::test]
-async fn a_share_of_a_file_that_is_not_markdown_is_refused_and_leaves_nothing_behind() {
+async fn only_supported_document_names_can_be_shared() {
     let s = server().await;
     let http = reqwest::Client::new();
     let create = |document: &str| {
@@ -1120,4 +1120,7 @@ async fn a_share_of_a_file_that_is_not_markdown_is_refused_and_leaves_nothing_be
     let shares = listed(http.clone(), s.base.clone()).await;
     assert_eq!(shares.len(), 1);
     assert_eq!(shares[0].document.as_deref(), Some("plan.md"));
+    for name in ["onepager.html", "report.PDF"] {
+        assert_eq!(create(name).await.unwrap().status(), 200);
+    }
 }

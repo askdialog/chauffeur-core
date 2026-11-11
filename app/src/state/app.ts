@@ -143,6 +143,7 @@ export type AppState = {
   sidebarHidden: boolean;
   /** The sidebar's width in pixels, dragged from its right edge. */
   sidebarWidth: number;
+  sharingShown: boolean;
   /** The 3D Office (docs/office.md) fills the main area instead of the selected workspace. */
   officeShown: boolean;
   /** The daemon's Office is on (`office.state` says it is configured); off, nothing shows it. */
@@ -250,6 +251,7 @@ export const useApp = create<AppState>(() => ({
   settingsSection: null,
   sidebarHidden: localStorage.getItem(SIDEBAR_KEY) === "1",
   sidebarWidth: storedSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_KEY)),
+  sharingShown: false,
   officeShown: false,
   officeEnabled: false,
   extensions: null,
@@ -312,7 +314,7 @@ function select(id: string | null) {
   if (id) localStorage.setItem(SELECTED_KEY, id);
   else localStorage.removeItem(SELECTED_KEY);
   const { selectedId, nav } = get();
-  set({ selectedId: id, nav: id ? visit(nav, selectedId, id) : nav, switcherOpen: false });
+  set({ sharingShown: false, selectedId: id, nav: id ? visit(nav, selectedId, id) : nav, switcherOpen: false });
   keptUnread = null;
   if (id) markSeen(id);
 }
@@ -341,7 +343,7 @@ function reachable(workspaces: Record<string, WorkspaceInfo>, id: string): boole
 /** Shows the 3D Office in the main area, or the selected workspace again. */
 export function showOffice(shown = !get().officeShown) {
   if (shown && !get().officeEnabled) return;
-  set({ officeShown: shown });
+  set({ sharingShown: false, officeShown: shown });
 }
 
 /** Said in the Office in the browser of what only the app does. */
@@ -713,6 +715,7 @@ export function prefillCreate(prompt: string) {
     createParent: s.createOpen ? s.createParent : null,
     switcherOpen: false,
     settingsOpen: false,
+    sharingShown: false,
     officeShown: false,
   }));
 }
@@ -1539,4 +1542,8 @@ export function chatsOf(chats: Record<string, ChatInfo>, workspaceId: string): C
   return Object.values(chats)
     .filter((c) => c.workspace_id === workspaceId)
     .sort((a, b) => a.created_at.localeCompare(b.created_at));
+}
+
+export function showSharing() {
+  set({ sharingShown: true, officeShown: false });
 }

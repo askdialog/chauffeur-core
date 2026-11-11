@@ -24,6 +24,7 @@ import { api, type ServiceConfig, ServiceError, type ShareKind } from "./api";
 import { renderSignIn } from "./google";
 import icon from "./icon.png";
 import { ReturnToReview } from "./mobileAuth";
+import { SharedDocument } from "./SharedDocument";
 import { MobileReview } from "./MobileReview";
 import "./mobileReview.css";
 
@@ -554,6 +555,8 @@ function OpenShare({
   const [live, setLive] = useState<Live>(() => liveOf(first));
   // A markdown file's share (story 57): the file rendered with its passages' comments, no canvas.
   const fileName = first.document ?? null;
+  const renderedDocument = !!fileName && /\.(html?|pdf)$/i.test(fileName);
+  const [documentRevision, setDocumentRevision] = useState(0);
   const [documentText, setDocumentText] = useState<string | null>(null);
   const [focusThread, setFocusThread] = useState<{ id: string; at: number } | null>(null);
   // Its Comments column shows until the reviewer closes it (a passage clicked opens it again);
@@ -580,11 +583,12 @@ function OpenShare({
   // stable while renewed; returning after sleep replaces an expired lease and reloads the frames.
   const readDocument = useCallback(() => {
     if (!fileName) return;
+    if (renderedDocument) { setDocumentRevision((revision) => revision + 1); return; }
     api.document(id, fileName).then(setDocumentText, (error: unknown) => {
       if (error instanceof ServiceError && error.status === 401) onSignedOut();
       else setToast("Could not read the file; check your connection or reload the page.");
     });
-  }, [id, fileName, onSignedOut]);
+  }, [id, fileName, renderedDocument, onSignedOut]);
   useEffect(readDocument, [readDocument]);
   useEffect(() => {
     if (fileName) return;
@@ -1032,7 +1036,9 @@ function OpenShare({
       </div>
       {fileName ? (
         <div className="relative min-h-0 flex-1" data-testid="share-document">
-          {documentText == null ? (
+          {renderedDocument ? (
+            <SharedDocument id={id} name={fileName} title={first.title} revision={documentRevision} onSignedOut={onSignedOut} onRefused={onRefused} />
+          ) : documentText == null ? (
             <div className="flex h-full items-center justify-center text-faint">
               <Spinner />
             </div>

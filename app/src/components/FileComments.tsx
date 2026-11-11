@@ -22,12 +22,12 @@ export type FileComments = {
   reload: () => Promise<void>;
 };
 
-/** What a markdown file's share is keyed by, as the daemon names it. */
+/** What a document's share is keyed by, as the daemon names it. */
 export function fileShareKey(workspaceId: string, path: string): string {
   return `file:${workspaceId}:${path}`;
 }
 
-/** A markdown file's share, read once shown, then kept by the daemon's events. */
+/** A document's share, read once shown, then kept by the daemon's events. */
 export function useFileShare(workspaceId: string, path: string | null): DesignShareState | undefined {
   const state = useApp((s) => (path ? s.designShares[fileShareKey(workspaceId, path)] : undefined));
   const status = useApp((s) => s.connection.status);

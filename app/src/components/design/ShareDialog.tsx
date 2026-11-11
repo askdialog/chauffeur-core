@@ -1,4 +1,4 @@
-// A design chat's Share dialog (story 51), or a markdown file's (story 57): the reviewers named by e-mail (past ones recalled),
+// A design chat's Share dialog (story 51), or a document's (story 57): the reviewers named by e-mail (past ones recalled),
 // whether anyone at the owner's team domain may open it too (offered only to a Google Workspace
 // account), the link once shared, who is looking, the connection, Stop sharing. Sharing needs Chauffeur's Google
 // sign-in: without it, the dialog starts with that button.
@@ -12,10 +12,11 @@ import { client, setDesignShare, toast, useApp } from "@/state/app";
 import { signIn, useIdentity } from "@/state/identity";
 import { Badge, Button, cx, IconButton, Kbd, Modal } from "../ui";
 
-/** What is shared: a design chat, or one markdown file of a workspace. */
+/** What is shared: a design chat, or one document of a workspace. */
 export type ShareTarget = { kind: "design"; chat: string } | { kind: "file"; workspace: string; path: string };
 
 export function ShareDialog({ target, state, onClose }: { target: ShareTarget; state: DesignShareState | undefined; onClose: () => void }) {
+  const comments = target.kind === "design" || /\.(md|mdx|markdown)$/i.test(target.path);
   const what = target.kind === "design" ? "design" : "file";
   const calls = shareCalls(target);
   const shared = isShared(state);
@@ -181,7 +182,7 @@ export function ShareDialog({ target, state, onClose }: { target: ShareTarget; s
         </div>
       )}
       <p className="text-[11.5px] text-faint">
-        Reviewers sign in as the address you named, see the {target.kind === "design" ? "canvas" : "file"} live and comment; their comments land here, in Comments. <Kbd>⏎</Kbd> adds an address.
+        Reviewers sign in as the address you named, see the {target.kind === "design" ? "canvas" : "file"} live{comments ? " and comment; their comments land here, in Comments" : ""}. <Kbd>⏎</Kbd> adds an address.
       </p>
     </div>
   );

@@ -11466,6 +11466,87 @@ async fn a_shared_design_reaches_the_service_and_a_reviewer_s_comment_comes_back
         })
         .await;
     assert!(matches!(plain, Err(Error::BadRequest(_))), "{plain:?}");
+    // The same live link still serves and synchronizes the design after its source is archived.
+    d.chats.close(&chat.id, false).await.unwrap();
+    d.workspaces.archive_in_background(&ws.id, false).unwrap();
+    eventually("shared design archived", || {
+        d.workspaces
+            .row(&ws.id)
+            .is_ok_and(|row| row.state == WorkspaceState::Archived)
+    })
+    .await;
+    let archived_dir = d
+        .paths
+        .archive_dir
+        .join(&ws.slug)
+        .join("designs")
+        .join(&chat.id);
+    let file_url = format!("{base}/v1/shares/{second_id}/files/hover.html");
+    let read = || {
+        http.get(&file_url)
+            .header("authorization", "Bearer dev:carol@example.com")
+            .send()
+    };
+    assert_eq!(read().await.unwrap().status(), 200);
+    std::fs::write(
+        archived_dir.join("hover.html"),
+        "<h1>Archived design retained</h1>",
+    )
+    .unwrap();
+    // A failed worktree cleanup may leave an empty live notes folder; it must not replace the archived source.
+    std::fs::create_dir_all(&dir).unwrap();
+    d.store
+        .set_workspace_state(
+            &ws.id,
+            WorkspaceState::CleanupFailed,
+            Some("fixture cleanup failure"),
+        )
+        .unwrap();
+    d.shares.resume();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if read().await.unwrap().text().await.unwrap() == "<h1>Archived design retained</h1>" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("archived design still synchronizes after resuming");
+    let mut request = format!(
+        "{}/v1/shares/{second_id}/reviewer",
+        base.replace("http://", "ws://")
+    )
+    .into_client_request()
+    .unwrap();
+    request
+        .headers_mut()
+        .insert("cookie", cookie.parse().unwrap());
+    let (mut archived_socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    archived_socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::to_string(&FromReviewer::Add {
+                screen: "hover.html".into(),
+                pin: None,
+                quote: None,
+                text: "Comment after archive".into(),
+                reply_to: None,
+                mentions: vec![],
+            })
+            .unwrap()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    eventually("review comment kept in archived design", || {
+        chauffeurd::comments::read(&archived_dir)
+            .0
+            .iter()
+            .any(|comment| comment.text == "Comment after archive")
+    })
+    .await;
+    d.shares.stop(&chat.id).await.unwrap();
+    assert_eq!(read().await.unwrap().status(), 410);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -11618,7 +11699,7 @@ async fn a_shared_markdown_file_reaches_the_service_alone_and_a_reviewer_s_comme
         Auth::InsecureDev,
         Config {
             public_url: "https://design.example".into(),
-            workspace_url: None,
+            workspace_url: Some("https://share.example".into()),
             cookie_domain: None,
             member_domain: Some("example.com".into()),
             site_url: None,
@@ -11868,6 +11949,93 @@ async fn a_shared_markdown_file_reaches_the_service_alone_and_a_reviewer_s_comme
     })
     .await
     .expect("the gone file's share stopped");
+    // Documents use the same permission, sync and revocation path, with no canvas.
+    std::fs::create_dir_all(notes.join("artifacts")).unwrap();
+    for (name, body, mime) in [
+        (
+            "onepager.html",
+            "<h1>One page</h1>",
+            "text/html; charset=utf-8",
+        ),
+        ("report.pdf", "%PDF-1.4\nfixture", "application/pdf"),
+    ] {
+        let path = format!(".chauffeur/artifacts/{name}");
+        std::fs::write(notes.join("artifacts").join(name), body).unwrap();
+        let state = d
+            .shares
+            .start_file(&FileShareStartParams {
+                workspace: ws.id.clone(),
+                path: path.clone(),
+                reviewers: vec!["bob@example.com".into()],
+                team: None,
+            })
+            .await
+            .unwrap();
+        let share = state.share.unwrap();
+        assert_eq!(share.url, format!("https://share.example/s/{}", share.id));
+        let url = format!("{base}/v1/shares/{}/files/{name}", share.id);
+        let read = || http.get(&url).header("cookie", &cookie).send();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if read().await.unwrap().status().is_success() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("document uploaded");
+        let response = read().await.unwrap();
+        assert_eq!(response.headers()["content-type"], mime);
+        assert!(
+            response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("sandbox allow-scripts")
+        );
+        assert_eq!(response.text().await.unwrap(), body);
+        assert_eq!(http.get(&url).send().await.unwrap().status(), 401);
+        assert_eq!(
+            http.get(&url)
+                .header("authorization", "Bearer dev:stranger@example.com")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            403
+        );
+        let snapshot: ShareSnapshot = http
+            .get(format!("{base}/v1/shares/{}/snapshot", share.id))
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(snapshot.document.as_deref(), Some(name));
+        assert_eq!(snapshot.files.len(), 1);
+        let updated = format!("{body}\nupdated");
+        std::fs::write(notes.join("artifacts").join(name), &updated).unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if read().await.unwrap().text().await.unwrap() == updated {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("updated document uploaded");
+        d.shares.stop_file(&ws.id, &path).await.unwrap();
+        assert_eq!(read().await.unwrap().status(), 410);
+    }
+    std::fs::write(notes.join("artifacts/fake.pdf"), "<html>not a PDF</html>").unwrap();
+    assert!(
+        d.shares
+            .file_state(&ws.id, ".chauffeur/artifacts/fake.pdf")
+            .is_err()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -19298,4 +19466,92 @@ async fn find_routines_proposes_from_the_users_requests_and_a_suggestion_becomes
     assert!(first_prompt(d, routine.refine_chat.as_ref().unwrap()).contains("Find routines"));
     assert!(find_routines::info(d).unwrap().suggestions.is_empty());
     assert!(find_routines::create(d, &installs.id).await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn archived_designs_keep_links_while_workspace_and_file_shares_stop() {
+    use chauffeurd::store::{DesignShareRow, WorkspaceShareRow};
+    let f = fixture(47680);
+    let d = &f.daemon;
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("durable-shares".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let chat = d
+        .chats
+        .create(CreateChatParams {
+            workspace: ws.id.clone(),
+            kind: Some(chauffeur_protocol::model::ChatKind::Design),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let dir = chauffeurd::design::design_dir(&ws.path, &chat.id).unwrap();
+    std::fs::write(Path::new(&dir).join("index.html"), "<h1>Kept</h1>").unwrap();
+    d.store
+        .design_share_put(&DesignShareRow {
+            chat_id: chat.id.clone(),
+            share_id: "design-link".into(),
+            url: "https://example.test/s/design".into(),
+            reviewers: vec![],
+            team: false,
+            created_at: chauffeurd::store::now(),
+            stopped_at: None,
+        })
+        .unwrap();
+    d.store
+        .workspace_share_put(&WorkspaceShareRow {
+            workspace_id: ws.id.clone(),
+            share_id: "workspace-link".into(),
+            url: "https://example.test/s/workspace".into(),
+            guests: vec![],
+            team: false,
+            chat_ids: None,
+            created_at: chauffeurd::store::now(),
+            stopped_at: None,
+        })
+        .unwrap();
+    let path = "repo-a/README.md";
+    std::fs::write(Path::new(&ws.path).join(path), "Shared repository file").unwrap();
+    d.store
+        .design_share_put(&DesignShareRow {
+            chat_id: format!("file:{}:{path}", ws.id),
+            share_id: "file-link".into(),
+            url: "https://example.test/s/file".into(),
+            reviewers: vec![],
+            team: false,
+            created_at: chauffeurd::store::now(),
+            stopped_at: None,
+        })
+        .unwrap();
+    d.chats.close(&chat.id, false).await.unwrap();
+    assert_eq!(d.shares.list().unwrap().len(), 3);
+    d.workspaces.archive_in_background(&ws.id, false).unwrap();
+    eventually("archive with shares", || {
+        d.workspaces
+            .row(&ws.id)
+            .is_ok_and(|w| w.state == WorkspaceState::Archived)
+    })
+    .await;
+    eventually("non-design shares stopped", || {
+        d.shares.list().is_ok_and(|shares| shares.len() == 1)
+    })
+    .await;
+    let shares = d.shares.list().unwrap();
+    assert_eq!(shares.len(), 1);
+    assert_eq!(shares[0].id, "design-link");
+    assert!(shares.iter().all(|s| s.archived));
+    let archived = d.paths.archive_dir.join("durable-shares");
+    assert_eq!(
+        std::fs::read_to_string(archived.join("designs").join(&chat.id).join("index.html"))
+            .unwrap(),
+        "<h1>Kept</h1>"
+    );
+    d.shares.stop(&chat.id).await.unwrap();
+    assert!(d.shares.list().unwrap().is_empty());
 }

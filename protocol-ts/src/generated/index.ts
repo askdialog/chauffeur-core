@@ -347,6 +347,8 @@ export type { OpenAppsResult } from "./OpenAppsResult";
 export type { OpenParams } from "./OpenParams";
 export type { OpenResult } from "./OpenResult";
 export type { OpenTerminalParams } from "./OpenTerminalParams";
+export type { OutgoingShare } from "./OutgoingShare";
+export type { OutgoingShareSource } from "./OutgoingShareSource";
 export type { OutputStream } from "./OutputStream";
 export type { PackageCryptParams } from "./PackageCryptParams";
 export type { PackageCryptResult } from "./PackageCryptResult";

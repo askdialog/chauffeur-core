@@ -79,14 +79,31 @@ impl Files {
     }
 
     /// A file's bytes and content type; none when missing, too large, or not a kind served.
-    pub fn read(&self, share_id: &str, file: &str) -> Option<(Vec<u8>, &'static str)> {
+    pub fn read(
+        &self,
+        share_id: &str,
+        file: &str,
+        document: bool,
+    ) -> Option<(Vec<u8>, &'static str)> {
         let path = self.file_path(share_id, file)?;
-        let media_type = content_type(&path)?;
+        let media_type = if document
+            && path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+        {
+            "application/pdf"
+        } else {
+            content_type(&path)?
+        };
         let meta = std::fs::symlink_metadata(&path).ok()?;
         if !meta.is_file() || meta.len() as usize > MAX_FILE_BYTES {
             return None;
         }
-        Some((std::fs::read(&path).ok()?, media_type))
+        let bytes = std::fs::read(&path).ok()?;
+        if media_type == "application/pdf" && !bytes.starts_with(b"%PDF-") {
+            return None;
+        }
+        Some((bytes, media_type))
     }
 
     /// The share's canvas as its page lays it out: each screen's URL under `files_url`
@@ -182,20 +199,29 @@ mod tests {
         let listed: Vec<String> = files.list("ab12").into_iter().map(|f| f.path).collect();
         assert_eq!(listed, ["sign in/empty.html", "styles.css"]);
         assert!(files.list("ab12").iter().all(|f| f.modified_ms > 0));
-        let (bytes, media_type) = files.read("ab12", "sign in/empty.html").unwrap();
+        let (bytes, media_type) = files.read("ab12", "sign in/empty.html", false).unwrap();
         assert_eq!(
             (bytes.as_slice(), media_type),
             (&b"<p>empty</p>"[..], "text/html; charset=utf-8")
         );
-        assert!(files.read("ab12", "../outside.html").is_none());
+        assert!(files.read("ab12", "../outside.html", false).is_none());
         files.write("ab12", "notes.txt", b"x").unwrap();
         assert!(
-            files.read("ab12", "notes.txt").is_none(),
+            files.read("ab12", "notes.txt", false).is_none(),
             "not a kind served"
         );
         files.remove("ab12", "styles.css").unwrap();
         files.remove("ab12", "styles.css").unwrap();
         assert_eq!(files.list("ab12").len(), 2);
+        files
+            .write("ab12", "report.pdf", b"%PDF-1.4\nfixture")
+            .unwrap();
+        assert!(files.read("ab12", "report.pdf", false).is_none());
+        assert!(files.read("ab12", "report.pdf", true).is_some());
+        files
+            .write("ab12", "fake.pdf", b"<script>bad()</script>")
+            .unwrap();
+        assert!(files.read("ab12", "fake.pdf", true).is_none());
         files.remove_all("ab12");
         assert!(files.list("ab12").is_empty());
     }

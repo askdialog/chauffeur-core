@@ -64,6 +64,11 @@ export const api = {
     if (!response.ok) throw new ServiceError(response.status, `The share service answered ${response.status}`);
     return response.text();
   },
+  documentFile: async (id: string, name: string): Promise<Blob> => {
+    const response = await fetch(`/v1/shares/${id}/files/${encodeURIComponent(name)}`, { credentials: "same-origin", cache: "no-store" });
+    if (!response.ok) throw new ServiceError(response.status, `The share service answered ${response.status}`);
+    return response.blob();
+  },
   workspaceSnapshot: (id: string) => call<WorkspaceShareSnapshot>(`/v1/workspace-shares/${id}/snapshot`),
   /** A shared chat's events, oldest first. */
   chatEvents: (id: string, chat: string) => call<EventEnvelope[]>(`/v1/workspace-shares/${id}/chats/${encodeURIComponent(chat)}/events`),

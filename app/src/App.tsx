@@ -8,6 +8,7 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { FindRoutinesDialog } from "./components/FindRoutinesDialog";
 import { TransferBatch } from "./components/TransferBatch";
 import { ShowSidebarButton } from "./components/ShowSidebarButton";
+import { SharingPage } from "./components/SharingPage";
 import { Sidebar } from "./components/Sidebar";
 import { Button, cx, EmptyState, Kbd } from "./components/ui";
 import { WorkspaceView } from "./components/WorkspaceView";
@@ -45,6 +46,7 @@ export function App() {
   const loaded = useApp((s) => s.workspacesLoaded);
   const firstRun = useApp((s) => s.workspacesLoaded && Object.keys(s.workspaces).length === 0);
   const sidebarHidden = useApp((s) => s.sidebarHidden);
+  const sharingShown = useApp((s) => s.sharingShown);
   const officeShown = useApp((s) => s.officeShown);
   // The Office is there only while it shows: closed, it lets go of its scene, models and textures,
   // so that it costs nothing to whoever does not look at it.
@@ -62,7 +64,7 @@ export function App() {
             </ErrorBoundary>
           </div>
         )}
-        {officeShown ? null : workspace ? (
+        {officeShown ? null : sharingShown ? <SharingPage /> : workspace ? (
           <ErrorBoundary key={workspace.id}>
             <WorkspaceView workspace={workspace} />
           </ErrorBoundary>

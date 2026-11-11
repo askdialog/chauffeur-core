@@ -747,6 +747,11 @@ methods! {
         #[access(Any)]
         #[relay(Local)]
         DesignCommentsSend(CommentsSendParams) -> CommentsSendResult,
+        /// Active outgoing shares owned by this daemon, including archived sources.
+        #[serde(rename = "shares.list")]
+        #[access(User)]
+        #[relay(Local)]
+        SharesList(EmptyParams) -> Vec<OutgoingShare>,
         /// A design chat's share (story 51): its state, as the Share dialog shows it.
         #[serde(rename = "design.share_state")]
         #[access(Any)]
@@ -868,6 +873,11 @@ methods! {
         #[access(Any)]
         #[relay(Read)]
         FilesRead(FileReadParams) -> FileContent,
+        /// A single-use, 60-second ticket for downloading one HTML/PDF artifact through this daemon.
+        #[serde(rename = "files.download")]
+        #[access(User)]
+        #[relay(Local)]
+        FilesDownload(FileReadParams) -> String,
         /// Replaces an existing file of a repo or of the notes folder; refused in an exploration.
         #[serde(rename = "files.write")]
         #[access(Any)]
@@ -4378,4 +4388,27 @@ pub struct SlackReceiveParams {
 #[ts(export)]
 pub struct SlackDelivery {
     pub link: Option<String>,
+}
+
+/// An active outgoing link, including designs whose source is archived.
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct OutgoingShare {
+    pub id: String,
+    pub url: String,
+    pub name: String,
+    pub workspace: String,
+    pub workspace_name: String,
+    pub archived: bool,
+    pub source: OutgoingShareSource,
+    pub connection: ShareConnection,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
+pub enum OutgoingShareSource {
+    Design { chat: String },
+    Workspace,
+    File { path: String },
 }

@@ -48,6 +48,7 @@ import {
 } from "@/lib/chatTabs";
 import { onMenuAction } from "@/lib/native";
 import { tabPercent } from "@/lib/context";
+import { Deliverables } from "@/components/Deliverables";
 import { errorMessage } from "@/lib/rpc";
 import {
   chatsOf,
@@ -1148,7 +1149,8 @@ export function ChatConversation({
     <ForkTurnContext.Provider value={forkTurn}>
     <SendNowContext.Provider value={sendNow}>
     <ShareCommentsContext.Provider value={owner.context}>
-    <div ref={root} className="flex min-h-0 flex-1 flex-col">
+    <Deliverables key={chat.id} workspaceId={chat.workspace_id} revision={view.turns}>
+    <div ref={root} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div
         className="group/list relative min-h-0 flex-1"
         onMouseDown={() => setSelected(null)}
@@ -1340,6 +1342,7 @@ export function ChatConversation({
         />
       )}
     </div>
+    </Deliverables>
     {providerChoice && (
       <Modal
         open

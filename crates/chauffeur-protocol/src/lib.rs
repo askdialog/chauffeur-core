@@ -46,7 +46,7 @@ pub mod workspace_share;
 /// The client protocol's version (`ClientCall`), sent by clients in `hello`. Bumped whenever its
 /// methods or their params' fields change: `protocol.lock` keeps the fingerprint of each version,
 /// and a test fails when the methods no longer match it.
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 /// The oldest client protocol the daemon still serves: clients of an older Chauffeur keep working
 /// against a newer daemon. Raised only when a method they rely on goes.
