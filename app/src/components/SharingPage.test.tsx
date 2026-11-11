@@ -11,6 +11,8 @@ test("archived shares remain visible and each kind stops through its own RPC", a
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, value });
   const { SharingPage } = await import("./SharingPage");
   const { client } = await import("@/state/app");
+  const { useToasts, dismissToast } = await import("@/state/toasts");
+  const existingToasts = new Set(useToasts.getState().toasts.map(toast => toast.id));
   const sources: OutgoingShareSource[] = [{ kind: "design", chat: "chat" }, { kind: "workspace" }, { kind: "file", path: ".chauffeur/report.pdf" }];
   const rows: OutgoingShare[] = sources.map((source, index) => ({ id: String(index), name: source.kind, workspace: "ws", workspace_name: "Project", archived: true, url: "https://example.test", source, connection: { state: "online" } }));
   const calls: string[] = [];
@@ -38,6 +40,8 @@ test("archived shares remain visible and each kind stops through its own RPC", a
   } finally {
     await act(async () => root.unmount());
     rpc.mockRestore(); container.remove();
+    for (const toast of useToasts.getState().toasts) if (!existingToasts.has(toast.id)) dismissToast(toast.id);
+    await browser.happyDOM.close();
     for (const [key, value] of previous) { if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key); }
   }
 });
