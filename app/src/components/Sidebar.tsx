@@ -384,8 +384,8 @@ export function Sidebar() {
       <UsageMeter />
       <UpdateCard />
       <SignInBanner />
-      <div className="flex shrink-0 items-center justify-between border-t border-line px-2 py-1.5">
-        <span className="flex items-center gap-0.5">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-y-0.5 border-t border-line px-2 py-1.5">
+        <span className="flex flex-wrap items-center gap-0.5">
           <IconButton title={`Settings (${kbd("⌘,")})`} onClick={() => openSettings()}>
             <Settings size={14} />
           </IconButton>
@@ -401,7 +401,7 @@ export function Sidebar() {
           <button
             onClick={() => openSwitcher(true, true)}
             title="Find an archived workspace, to read or restore it"
-            className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-[11.5px] text-faint hover:bg-hover hover:text-muted"
+            className="ml-auto flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 text-[11.5px] text-faint hover:bg-hover hover:text-muted"
             data-testid="archived-button"
           >
             <Archive size={12} /> Archived ({archivedCount})
@@ -501,7 +501,7 @@ function BatchPill() {
       onClick={() => openBatch(true)}
       title={copy.batchPillTitle}
       className={cx(
-        "flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] hover:bg-hover",
+        "flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-1.5 text-[11px] hover:bg-hover",
         counts.failed ? "text-danger" : "text-muted hover:text-fg",
       )}
       data-testid="transfer-batch-pill"
