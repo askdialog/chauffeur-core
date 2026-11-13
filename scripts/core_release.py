@@ -59,6 +59,16 @@ def verify_assets(value):
     return paths
 
 
+def find_release(tag):
+    """The release of `tag`, draft or not, or None.
+
+    Looked up in the list of releases: GitHub's get-a-release-by-tag endpoint answers 404 for a
+    draft, which is what every Core release is until this script publishes it.
+    """
+    pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{REPOSITORY}/releases?per_page=100"))
+    return next((item for page in pages for item in page if item["tag_name"] == tag), None)
+
+
 def publish(value, commit, notes_file):
     """Publish only verified Core artifacts, without becoming the legacy client's latest release."""
     paths = verify_assets(value)
@@ -69,8 +79,7 @@ def publish(value, commit, notes_file):
     if tomllib.loads(source)["workspace"]["package"]["version"] != value:
         raise ValueError("The public Core tag must point to sources declaring the release version.")
     tag = f"core-v{value}"
-    pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{REPOSITORY}/releases?per_page=100"))
-    existing = next((item for page in pages for item in page if item["tag_name"] == tag), None)
+    existing = find_release(tag)
     refs = json.loads(run("gh", "api", f"repos/{REPOSITORY}/git/matching-refs/tags/{tag}"))
     exact = next((ref for ref in refs if ref["ref"] == f"refs/tags/{tag}"), None)
     if exact:
@@ -88,7 +97,9 @@ def publish(value, commit, notes_file):
     target = json.loads(run("gh", "api", f"repos/{REPOSITORY}/commits/{tag}"))["sha"]
     if target != commit:
         raise ValueError("The Core tag already points to different sources; do not move published tags.")
-    uploaded = json.loads(run("gh", "api", f"repos/{REPOSITORY}/releases/tags/{tag}"))
+    uploaded = find_release(tag)
+    if uploaded is None:
+        raise ValueError(f"The Core release {tag} was not found after creating it.")
     indexed = {item["name"]: item for item in uploaded["assets"]}
     if set(indexed) != {path.name for path in paths}:
         raise ValueError("The Core release has missing or unexpected assets; repair the draft before publication.")
