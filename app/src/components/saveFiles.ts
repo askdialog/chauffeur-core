@@ -1,6 +1,6 @@
 import { type Download, downloadFiles, savedMessage } from "@/lib/downloads";
 import { errorMessage } from "@/lib/rpc";
-import { toast } from "@/state/app";
+import { toast } from "@/state/toasts";
 
 /** Saves the files and says where they went, or why they could not be saved. */
 export async function saveFiles(files: Download[]): Promise<void> {
