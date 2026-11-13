@@ -1055,11 +1055,32 @@ mod tests {
     }
 
     /// A script standing in for a system tool: records its arguments, exits with `code`.
+    ///
+    /// On Linux, running a file while a forked child still holds a write descriptor to it fails
+    /// with ETXTBSY ("Text file busy"). Tests run in parallel and fork, one of them right while
+    /// another writes its script, so the first run of a script can fail at random and the code
+    /// under test then sees a tool that cannot start. The script is therefore run once, doing
+    /// nothing, until it starts: no descriptor to it is open after that, and it stays so.
     fn fake(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\n[ -z \"$FAKE_PROBE\" ] || exit 0\n{body}\n"),
+        )
+        .unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
+        for _ in 0..500 {
+            match Command::new(&path).env("FAKE_PROBE", "1").status() {
+                Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                result => {
+                    assert!(result.unwrap().success(), "the fake {name} does not start");
+                    return path;
+                }
+            }
+        }
+        panic!("the fake {name} stays busy");
     }
 
     struct Fakes {
