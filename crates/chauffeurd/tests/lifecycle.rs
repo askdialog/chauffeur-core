@@ -17753,7 +17753,7 @@ async fn search_finds_by_meaning_once_indexed_and_never_starts_ollama_on_battery
     let f = fixture(48010);
     let d = &f.daemon;
     d.search.assume_battery(false);
-    let address = ollama_address(45650);
+    let address = ollama_address(25650);
     let models = f.root.join("ollama-models");
     d.ollama
         .use_binary(fake_ollama(&f.root), &address, models.clone());
@@ -18002,8 +18002,9 @@ fn ollama_log(d: &Daemon) -> String {
     std::fs::read_to_string(d.paths.logs_dir.join("ollama.log")).unwrap_or_default()
 }
 
-/// A fake Ollama's address. Below the fixtures' ports (46100 and up) and the system's ephemeral
-/// ports (49152 and up), where another test's server may sit; one per test, so none share it.
+/// A fake Ollama's address. Below every system's ephemeral ports (Linux starts them at 32768,
+/// macOS at 49152), where a connection of another test may hold the port when the server binds
+/// it; one per test, so none share it.
 fn ollama_address(port: u16) -> String {
     format!("127.0.0.1:{port}")
 }
@@ -18031,7 +18032,7 @@ async fn the_daemon_runs_ollama_for_local_models_and_stops_its_own_once_unused()
     use chauffeur_protocol::client::{OllamaModel, OllamaRunning};
     let f = fixture(49610);
     let d = &f.daemon;
-    let address = ollama_address(45610);
+    let address = ollama_address(25610);
     let models = f.root.join("ollama-models");
     let binary = fake_ollama(&f.root);
     d.ollama
@@ -18205,7 +18206,7 @@ async fn a_message_to_a_local_chat_starts_ollama_first_or_says_why_it_cannot() {
     let d = &f.daemon;
     let log = f.root.join("sidecar.log");
     d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
-    let address = ollama_address(45630);
+    let address = ollama_address(25630);
     let models = f.root.join("ollama-models");
     let broken = fake_tool(
         &f.root,
