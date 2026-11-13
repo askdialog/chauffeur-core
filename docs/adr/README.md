@@ -152,3 +152,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Separate Core and Dialog release artifacts](separate-core-and-dialog-releases.md) | 2026-11-11 | accepted |
 | [A chat's images are saved to Downloads by the desktop shell](attachments-saved-to-downloads.md) | 2026-11-13 | accepted |
 | [A child workspace's questions reach its parent, and the user still answers them](child-questions-reach-the-parent.md) | 2026-11-13 | proposed |
+| [A shared markdown file can carry the files it links to, on the same link](share-linked-files.md) | 2026-11-13 | accepted |

@@ -4,7 +4,7 @@
 // agent: a reviewer's comments reach the owner's daemon through the service.
 
 import type { CanvasResult, CommentAuthor, DesignComment, FromReviewer, Mention, ShareSnapshot, ToReviewer } from "@chauffeur/protocol";
-import { AtSign, Copy, Download, Lock, LogOut, Mail, MessageSquarePlus, MessageSquareText, Play, Scan, UserRound, Users, X } from "lucide-react";
+import { ArrowLeft, AtSign, Copy, Download, Lock, LogOut, Mail, MessageSquarePlus, MessageSquareText, Play, Scan, UserRound, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { layoutCanvas, noScreens, pageSections, percent, presentOrder, ZOOM_STEPS } from "@/lib/canvas";
 import { counts as commentCounts, type Draft, threadsOf } from "@/lib/comments";
@@ -19,12 +19,14 @@ import { useCanvasView } from "@/components/design/useCanvasView";
 import type { ScreenCommenting } from "@/components/design/ScreenComments";
 import { usePins } from "@/components/design/usePins";
 import { type CommentActions, MarkdownComments } from "@/components/MarkdownComments";
+import { FileLinkContext, type FileLinker } from "@/components/FileLinks";
 import { Button, cx, Select, type SelectOption, Spinner } from "@/components/ui";
 import { api, type ServiceConfig, ServiceError, type ShareKind } from "./api";
 import { renderSignIn } from "./google";
 import icon from "./icon.png";
 import { ReturnToReview } from "./mobileAuth";
 import { SharedDocument } from "./SharedDocument";
+import { commentsOn, displayName, type LinkManifest, linkedTarget, MANIFEST } from "./linkedFiles";
 import { MobileReview } from "./MobileReview";
 import "./mobileReview.css";
 
@@ -558,6 +560,11 @@ function OpenShare({
   const renderedDocument = !!fileName && /\.(html?|pdf)$/i.test(fileName);
   const [documentRevision, setDocumentRevision] = useState(0);
   const [documentText, setDocumentText] = useState<string | null>(null);
+  // The file shown: the one shared, or a linked file it carries (docs/adr/share-linked-files.md),
+  // with the files opened before it, for the way back.
+  const [shown, setShown] = useState<string | null>(fileName);
+  const [trail, setTrail] = useState<string[]>([]);
+  const [manifest, setManifest] = useState<LinkManifest>({});
   const [focusThread, setFocusThread] = useState<{ id: string; at: number } | null>(null);
   // Its Comments column shows until the reviewer closes it (a passage clicked opens it again);
   // closed at first on a phone, where it would leave the file no room.
@@ -582,14 +589,65 @@ function OpenShare({
   // Renew the screens' 15-minute read leases through the authenticated page. Their URLs stay
   // stable while renewed; returning after sleep replaces an expired lease and reloads the frames.
   const readDocument = useCallback(() => {
-    if (!fileName) return;
+    if (!fileName || !shown) return;
     if (renderedDocument) { setDocumentRevision((revision) => revision + 1); return; }
-    api.document(id, fileName).then(setDocumentText, (error: unknown) => {
+    api.document(id, shown).then((text) => { if (shownRef.current === shown) setDocumentText(text); }, (error: unknown) => {
       if (error instanceof ServiceError && error.status === 401) onSignedOut();
-      else setToast("Could not read the file; check your connection or reload the page.");
+      else if (error instanceof ServiceError && error.status === 404 && shown !== fileName) {
+        // A linked file the share no longer carries: back to the file shared.
+        setShown(fileName);
+        setTrail([]);
+        setToast(`${displayName(shown)} is no longer shared.`);
+      } else setToast("Could not read the file; check your connection or reload the page.");
     });
-  }, [id, fileName, renderedDocument, onSignedOut]);
+    // The linked files' manifest: none on a file shared alone.
+    api.document(id, MANIFEST).then((text) => {
+      try { setManifest(JSON.parse(text) as LinkManifest); } catch { setManifest({}); }
+    }, () => setManifest({}));
+  }, [id, fileName, shown, renderedDocument, onSignedOut]);
+  const shownRef = useRef(shown);
+  shownRef.current = shown;
+  const openFile = useCallback((file: string) => {
+    if (file === shownRef.current) return;
+    const from = shownRef.current;
+    setDocumentText(null);
+    setShown(file);
+    setTrail((t) => (from ? [...t, from] : t));
+  }, []);
+  const goBack = () => {
+    const previous = trail[trail.length - 1] ?? fileName;
+    setTrail((t) => t.slice(0, -1));
+    setDocumentText(null);
+    setShown(previous);
+  };
+  const shownComments = useMemo(() => (shown ? commentsOn(live.comments, shown) : live.comments), [live.comments, shown]);
+  const linker = useMemo<FileLinker | null>(() => {
+    if (!shown || Object.keys(manifest).length === 0) return null;
+    const resolve = (text: string) => {
+      const target = linkedTarget(manifest, shown, text);
+      return target ? { path: target, line: null } : null;
+    };
+    return {
+      resolve,
+      resolveFresh: async (text: string) => resolve(text),
+      resolveFolder: () => null,
+      open: (ref) => openFile(ref.path),
+      canReveal: false,
+      reveal: () => {},
+      revealPath: () => {},
+    };
+  }, [manifest, shown, openFile]);
+  /** Shows a thread of the document: on its own file when it is on a linked one. */
+  const focusDocumentThread = useCallback((threadId: string) => {
+    const comment = liveRef.current.comments.find((c) => c.id === threadId);
+    const root = comment?.reply_to ? liveRef.current.comments.find((c) => c.id === comment.reply_to) : comment;
+    // A thread on a linked file opens that file (one no longer carried falls back to the file shared).
+    if (root?.screen && root.screen !== shownRef.current) openFile(root.screen);
+    setFocusThread({ id: threadId, at: Date.now() });
+  }, [openFile]);
   useEffect(readDocument, [readDocument]);
+  const readDocumentRef = useRef(readDocument);
+  readDocumentRef.current = readDocument;
   useEffect(() => {
     if (fileName) return;
     let closed = false;
@@ -655,11 +713,11 @@ function OpenShare({
             setSnapshotEpoch(epoch => epoch + 1);
             setLive(liveOf(message.snapshot));
             // Again at each (re)connection: the file may have changed while the page was away.
-            readDocument();
+            readDocumentRef.current();
             break;
           case "files":
             if (fileName) {
-              readDocument();
+              readDocumentRef.current();
               break;
             }
             api
@@ -722,7 +780,7 @@ function OpenShare({
       if (timer) clearTimeout(timer);
       active?.close();
     };
-  }, [id, me.email, onRefused, flashScreens, fileName, readDocument]);
+  }, [id, me.email, onRefused, flashScreens, fileName]);
 
   /** `quiet`: no toast when not connected (a thread read is said again once the snapshot comes). */
   const say = (message: FromReviewer, quiet = false) => {
@@ -826,10 +884,10 @@ function OpenShare({
   const linked = useRef(threadParam(location.search));
   useEffect(() => {
     if (!linked.current || !live.comments.some((c) => c.id === linked.current)) return;
-    if (fileName) setFocusThread({ id: linked.current, at: Date.now() });
+    if (fileName) focusDocumentThread(linked.current);
     else showThread(linked.current);
     linked.current = null;
-  }, [live.comments, showThread, fileName]);
+  }, [live.comments, showThread, fileName, focusDocumentThread]);
   const escape = () => {
     if (takeOverOpen) setTakeOverOpen(false);
     else if (reviewersOpen) setReviewersOpen(false);
@@ -924,7 +982,7 @@ function OpenShare({
   const documentActions: CommentActions = {
     // A comment not sent (no socket, an invitation refused) rejects: its draft stays.
     add: async (quote, text, mentions) => {
-      if (!fileName || !(await inviteMentioned(mentions)) || !say({ type: "add", screen: fileName, quote, text, mentions: withMentions(mentions) })) {
+      if (!fileName || !(await inviteMentioned(mentions)) || !say({ type: "add", screen: shown ?? fileName, quote, text, mentions: withMentions(mentions) })) {
         throw new Error("not sent");
       }
     },
@@ -960,7 +1018,7 @@ function OpenShare({
             className="shrink-0 text-accent"
             onClick={() => {
               const next = unread.find((t) => t !== openThread) ?? unread[0];
-              if (fileName) setFocusThread({ id: next, at: Date.now() });
+              if (fileName) focusDocumentThread(next);
               else showThread(next);
             }}
             title="Open the next thread that mentions you"
@@ -1035,7 +1093,18 @@ function OpenShare({
         </div>
       </div>
       {fileName ? (
-        <div className="relative min-h-0 flex-1" data-testid="share-document">
+        <div className="relative flex min-h-0 flex-1 flex-col" data-testid="share-document">
+          {!renderedDocument && shown && shown !== fileName && (
+            <div className="flex h-8 shrink-0 items-center gap-2 border-b border-line px-2 text-[12px]" data-testid="share-linked-bar">
+              <Button size="sm" variant="ghost" onClick={goBack} title={`Back to ${displayName(trail[trail.length - 1] ?? fileName)}`} data-testid="share-linked-back">
+                <ArrowLeft size={12} /> {displayName(trail[trail.length - 1] ?? fileName)}
+              </Button>
+              <span className="text-faint">/</span>
+              <span className="min-w-0 truncate font-medium text-fg" title={shown}>{displayName(shown)}</span>
+              <span className="ml-auto hidden text-[11.5px] text-faint sm:inline">Shared along with {displayName(fileName)}</span>
+            </div>
+          )}
+          <div className="relative min-h-0 flex-1">
           {renderedDocument ? (
             <SharedDocument id={id} name={fileName} title={first.title} revision={documentRevision} onSignedOut={onSignedOut} onRefused={onRefused} />
           ) : documentText == null ? (
@@ -1043,9 +1112,11 @@ function OpenShare({
               <Spinner />
             </div>
           ) : (
+            <FileLinkContext.Provider value={linker}>
             <MarkdownComments
+              key={shown ?? undefined}
               text={documentText}
-              comments={live.comments}
+              comments={shownComments}
               me={me}
               busy={false}
               panel={documentPanel}
@@ -1056,7 +1127,9 @@ function OpenShare({
               unread={unreadSet}
               focus={focusThread}
             />
+            </FileLinkContext.Provider>
           )}
+          </div>
           {toast && (
             <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center" data-testid="share-toast">
               <div className="rounded-md border border-line-strong bg-raised px-3 py-1.5 text-[12px] text-fg shadow-xl selectable">{toast}</div>

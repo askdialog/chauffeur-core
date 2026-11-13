@@ -1292,6 +1292,9 @@ pub fn share(s: &chauffeur_protocol::client::DesignShareState) -> String {
     if share.team {
         lines.push("team       open to every member".into());
     }
+    if s.linked {
+        lines.push("linked     carries the files it links to".into());
+    }
     if !share.viewers.is_empty() {
         lines.push(format!("viewing    {}", share.viewers.join(", ")));
     }

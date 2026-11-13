@@ -9,11 +9,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chauffeur_protocol::client::{
     CreateChatParams, DesignComment, DesignImportParams, DesignShareState, FileShareStartParams,
-    ReviewerComment, ShareConnection, ShareStartParams, SharedDesignsResult,
+    FilesLinkedResult, ReviewerComment, ShareConnection, ShareStartParams, SharedDesignsResult,
 };
 use chauffeur_protocol::design_share::{
     FromDaemon, SHARE_PROTOCOL_VERSION, ShareParams, ShareSnapshot, ShareStatus, SharedDesign,
@@ -26,6 +26,7 @@ use tokio::sync::Notify;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::google::{self, REFRESH_TOKEN};
+use crate::linked_files::{self, Linked};
 use crate::secrets::Secrets;
 use crate::store::DesignShareRow;
 use crate::{Daemon, Error, Result};
@@ -41,12 +42,16 @@ const MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
 const SCAN_DEPTH: usize = 8;
 /// Never uploaded: the exports (PNGs the user made), and the comments (they go over the socket).
 const SKIPPED_DIRS: [&str; 1] = ["exports"];
+/// How long a workspace's list of files serves to find linked files before it is read again.
+const LINK_INDEX_FRESH: Duration = Duration::from_secs(30);
 
 pub struct Shares {
     daemon: Weak<Daemon>,
     secrets: Secrets,
     http: reqwest::Client,
     links: Mutex<HashMap<String, Link>>,
+    /// Each workspace's files as the file linker indexes them, and when they were listed.
+    link_index: Mutex<HashMap<String, (Instant, Arc<linked_files::Index>)>>,
 }
 
 /// A share read for a copy (`Shares::read`), its files still on the service.
@@ -92,28 +97,91 @@ enum Source {
         real: PathBuf,
         path: String,
         name: String,
+        /// The files it links to, when the share carries them.
+        carried: Option<Arc<Carried>>,
     },
+}
+
+/// The linked files a markdown file's share carries, with the files on the Mac behind them.
+pub(crate) struct Carried {
+    linked: Linked,
+    real: HashMap<String, PathBuf>,
+    manifest: Vec<u8>,
+}
+
+impl Carried {
+    fn new(linked: Linked, real: HashMap<String, PathBuf>) -> Carried {
+        let manifest = linked.manifest_bytes();
+        Carried {
+            linked,
+            real,
+            manifest,
+        }
+    }
+}
+
+/// A manifest's version in a listing, where a file's is its change time: its bytes' hash.
+fn manifest_version(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
 }
 
 impl Source {
     fn scan(&self) -> Listing {
         match self {
             Source::Design { dir } => scan(dir),
-            Source::File { real, name, .. } => {
-                let fits =
-                    std::fs::metadata(real).is_ok_and(|m| m.is_file() && m.len() <= MAX_FILE_BYTES);
-                fits.then(|| (name.clone(), modified_ms(real)))
+            Source::File {
+                real,
+                name,
+                carried,
+                ..
+            } => {
+                let fits = |real: &Path| {
+                    std::fs::metadata(real).is_ok_and(|m| m.is_file() && m.len() <= MAX_FILE_BYTES)
+                };
+                let mut listing: Listing = fits(real)
+                    .then(|| (name.clone(), modified_ms(real)))
                     .into_iter()
-                    .collect()
+                    .collect();
+                if let Some(carried) = carried {
+                    for (shared, real) in &carried.real {
+                        if fits(real) {
+                            listing.insert(shared.clone(), modified_ms(real));
+                        }
+                    }
+                    if !carried.linked.files.is_empty() {
+                        listing.insert(
+                            linked_files::MANIFEST.to_string(),
+                            manifest_version(&carried.manifest),
+                        );
+                    }
+                }
+                listing
             }
         }
     }
 
-    /// The file on the Mac behind a shared path.
-    fn file(&self, shared: &str) -> PathBuf {
-        match self {
+    /// The bytes of a shared path: a file on the Mac, or the linked files' manifest.
+    async fn bytes(&self, shared: &str) -> std::io::Result<Vec<u8>> {
+        let file = match self {
             Source::Design { dir } => dir.join(shared),
-            Source::File { real, .. } => real.clone(),
+            Source::File { real, carried, .. } => match carried {
+                Some(carried) if shared == linked_files::MANIFEST => {
+                    return Ok(carried.manifest.clone());
+                }
+                Some(carried) if carried.real.contains_key(shared) => carried.real[shared].clone(),
+                _ => real.clone(),
+            },
+        };
+        tokio::fs::read(file).await
+    }
+
+    /// Carries `linked` beside a markdown file; a design carries nothing.
+    fn carry(&mut self, linked: Option<Arc<Carried>>) {
+        if let Source::File { carried, .. } = self {
+            *carried = linked;
         }
     }
 
@@ -129,14 +197,21 @@ impl Source {
         match self {
             Source::Design { dir } => crate::comments::read(dir).0,
             Source::File {
-                notes, path, name, ..
+                notes,
+                path,
+                name,
+                carried,
+                ..
             } => crate::comments::read(notes)
                 .0
                 .into_iter()
-                .filter(|c| &c.screen == path)
-                .map(|c| DesignComment {
-                    screen: name.clone(),
-                    ..c
+                .filter_map(|c| {
+                    let screen = if &c.screen == path {
+                        name.clone()
+                    } else {
+                        carried.as_ref()?.linked.shared_of(&c.screen)?.to_string()
+                    };
+                    Some(DesignComment { screen, ..c })
                 })
                 .collect(),
         }
@@ -146,13 +221,20 @@ impl Source {
     fn keep(&self, comment: DesignComment) -> Result<()> {
         match self {
             Source::Design { dir } => crate::comments::merge_remote(dir, comment),
-            Source::File { notes, path, .. } => crate::file_comments::merge_remote(
+            Source::File {
                 notes,
-                DesignComment {
-                    screen: path.clone(),
-                    ..comment
-                },
-            ),
+                path,
+                carried,
+                ..
+            } => {
+                // A comment on a linked file is kept on that file's path; any other on the file's.
+                let screen = carried
+                    .as_ref()
+                    .and_then(|c| c.linked.path_of(&comment.screen))
+                    .unwrap_or(path)
+                    .to_string();
+                crate::file_comments::merge_remote(notes, DesignComment { screen, ..comment })
+            }
         }
     }
 
@@ -174,6 +256,7 @@ impl Shares {
                 .build()
                 .expect("an HTTP client"),
             links: Mutex::new(HashMap::new()),
+            link_index: Mutex::new(HashMap::new()),
         }
     }
 
@@ -333,6 +416,9 @@ impl Shares {
         let links = self.links.lock().unwrap();
         let link = links.get(chat_id);
         let row = self.d().store.design_share(chat_id).ok().flatten();
+        let linked = row
+            .as_ref()
+            .is_some_and(|r| r.stopped_at.is_none() && r.linked);
         let share = link.and_then(|l| l.status.clone()).or_else(|| {
             // Before the service answered (or while it is away): what the daemon knows.
             row.filter(|r| r.stopped_at.is_none()).map(|r| ShareStatus {
@@ -364,7 +450,90 @@ impl Shares {
             past_reviewers: self.past_reviewers(),
             comments_rev: link.map(|l| l.comments_rev).unwrap_or(0),
             last_reviewer_comment: link.and_then(|l| l.last_comment.clone()),
+            linked,
         }
+    }
+
+    /// What a markdown file's share carries beside it this time: none when it carries nothing;
+    /// an error when the linked files could not be found (the last ones then stay).
+    async fn carry(
+        &self,
+        key: &str,
+        workspace_id: &str,
+        source: &Source,
+    ) -> Result<Option<Arc<Carried>>> {
+        let Source::File { path, name, .. } = source else {
+            return Ok(None);
+        };
+        let linked = self.d().store.design_share(key)?.is_some_and(|r| r.linked);
+        if !linked || !crate::file_comments::is_markdown(path) {
+            return Ok(None);
+        }
+        let (linked, real) = self.find_linked(workspace_id, path, name).await?;
+        Ok(Some(Arc::new(Carried::new(linked, real))))
+    }
+
+    /// The markdown files a markdown file links to, recursively, as its share carries them.
+    pub async fn linked(&self, workspace: &str, path: &str) -> Result<FilesLinkedResult> {
+        let target = crate::file_comments::shared_file(&self.d(), workspace, path)?;
+        if !crate::file_comments::is_markdown(path) {
+            return Ok(FilesLinkedResult {
+                files: Vec::new(),
+                truncated: false,
+            });
+        }
+        let (linked, _) = self.find_linked(&target.workspace_id, path, "").await?;
+        Ok(FilesLinkedResult {
+            files: linked.files.into_iter().map(|f| f.path).collect(),
+            truncated: linked.truncated,
+        })
+    }
+
+    /// The files `path` links to, and the files on the Mac behind them.
+    async fn find_linked(
+        &self,
+        workspace_id: &str,
+        path: &str,
+        name: &str,
+    ) -> Result<(Linked, HashMap<String, PathBuf>)> {
+        let d = self.d();
+        let (row, roots) = crate::rpc::file_roots(&d, workspace_id)?;
+        let fresh = self
+            .link_index
+            .lock()
+            .unwrap()
+            .get(workspace_id)
+            .filter(|(at, _)| at.elapsed() < LINK_INDEX_FRESH)
+            .map(|(_, index)| index.clone());
+        let index = match fresh {
+            Some(index) => index,
+            None => {
+                let git = crate::git::Git::new(d.shell_env.clone());
+                let index = Arc::new(linked_files::Index::new(
+                    &crate::files::list(&git, &roots).await?,
+                ));
+                self.link_index
+                    .lock()
+                    .unwrap()
+                    .insert(workspace_id.to_string(), (Instant::now(), index.clone()));
+                index
+            }
+        };
+        let read = |file: &str| {
+            let real = crate::files::resolve(&roots, file).ok()?;
+            let fits = std::fs::metadata(&real).ok()?.len() <= MAX_FILE_BYTES;
+            fits.then(|| std::fs::read_to_string(&real).ok()).flatten()
+        };
+        let linked = linked_files::find(path, name, Path::new(&row.path), &index, read);
+        let real = linked
+            .files
+            .iter()
+            .filter_map(|f| {
+                let real = crate::files::resolve(&roots, &f.path).ok()?;
+                Some((f.shared.clone(), real))
+            })
+            .collect();
+        Ok((linked, real))
     }
 
     /// Who a comment of the design chat may mention: the people its live share is open to, as
@@ -471,6 +640,7 @@ impl Shares {
                     real: target.real,
                     path: path.to_string(),
                     name,
+                    carried: None,
                 },
             ));
         }
@@ -504,6 +674,7 @@ impl Shares {
                 team: Some(params.team.unwrap_or(false)),
                 document: None,
             },
+            false,
         )
         .await
     }
@@ -534,6 +705,7 @@ impl Shares {
                 team: Some(params.team.unwrap_or(false)),
                 document: Some(name),
             },
+            params.linked.unwrap_or(false),
         )
         .await
     }
@@ -544,6 +716,7 @@ impl Shares {
         key: &str,
         workspace_id: &str,
         params: ShareParams,
+        linked: bool,
     ) -> Result<DesignShareState> {
         let d = self.d();
         let what = if params.document.is_some() {
@@ -583,6 +756,7 @@ impl Shares {
             url: status.url.clone(),
             reviewers: status.reviewers.clone(),
             team: status.team,
+            linked,
             created_at: crate::store::now(),
             stopped_at: None,
         };
@@ -713,16 +887,28 @@ impl Shares {
     /// The reviewers of a live share, and whether the team sees it.
     pub async fn update(&self, params: &ShareStartParams) -> Result<DesignShareState> {
         let chat = self.d().chats.resolve(&params.chat)?;
-        self.change(&chat.id, &chat.workspace_id, &params.reviewers, params.team)
-            .await
+        self.change(
+            &chat.id,
+            &chat.workspace_id,
+            &params.reviewers,
+            params.team,
+            None,
+        )
+        .await
     }
 
     /// The reviewers of a markdown file's live share, and whether the team sees it.
     pub async fn update_file(&self, params: &FileShareStartParams) -> Result<DesignShareState> {
         let target = crate::file_comments::shared_file(&self.d(), &params.workspace, &params.path)?;
         let key = file_key(&target.workspace_id, &params.path);
-        self.change(&key, &target.workspace_id, &params.reviewers, params.team)
-            .await
+        self.change(
+            &key,
+            &target.workspace_id,
+            &params.reviewers,
+            params.team,
+            params.linked,
+        )
+        .await
     }
 
     async fn change(
@@ -731,6 +917,7 @@ impl Shares {
         workspace_id: &str,
         reviewers: &[String],
         team: Option<bool>,
+        linked: Option<bool>,
     ) -> Result<DesignShareState> {
         let d = self.d();
         let row = d
@@ -765,6 +952,7 @@ impl Shares {
         d.store.design_share_put(&DesignShareRow {
             reviewers: status.reviewers.clone(),
             team: status.team,
+            linked: linked.unwrap_or(row.linked),
             ..row
         })?;
         self.remember_reviewers(&status.reviewers);
@@ -951,17 +1139,24 @@ impl Shares {
 
         // The whole design on the first connection, what changed since on the next ones.
         let mut comments_seen: Option<u64> = None;
+        // The linked files the last look found: a reviewer's comment on one is kept on its path.
+        let mut carried: Option<Arc<Carried>> = None;
         let mut interval = tokio::time::interval(SCAN_EVERY);
         loop {
             tokio::select! {
                 _ = interval.tick() => {
                     if self.d().workspaces.row(workspace_id).is_ok_and(|w| w.state == chauffeur_protocol::model::WorkspaceState::Archiving) { continue; }
-                    let Some((_, source)) = self.source(&row.chat_id) else { continue };
+                    let Some((_, mut source)) = self.source(&row.chat_id) else { continue };
+                    match self.carry(&row.chat_id, workspace_id, &source).await {
+                        Ok(now) => carried = now,
+                        Err(error) => tracing::warn!(%error, "could not find the files a shared file links to"),
+                    }
+                    source.carry(carried.clone());
                     let mut now = source.scan();
                     let (changed, removed) = diff(listing.as_ref(), &now);
                     let mut uploaded = Vec::new();
                     for path in &changed {
-                        let bytes = match tokio::fs::read(source.file(path)).await {
+                        let bytes = match source.bytes(path).await {
                             Ok(bytes) => bytes,
                             Err(error) => {
                                 tracing::warn!(%error, path, "could not read a file to share");
@@ -1036,7 +1231,7 @@ impl Shares {
                             let me = self.email().unwrap_or_default();
                             let mine = comment.author.email == me;
                             let mentioned = comment.mentions.iter().any(|m| m.email == me);
-                            if let Some((_, source)) = self.source(&row.chat_id) && let Err(error) = source.keep(comment.clone()) {
+                            if let Some((_, mut source)) = self.source(&row.chat_id) && let Err(error) = { source.carry(carried.clone()); source.keep(comment.clone()) } {
                                 tracing::warn!(%error, "a reviewer's comment could not be kept");
                                 continue;
                             }

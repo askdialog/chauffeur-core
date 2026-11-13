@@ -225,6 +225,7 @@ export type { FileRoot } from "./FileRoot";
 export type { FileShareStartParams } from "./FileShareStartParams";
 export type { FileStatus } from "./FileStatus";
 export type { FileWriteParams } from "./FileWriteParams";
+export type { FilesLinkedResult } from "./FilesLinkedResult";
 export type { FilesListResult } from "./FilesListResult";
 export type { FilesSearchParams } from "./FilesSearchParams";
 export type { FilesSearchResult } from "./FilesSearchResult";

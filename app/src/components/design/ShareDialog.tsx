@@ -1,9 +1,10 @@
 // A design chat's Share dialog (story 51), or a document's (story 57): the reviewers named by e-mail (past ones recalled),
 // whether anyone at the owner's team domain may open it too (offered only to a Google Workspace
 // account), the link once shared, who is looking, the connection, Stop sharing. Sharing needs Chauffeur's Google
-// sign-in: without it, the dialog starts with that button.
+// sign-in: without it, the dialog starts with that button. A markdown file's dialog offers to carry the files it links
+// to on the same link, listed, checked by default when there are any (docs/adr/share-linked-files.md).
 
-import type { DesignShareState } from "@chauffeur/protocol";
+import type { DesignShareState, FilesLinkedResult } from "@chauffeur/protocol";
 import { Check, Copy, Eye, Link as LinkIcon, X } from "lucide-react";
 import { type KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { errorMessage } from "@/lib/rpc";
@@ -27,6 +28,27 @@ export function ShareDialog({ target, state, onClose }: { target: ShareTarget; s
   const [copied, setCopied] = useState(false);
   const signingIn = useIdentity((s) => s.signingIn);
   const teamDomain = useApp((s) => s.identity?.team_domain ?? null);
+  const markdownFile = target.kind === "file" && comments;
+  const [linkedFiles, setLinkedFiles] = useState<FilesLinkedResult | null>(null);
+  const [linked, setLinked] = useState(() => (shared ? (state?.linked ?? false) : true));
+  const fileWorkspace = target.kind === "file" ? target.workspace : null;
+  const filePath = target.kind === "file" ? target.path : null;
+  useEffect(() => {
+    if (!markdownFile || !fileWorkspace || !filePath) return;
+    let active = true;
+    client.call("files.linked", { workspace: fileWorkspace, path: filePath }).then(
+      (result) => active && setLinkedFiles(result),
+      () => active && setLinkedFiles({ files: [], truncated: false }),
+    );
+    return () => { active = false; };
+  }, [markdownFile, fileWorkspace, filePath]);
+  const sharedLinked = shared ? (state?.linked ?? false) : undefined;
+  useEffect(() => {
+    if (sharedLinked !== undefined) setLinked(sharedLinked);
+  }, [sharedLinked]);
+  // Offered when the file links to any, or when its share carries them already (to turn it off).
+  const offerLinked = markdownFile && ((linkedFiles?.files.length ?? 0) > 0 || sharedLinked === true);
+  const carry = offerLinked && linked;
   const signInToShare = async () => {
     if (!await signIn()) return;
     try { setDesignShare(await calls.state()); }
@@ -45,7 +67,7 @@ export function ShareDialog({ target, state, onClose }: { target: ShareTarget; s
   const parsed = useMemo(() => parseEmails(typed), [typed]);
   const all = useMemo(() => [...named, ...parsed.emails.filter((e) => !named.includes(e))], [named, parsed.emails]);
   const offered = suggestions(state, all);
-  const changed = shared && (team !== sharedTeam || all.length !== reviewers?.length || all.some((e) => !reviewers?.includes(e)));
+  const changed = shared && (team !== sharedTeam || (offerLinked && linked !== sharedLinked) || all.length !== reviewers?.length || all.some((e) => !reviewers?.includes(e)));
   const connection = connectionLabel(state);
 
   const takeTyped = () => {
@@ -74,8 +96,8 @@ export function ShareDialog({ target, state, onClose }: { target: ShareTarget; s
       setBusy(false);
     }
   };
-  const share = () => act(`share the ${what}`, () => calls.start(all, team));
-  const update = () => act("change the share", () => calls.update(all, team));
+  const share = () => act(`share the ${what}`, () => calls.start(all, team, carry));
+  const update = () => act("change the share", () => calls.update(all, team, offerLinked ? linked : undefined));
   const stop = () => act("stop sharing", () => calls.stop());
   const copy = async () => {
     const url = state?.share?.url;
@@ -151,6 +173,27 @@ export function ShareDialog({ target, state, onClose }: { target: ShareTarget; s
             <span className="block text-[11.5px] text-faint">Anyone signed in with a Google account at {teamDomain} can open it.</span>
           </span>
         </label>
+      )}
+      {offerLinked && linkedFiles && (
+        <div>
+          <label className="flex items-start gap-2 text-[12.5px] text-fg">
+            <input type="checkbox" className="mt-0.5 accent-accent" checked={linked} onChange={(event) => setLinked(event.target.checked)} data-testid="share-linked" />
+            <span>
+              {linkedFiles.files.length === 1 ? "Also share the linked file" : `Also share the ${linkedFiles.files.length}${linkedFiles.truncated ? "+" : ""} linked files`}
+              <span className="block text-[11.5px] text-faint">On the same link: reviewers open them from this file, and comment on them too. Files linked later join it.</span>
+            </span>
+          </label>
+          {linkedFiles.files.length > 0 && (
+            <ul className={cx("ml-6 mt-1.5 max-h-28 overflow-auto rounded-md border border-line bg-bg px-2 py-1", !linked && "opacity-50")} data-testid="share-linked-files">
+              {linkedFiles.files.map((path) => (
+                <li key={path} className="truncate font-mono text-[11.5px] text-muted" title={path}>
+                  {path}
+                </li>
+              ))}
+            </ul>
+          )}
+          {linkedFiles.truncated && <div className="ml-6 mt-1 text-[11.5px] text-faint">Only the first {linkedFiles.files.length} travel.</div>}
+        </div>
       )}
       {shared && state.share && (
         <div className="flex flex-col gap-2 rounded-md border border-line bg-bg p-2.5" data-testid="share-live">
@@ -229,16 +272,16 @@ function shareCalls(target: ShareTarget) {
     const { chat } = target;
     return {
       state: () => client.call("design.share_state", { chat }),
-      start: (reviewers: string[], team: boolean) => client.call("design.share_start", { chat, reviewers, team }),
-      update: (reviewers: string[], team: boolean) => client.call("design.share_update", { chat, reviewers, team }),
+      start: (reviewers: string[], team: boolean, _linked?: boolean) => client.call("design.share_start", { chat, reviewers, team }),
+      update: (reviewers: string[], team: boolean, _linked?: boolean) => client.call("design.share_update", { chat, reviewers, team }),
       stop: () => client.call("design.share_stop", { chat }),
     };
   }
   const file = { workspace: target.workspace, path: target.path };
   return {
     state: () => client.call("files.share_state", file),
-    start: (reviewers: string[], team: boolean) => client.call("files.share_start", { ...file, reviewers, team }),
-    update: (reviewers: string[], team: boolean) => client.call("files.share_update", { ...file, reviewers, team }),
+    start: (reviewers: string[], team: boolean, linked?: boolean) => client.call("files.share_start", { ...file, reviewers, team, linked }),
+    update: (reviewers: string[], team: boolean, linked?: boolean) => client.call("files.share_update", { ...file, reviewers, team, linked }),
     stop: () => client.call("files.share_stop", file),
   };
 }

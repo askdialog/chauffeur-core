@@ -372,8 +372,8 @@ enum Command {
         to: Option<String>,
     },
     /// A markdown file's share (a note, a plan, a `.md` of a repo): its state; `--with` shares
-    /// the file alone with reviewers (or changes them), `--team` opens it to every member of the
-    /// team, `--stop` ends it.
+    /// the file with reviewers (or changes them), `--team` opens it to every member of the
+    /// team, `--linked` carries the markdown files it links to on the same link, `--stop` ends it.
     ShareFile {
         workspace: String,
         /// The file, as `chauffeur files` names it: `<repo>/<path>` or `.chauffeur/<path>`.
@@ -387,7 +387,13 @@ enum Command {
         /// Closed to the team: the named reviewers only.
         #[arg(long)]
         no_team: bool,
-        #[arg(long, conflicts_with_all = ["with", "team", "no_team"])]
+        /// Carries the markdown files it links to, recursively, followed live.
+        #[arg(long, conflicts_with = "no_linked")]
+        linked: bool,
+        /// The file alone, without the files it links to.
+        #[arg(long)]
+        no_linked: bool,
+        #[arg(long, conflicts_with_all = ["with", "team", "no_team", "linked", "no_linked"])]
         stop: bool,
     },
     /// Comments on a passage of a markdown file (or replies to a comment with --reply-to).
@@ -1473,13 +1479,16 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
             with,
             team,
             no_team,
+            linked,
+            no_linked,
             stop,
         } => {
             let team = (team || no_team).then_some(team);
+            let linked = (linked || no_linked).then_some(linked);
             let file = FileCommentsParams { workspace, path };
             let result: DesignShareState = if stop {
                 client.call(ClientCall::FilesShareStop(file)).await?
-            } else if with.is_some() || team.is_some() {
+            } else if with.is_some() || team.is_some() || linked.is_some() {
                 let share = client
                     .call::<DesignShareState>(ClientCall::FilesShareState(file.clone()))
                     .await?
@@ -1495,6 +1504,7 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
                     path: file.path,
                     reviewers,
                     team,
+                    linked,
                 };
                 if live {
                     client.call(ClientCall::FilesShareUpdate(params)).await?

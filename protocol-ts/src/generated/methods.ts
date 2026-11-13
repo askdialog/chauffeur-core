@@ -148,6 +148,7 @@ import type { FileContent } from "./FileContent";
 import type { FileReadParams } from "./FileReadParams";
 import type { FileShareStartParams } from "./FileShareStartParams";
 import type { FileWriteParams } from "./FileWriteParams";
+import type { FilesLinkedResult } from "./FilesLinkedResult";
 import type { FilesListResult } from "./FilesListResult";
 import type { FilesSearchParams } from "./FilesSearchParams";
 import type { FilesSearchResult } from "./FilesSearchResult";
@@ -543,6 +544,7 @@ export type ClientMethods = {
   "files.comment_resolve": [FileCommentResolveParams, DesignComment];
   "files.comments_send": [FileCommentsParams, CommentsSendResult];
   "files.share_state": [FileCommentsParams, DesignShareState];
+  "files.linked": [FileCommentsParams, FilesLinkedResult];
   "files.share_start": [FileShareStartParams, DesignShareState];
   "files.share_update": [FileShareStartParams, DesignShareState];
   "files.share_stop": [FileCommentsParams, DesignShareState];
@@ -920,6 +922,7 @@ export const METHOD_NAMES = [
   "files.comment_resolve",
   "files.comments_send",
   "files.share_state",
+  "files.linked",
   "files.share_start",
   "files.share_update",
   "files.share_stop",

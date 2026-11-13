@@ -604,6 +604,12 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::FilesShareState(params) => {
             to_value(daemon.shares.file_state(&params.workspace, &params.path)?)
         }
+        ClientCall::FilesLinked(params) => to_value(
+            daemon
+                .shares
+                .linked(&params.workspace, &params.path)
+                .await?,
+        ),
         ClientCall::FilesWrite(params) => {
             let (row, roots) = file_roots(daemon, &params.workspace)?;
             let content = files::write(

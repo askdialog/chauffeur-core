@@ -11781,6 +11781,7 @@ async fn a_shared_markdown_file_reaches_the_service_alone_and_a_reviewer_s_comme
             path: path.into(),
             reviewers: vec!["bob@example.com".into()],
             team: None,
+            linked: None,
         })
         .await
         .unwrap();
@@ -11945,6 +11946,7 @@ async fn a_shared_markdown_file_reaches_the_service_alone_and_a_reviewer_s_comme
             path: other.into(),
             reviewers: vec!["bob@example.com".into()],
             team: None,
+            linked: None,
         })
         .await
         .unwrap();
@@ -11990,6 +11992,7 @@ async fn a_shared_markdown_file_reaches_the_service_alone_and_a_reviewer_s_comme
                 path: path.clone(),
                 reviewers: vec!["bob@example.com".into()],
                 team: None,
+                linked: None,
             })
             .await
             .unwrap();
@@ -12058,6 +12061,275 @@ async fn a_shared_markdown_file_reaches_the_service_alone_and_a_reviewer_s_comme
             .file_state(&ws.id, ".chauffeur/artifacts/fake.pdf")
             .is_err()
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shared_markdown_file_carries_the_files_it_links_to_followed_live() {
+    use chauffeur_design_share::{Auth, Config, Service, data_paths, store::Store};
+    use chauffeur_protocol::client::{FileShareStartParams, ShareConnection};
+    use chauffeur_protocol::design_share::{FromReviewer, ShareSnapshot};
+    use chauffeur_protocol::events::{Event, WorkspaceEvent};
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let service_dir = tempfile::tempdir().unwrap();
+    let (db, files) = data_paths(service_dir.path());
+    let service = Service::new(
+        Store::open(&db).unwrap(),
+        files,
+        Auth::InsecureDev,
+        Config {
+            public_url: "https://design.example".into(),
+            workspace_url: Some("https://share.example".into()),
+            cookie_domain: None,
+            member_domain: Some("example.com".into()),
+            site_url: None,
+            session_key: None,
+            web_client_id: None,
+            web_dir: None,
+            secure_cookies: false,
+            mailer: chauffeur_design_share::mail::Mailer::Off,
+        },
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let router = service.router();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+    let f = fixture_with(
+        58610,
+        &format!(
+            "[design_share]\nurl = \"{base}/\"\n\n[office]\ndev_email = \"Alice@example.com\"\n"
+        ),
+    );
+    let d = &f.daemon;
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams::default())
+        .await
+        .unwrap()
+        .workspace;
+    let notes = PathBuf::from(&ws.path).join(".chauffeur");
+    std::fs::create_dir_all(notes.join("s/detail")).unwrap();
+    std::fs::write(
+        notes.join("s/RECAP.md"),
+        "# Recap\n\nSee `MODELISATION.md` and [the audit](detail/AUDIT.md).\n",
+    )
+    .unwrap();
+    std::fs::write(
+        notes.join("s/MODELISATION.md"),
+        "# Model\n\nBack to `RECAP.md`.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        notes.join("s/detail/AUDIT.md"),
+        "# Audit\n\nThe [deep dive](DEEP.md).\n",
+    )
+    .unwrap();
+    std::fs::write(notes.join("s/detail/DEEP.md"), "# Deep\n").unwrap();
+    std::fs::write(notes.join("s/LATER.md"), "# Later\n").unwrap();
+    let path = ".chauffeur/s/RECAP.md";
+
+    // What the dialog lists: the linked files, recursively, nearest first.
+    let listed = d.shares.linked(&ws.id, path).await.unwrap();
+    assert_eq!(
+        listed.files,
+        [
+            ".chauffeur/s/MODELISATION.md",
+            ".chauffeur/s/detail/AUDIT.md",
+            ".chauffeur/s/detail/DEEP.md"
+        ]
+    );
+    assert!(!listed.truncated);
+
+    let mut events = d.events.subscribe();
+    let shared = d
+        .shares
+        .start_file(&FileShareStartParams {
+            workspace: ws.id.clone(),
+            path: path.into(),
+            reviewers: vec!["bob@example.com".into()],
+            team: None,
+            linked: Some(true),
+        })
+        .await
+        .unwrap();
+    assert!(shared.linked);
+    let share = shared.share.clone().expect("a share");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(envelope) = events.recv().await
+                && let Event::Workspace {
+                    event: WorkspaceEvent::FileShare { state },
+                    ..
+                } = std::sync::Arc::unwrap_or_clone(envelope).event
+                && state.connection == ShareConnection::Online
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the link online");
+
+    let http = reqwest::Client::new();
+    let bob = http
+        .post(format!("{base}/v1/session"))
+        .json(&serde_json::json!({"id_token": "dev:bob@example.com"}))
+        .send()
+        .await
+        .unwrap();
+    let cookie = bob.headers()["set-cookie"]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let snapshot_url = format!("{base}/v1/shares/{}/snapshot", share.id);
+    let files_until = |wanted: Vec<&'static str>| {
+        let http = http.clone();
+        let cookie = cookie.clone();
+        let snapshot_url = snapshot_url.clone();
+        async move {
+            tokio::time::timeout(Duration::from_secs(15), async {
+                loop {
+                    let snapshot: ShareSnapshot = http
+                        .get(&snapshot_url)
+                        .header("cookie", &cookie)
+                        .send()
+                        .await
+                        .unwrap()
+                        .json()
+                        .await
+                        .unwrap();
+                    let mut files: Vec<String> =
+                        snapshot.files.iter().map(|f| f.path.clone()).collect();
+                    files.sort();
+                    if files == wanted {
+                        break snapshot;
+                    }
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("the share's files to become {wanted:?}"))
+        }
+    };
+    let snapshot = files_until(vec![
+        "RECAP.md",
+        "_chauffeur/s/MODELISATION.md",
+        "_chauffeur/s/detail/AUDIT.md",
+        "_chauffeur/s/detail/DEEP.md",
+        "links.json",
+    ])
+    .await;
+    assert_eq!(snapshot.document.as_deref(), Some("RECAP.md"));
+    let read = |name: &str| {
+        let request = http
+            .get(format!("{base}/v1/shares/{}/files/{name}", share.id))
+            .header("cookie", &cookie);
+        async move { request.send().await.unwrap().text().await.unwrap() }
+    };
+    let manifest: serde_json::Value = serde_json::from_str(&read("links.json").await).unwrap();
+    assert_eq!(
+        manifest["RECAP.md"]["MODELISATION.md"],
+        "_chauffeur/s/MODELISATION.md"
+    );
+    assert_eq!(
+        manifest["RECAP.md"]["detail/AUDIT.md"],
+        "_chauffeur/s/detail/AUDIT.md"
+    );
+    assert_eq!(
+        manifest["_chauffeur/s/MODELISATION.md"]["RECAP.md"],
+        "RECAP.md"
+    );
+    assert!(read("_chauffeur/s/detail/DEEP.md").await.contains("# Deep"));
+
+    // Bob comments on a linked file: kept on that file's own path.
+    let mut request = format!(
+        "{}/v1/shares/{}/reviewer",
+        base.replace("http://", "ws://"),
+        share.id
+    )
+    .into_client_request()
+    .unwrap();
+    request
+        .headers_mut()
+        .insert("cookie", cookie.parse().unwrap());
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    socket
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            serde_json::to_string(&FromReviewer::Add {
+                screen: "_chauffeur/s/MODELISATION.md".into(),
+                pin: None,
+                quote: Some("Back".into()),
+                text: "Why back?".into(),
+                reply_to: None,
+                mentions: Vec::new(),
+            })
+            .unwrap()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Ok(envelope) = events.recv().await
+                && let Event::Workspace {
+                    event: WorkspaceEvent::FileShare { state },
+                    ..
+                } = std::sync::Arc::unwrap_or_clone(envelope).event
+                && state.last_reviewer_comment.is_some()
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("the comment told");
+    let on_linked = chauffeurd::file_comments::list(d, &ws.id, ".chauffeur/s/MODELISATION.md")
+        .await
+        .unwrap();
+    assert_eq!(on_linked.comments.len(), 1);
+    assert_eq!(on_linked.comments[0].text, "Why back?");
+    assert!(
+        chauffeurd::file_comments::list(d, &ws.id, path)
+            .await
+            .unwrap()
+            .comments
+            .is_empty()
+    );
+
+    // Followed live: a file linked later joins, one no longer linked leaves.
+    std::fs::write(
+        notes.join("s/RECAP.md"),
+        "# Recap\n\nSee `MODELISATION.md` and `LATER.md`.\n",
+    )
+    .unwrap();
+    files_until(vec![
+        "RECAP.md",
+        "_chauffeur/s/LATER.md",
+        "_chauffeur/s/MODELISATION.md",
+        "links.json",
+    ])
+    .await;
+
+    // Turned off: the file alone again.
+    let updated = d
+        .shares
+        .update_file(&FileShareStartParams {
+            workspace: ws.id.clone(),
+            path: path.into(),
+            reviewers: vec!["bob@example.com".into()],
+            team: None,
+            linked: Some(false),
+        })
+        .await
+        .unwrap();
+    assert!(!updated.linked);
+    files_until(vec!["RECAP.md"]).await;
+    d.shares.stop_file(&ws.id, path).await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -19523,6 +19795,7 @@ async fn archived_designs_keep_links_while_workspace_and_file_shares_stop() {
             url: "https://example.test/s/design".into(),
             reviewers: vec![],
             team: false,
+            linked: false,
             created_at: chauffeurd::store::now(),
             stopped_at: None,
         })
@@ -19548,6 +19821,7 @@ async fn archived_designs_keep_links_while_workspace_and_file_shares_stop() {
             url: "https://example.test/s/file".into(),
             reviewers: vec![],
             team: false,
+            linked: false,
             created_at: chauffeurd::store::now(),
             stopped_at: None,
         })

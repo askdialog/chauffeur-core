@@ -59,6 +59,7 @@ pub mod idle;
 pub mod idle_reminders;
 pub mod jev;
 pub mod linear;
+pub mod linked_files;
 pub mod login;
 pub mod mentions;
 pub mod mobile;

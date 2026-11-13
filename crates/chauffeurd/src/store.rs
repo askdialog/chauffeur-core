@@ -359,6 +359,8 @@ pub struct DesignShareRow {
     pub reviewers: Vec<String>,
     /// Open to every member of the team too.
     pub team: bool,
+    /// A markdown file's share carrying the files it links to.
+    pub linked: bool,
     pub created_at: String,
     pub stopped_at: Option<String>,
 }
@@ -625,6 +627,15 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
     {
         // A share opened to the team, beside its named reviewers.
         conn.execute_batch("ALTER TABLE design_shares ADD COLUMN team INTEGER NOT NULL DEFAULT 0")?;
+    }
+    if !conn
+        .prepare("SELECT 1 FROM pragma_table_info('design_shares') WHERE name='linked'")?
+        .exists([])?
+    {
+        // A markdown file's share carrying the files it links to (docs/adr/share-linked-files.md).
+        conn.execute_batch(
+            "ALTER TABLE design_shares ADD COLUMN linked INTEGER NOT NULL DEFAULT 0",
+        )?;
     }
 
     let has_fast = conn
@@ -2348,7 +2359,7 @@ impl Store {
     pub fn design_share(&self, chat_id: &str) -> Result<Option<DesignShareRow>> {
         self.with(|c| {
             c.query_row(
-                "SELECT chat_id, share_id, url, reviewers, created_at, stopped_at, team FROM design_shares WHERE chat_id = ?1",
+                "SELECT chat_id, share_id, url, reviewers, created_at, stopped_at, team, linked FROM design_shares WHERE chat_id = ?1",
                 params![chat_id],
                 Self::design_share_from_row,
             )
@@ -2360,7 +2371,7 @@ impl Store {
     pub fn design_shares_live(&self) -> Result<Vec<DesignShareRow>> {
         self.with(|c| {
             let mut stmt = c.prepare(
-                "SELECT chat_id, share_id, url, reviewers, created_at, stopped_at, team FROM design_shares WHERE stopped_at IS NULL",
+                "SELECT chat_id, share_id, url, reviewers, created_at, stopped_at, team, linked FROM design_shares WHERE stopped_at IS NULL",
             )?;
             stmt.query_map([], Self::design_share_from_row)?.collect()
         })
@@ -2376,6 +2387,7 @@ impl Store {
             created_at: row.get(4)?,
             stopped_at: row.get(5)?,
             team: row.get(6)?,
+            linked: row.get(7)?,
         })
     }
 
@@ -2383,8 +2395,8 @@ impl Store {
     pub fn design_share_put(&self, row: &DesignShareRow) -> Result<()> {
         self.with(|c| {
             c.execute(
-                "INSERT INTO design_shares (chat_id, share_id, url, reviewers, created_at, stopped_at, team) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) \
-                 ON CONFLICT (chat_id) DO UPDATE SET share_id = excluded.share_id, url = excluded.url, reviewers = excluded.reviewers, created_at = excluded.created_at, stopped_at = excluded.stopped_at, team = excluded.team",
+                "INSERT INTO design_shares (chat_id, share_id, url, reviewers, created_at, stopped_at, team, linked) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8) \
+                 ON CONFLICT (chat_id) DO UPDATE SET share_id = excluded.share_id, url = excluded.url, reviewers = excluded.reviewers, created_at = excluded.created_at, stopped_at = excluded.stopped_at, team = excluded.team, linked = excluded.linked",
                 params![
                     row.chat_id,
                     row.share_id,
@@ -2392,7 +2404,8 @@ impl Store {
                     serde_json::to_string(&row.reviewers).expect("reviewers serialize"),
                     row.created_at,
                     row.stopped_at,
-                    row.team
+                    row.team,
+                    row.linked
                 ],
             )?;
             Ok(())

@@ -30,4 +30,8 @@ past_reviewers: Array<string>,
 /**
  * Bumped each time a reviewer's comment reached `comments.json`: the canvas reads again.
  */
-comments_rev: number, last_reviewer_comment?: ReviewerComment, };
+comments_rev: number, last_reviewer_comment?: ReviewerComment, 
+/**
+ * A markdown file's live share carries the files it links to.
+ */
+linked?: boolean, };

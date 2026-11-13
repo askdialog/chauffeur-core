@@ -928,6 +928,12 @@ methods! {
         #[access(Any)]
         #[relay(Local)]
         FilesShareState(FileCommentsParams) -> DesignShareState,
+        /// The markdown files a markdown file links to, recursively, as its share would carry
+        /// them (docs/adr/share-linked-files.md).
+        #[serde(rename = "files.linked")]
+        #[access(Any)]
+        #[relay(Local)]
+        FilesLinked(FileCommentsParams) -> FilesLinkedResult,
         /// Shares a markdown file alone with named reviewers: a new link each time.
         #[serde(rename = "files.share_start")]
         #[access(Any)]
@@ -2346,6 +2352,21 @@ pub struct FileShareStartParams {
     /// what the share had when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<bool>,
+    /// Carries the markdown files it links to, recursively (docs/adr/share-linked-files.md). A
+    /// new share does not unless asked; an update keeps what the share had when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub linked: Option<bool>,
+}
+
+/// `files.linked`: the markdown files a file links to, nearest first, named as `files.read`
+/// names them.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[ts(export)]
+pub struct FilesLinkedResult {
+    pub files: Vec<String>,
+    /// More were linked than a share carries.
+    pub truncated: bool,
 }
 
 /// `mentions.list`, `mentions.seen`.
@@ -2540,6 +2561,10 @@ pub struct DesignShareState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub last_reviewer_comment: Option<ReviewerComment>,
+    /// A markdown file's live share carries the files it links to.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub linked: bool,
 }
 
 /// A markdown file of a workspace (story 57), named as `files.read` names it.

@@ -12,4 +12,9 @@ reviewers: Array<string>,
  * Open to every member of the team too. A new share is not unless asked; an update keeps
  * what the share had when absent.
  */
-team?: boolean, };
+team?: boolean, 
+/**
+ * Carries the markdown files it links to, recursively (docs/adr/share-linked-files.md). A
+ * new share does not unless asked; an update keeps what the share had when absent.
+ */
+linked?: boolean, };
