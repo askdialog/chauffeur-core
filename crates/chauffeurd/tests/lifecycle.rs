@@ -13750,6 +13750,8 @@ elif a[:2]==['container','stop']:
 else: sys.exit(94)
 "#).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // Its first line, run without arguments, asserts before it writes anything.
+    settle(&script);
     // DOCKER_HOST keeps the container check on this fixture engine, as it does the docker CLI.
     f.daemon
         .shell_env
@@ -15612,6 +15614,41 @@ fn end_pid(pid: i32) {
         libc::kill(pid, libc::SIGKILL);
         libc::waitpid(pid, std::ptr::null_mut(), 0);
     }
+    // An orphan is not ours to wait for, so the `waitpid` above returns at once for it: until its
+    // leader has reaped it, it still sits in its folder and a scan of the workspace finds it.
+    // A zombie still answers signal 0.
+    for _ in 0..500 {
+        // SAFETY: signal 0 only checks that the process exists.
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("process {pid} did not end");
+}
+
+/// Runs a script the test has just written until it starts, whatever it then does. On Linux a
+/// file cannot be run (ETXTBSY, "Text file busy") while a process forked by another test still
+/// holds a write descriptor to it; once one run starts, none fails any more. Only for a script
+/// that does nothing when run without arguments.
+fn settle(script: &Path) {
+    for _ in 0..500 {
+        let run = Command::new(script)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        match run {
+            Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            result => {
+                result.unwrap();
+                return;
+            }
+        }
+    }
+    panic!("{} stays busy", script.display());
 }
 
 #[tokio::test(flavor = "multi_thread")]
