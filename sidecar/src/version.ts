@@ -1,5 +1,5 @@
 /** Reported by `sidecar.ping`; keep in sync with package.json. */
-export const SIDECAR_VERSION = "0.37.0";
+export const SIDECAR_VERSION = "0.38.0";
 
 /** The pinned Claude Agent SDK (package.json pins it exactly; a test checks both agree). */
 export const CLAUDE_AGENT_SDK_VERSION = "0.3.322";
