@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   CircleHelp,
+  Download,
   Gauge,
   FileText,
   FolderPlus,
@@ -64,7 +65,10 @@ import { FileIcon } from "./FileIcon";
 import { formatBytes } from "@/lib/images";
 import { Markdown } from "../Markdown";
 import { CopyMessageButton } from "../CopyMessageButton";
-import { Badge, Button, cx, Spinner } from "../ui";
+import { ContextMenu } from "../ContextMenu";
+import { saveFiles } from "../saveFiles";
+import { canDownload, type Download as DownloadFile } from "@/lib/downloads";
+import { Badge, Button, cx, IconButton, Spinner } from "../ui";
 import { AgentIcon } from "../AgentIcon";
 
 export type Respond = (requestId: string, response: RequestResponse) => Promise<void>;
@@ -377,31 +381,70 @@ function AttachedImages({ attachments }: { attachments: Attachment[] }) {
   const url = useAttachmentUrl();
   /** The open image's place among the images, which the Lightbox steps through. */
   const [open, setOpen] = useState<number | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; download: DownloadFile } | null>(null);
   const images = attachments.filter((attachment) => IMAGE_TYPES.has(attachment.media_type));
+  /** What can be saved: the images the daemon serves. */
+  const downloads = images.flatMap((image) => {
+    const src = url(image);
+    return canDownload && src ? [{ url: src, name: image.name }] : [];
+  });
   return (
-    <div className="mb-1.5 flex flex-wrap gap-1.5">
+    <div className="mb-1.5 flex flex-wrap items-start gap-1.5">
       {attachments.map((attachment) => {
         if (!IMAGE_TYPES.has(attachment.media_type)) return <AttachedFile key={attachment.file} attachment={attachment} />;
         const src = url(attachment);
         return (
-          <button
-            key={attachment.file}
-            type="button"
-            title={attachment.name}
-            onClick={() => setOpen(images.indexOf(attachment))}
-            className="h-20 max-w-[220px] overflow-hidden rounded-md border border-line bg-bg hover:border-line-strong"
-          >
-            {src ? (
-              <img src={src} alt={attachment.name} className="h-full w-auto object-cover" draggable={false} />
-            ) : (
-              <span className="px-2 text-[11px] text-faint">{attachment.name}</span>
+          <div key={attachment.file} className="group relative">
+            <button
+              type="button"
+              title={attachment.name}
+              onClick={() => setOpen(images.indexOf(attachment))}
+              onContextMenu={(event) => {
+                if (!src || !canDownload) return;
+                event.preventDefault();
+                setMenu({ x: event.clientX, y: event.clientY, download: { url: src, name: attachment.name } });
+              }}
+              className="h-20 max-w-[220px] overflow-hidden rounded-md border border-line bg-bg hover:border-line-strong"
+            >
+              {src ? (
+                <img src={src} alt={attachment.name} className="h-full w-auto object-cover" draggable={false} />
+              ) : (
+                <span className="px-2 text-[11px] text-faint">{attachment.name}</span>
+              )}
+            </button>
+            {src && canDownload && (
+              <IconButton
+                title={`Download ${attachment.name}`}
+                onClick={() => void saveFiles([{ url: src, name: attachment.name }])}
+                className="absolute right-1 bottom-1 bg-black/70 text-white opacity-0 hover:bg-black/80 hover:text-white focus-visible:opacity-100 group-hover:opacity-100"
+              >
+                <Download size={12} />
+              </IconButton>
             )}
-          </button>
+          </div>
         );
       })}
+      {downloads.length > 1 && (
+        <button
+          type="button"
+          title={`Download the ${downloads.length} images`}
+          onClick={() => void saveFiles(downloads)}
+          className="flex h-6 items-center gap-1 self-end rounded-md px-1.5 text-[11.5px] text-muted hover:bg-hover hover:text-fg"
+        >
+          <Download size={12} /> Download all
+        </button>
+      )}
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={[{ label: "Download", icon: <Download size={13} />, shortcut: "d", onSelect: () => void saveFiles([menu.download]) }]}
+          onClose={() => setMenu(null)}
+        />
+      )}
       {open != null && (
         <Lightbox
-          images={images.map((image) => ({ src: url(image), name: image.name }))}
+          images={images.map((image) => ({ src: url(image), name: image.name, downloadable: true }))}
           start={open}
           onClose={() => setOpen(null)}
         />

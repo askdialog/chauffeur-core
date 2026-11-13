@@ -8,6 +8,7 @@
 
 mod bundle;
 mod daemon;
+mod downloads;
 mod drops;
 mod menu;
 mod screen_snapshot;
@@ -240,6 +241,7 @@ fn main() {
             slack::take_slack_links,
             slack::focus_slack_desktop,
             drops::read_dropped_file,
+            downloads::save_downloads,
             screen_snapshot::screen_snapshot,
             screen_snapshot::screen_snapshots_release,
             #[cfg(target_os = "linux")]

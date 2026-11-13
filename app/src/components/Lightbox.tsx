@@ -15,10 +15,12 @@
 // - Its corner sits on whole device pixels: at a new sub-pixel offset each frame, a pan would
 //   draw its edges anew each time.
 
-import { ChevronLeft, ChevronRight, Minus, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, Minus, Plus } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { between, FITTED, fitSize, followImage, type GalleryImage, galleryStep, pan, placement, type Size, wheelFactor, type Zoom, zoomAt } from "@/lib/zoom";
+import { canDownload } from "@/lib/downloads";
+import { saveFiles } from "./saveFiles";
 import { cx } from "./ui";
 
 const STEP = 1.25;
@@ -36,7 +38,8 @@ const KEYS: Record<string, KeyAction> = {
 /** How long a discrete step animates. */
 const STEP_MS = 120;
 
-export type LightboxImage = GalleryImage;
+/** `downloadable`: its `src` is a daemon attachment, which the app can save. */
+export type LightboxImage = GalleryImage & { downloadable?: boolean };
 
 /**
  * Shows `images[start]`; the others are a step away with the arrows. The set may change while it
@@ -48,6 +51,8 @@ export function Lightbox({ images, start = 0, onClose }: { images: LightboxImage
   const index = followed ?? 0;
   const { src, name } = images[index] ?? at.image;
   const count = images.length;
+  const downloads = images.filter((image) => image.downloadable && image.src).map((image) => ({ url: image.src!, name: image.name }));
+  const canSave = canDownload && !!images[index]?.downloadable && !!src;
   /** The zoom shown now: during an animated step, a point on the way to `target`. */
   const [zoom, setZoom] = useState<Zoom>(FITTED);
   const shown = useRef<Zoom>(FITTED);
@@ -288,6 +293,21 @@ export function Lightbox({ images, start = 0, onClose }: { images: LightboxImage
           <ZoomButton title="Zoom in (+)" onClick={() => step((z) => zoomAt(z, STEP))}>
             <Plus size={13} />
           </ZoomButton>
+          {canSave && (
+            <ZoomButton title="Download this image" onClick={() => void saveFiles([{ url: src!, name }])}>
+              <Download size={13} />
+            </ZoomButton>
+          )}
+          {canSave && count > 1 && downloads.length === count && (
+            <button
+              type="button"
+              title={`Download the ${count} images`}
+              onClick={() => void saveFiles(downloads)}
+              className="rounded px-1.5 py-0.5 hover:bg-hover hover:text-fg"
+            >
+              Download all
+            </button>
+          )}
         </div>
       </div>
     </div>,

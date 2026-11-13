@@ -150,3 +150,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Independent extension releases share the Core download repository](independent-extension-releases-on-core.md) | 2026-11-10 | accepted |
 | [Manage outgoing shares and keep archived designs shared](manage-outgoing-shares.md) | 2026-11-10 | accepted |
 | [Separate Core and Dialog release artifacts](separate-core-and-dialog-releases.md) | 2026-11-11 | accepted |
+| [A chat's images are saved to Downloads by the desktop shell](attachments-saved-to-downloads.md) | 2026-11-13 | accepted |
