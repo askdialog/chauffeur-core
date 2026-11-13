@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { layoutCanvas, noScreens, pageSections, percent, presentOrder, ZOOM_STEPS } from "@/lib/canvas";
 import { counts as commentCounts, type Draft, threadsOf } from "@/lib/comments";
 import { mentions as mentionsMe, threadParam, unreadThreads } from "@/lib/mentions";
+import { errorMessage } from "@/lib/rpc";
 import { flashFor, initials, liveLabel, noAccessText, refusalText, sharedWithYou, shareIdOf, signInTokenOf, socketUrl } from "@/lib/sharePage";
 import { parseEmails } from "@/lib/share";
 import { FullScreenSection, PresentScreens } from "@/components/design/CanvasOverlays";
@@ -49,7 +50,6 @@ export type GateWords = { brand: string; kind: ShareKind };
 
 const DESIGN_WORDS: GateWords = { brand: "Design", kind: "design" };
 
-const failure = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const statusOf = (error: unknown) => (error instanceof ServiceError ? error.status : 0);
 
 /**
@@ -82,7 +82,7 @@ export function ShareGate<T>({
           owner = (await api.about(words.kind, id)).owner;
         } catch (e) {
           if ([404, 410].includes(statusOf(e))) {
-            setPhase({ kind: "refused", text: refusalText(statusOf(e), failure(e)) });
+            setPhase({ kind: "refused", text: refusalText(statusOf(e), errorMessage(e)) });
             return;
           }
         }
@@ -93,7 +93,7 @@ export function ShareGate<T>({
       if (token) {
         // The fragment goes at once: a reload or a copied address never carries the token.
         history.replaceState(null, "", location.pathname + location.search);
-        await api.sessionFromLink(token).catch((e: unknown) => (error = failure(e)));
+        await api.sessionFromLink(token).catch((e: unknown) => (error = errorMessage(e)));
       }
       let me: CommentAuthor;
       try {
@@ -101,7 +101,7 @@ export function ShareGate<T>({
       } catch (e) {
         if (statusOf(e) === 401) await signIn(error);
         else if (statusOf(e) === 0) setPhase({ kind: "offline" });
-        else setPhase({ kind: "refused", text: refusalText(statusOf(e), failure(e)) });
+        else setPhase({ kind: "refused", text: refusalText(statusOf(e), errorMessage(e)) });
         return;
       }
       try {
@@ -111,7 +111,7 @@ export function ShareGate<T>({
         if (status === 401) await signIn(null);
         else if (status === 403) setPhase({ kind: "no-access", email: me.email });
         else if (status === 0) setPhase({ kind: "offline" });
-        else setPhase({ kind: "refused", text: refusalText(status, failure(e)) });
+        else setPhase({ kind: "refused", text: refusalText(status, errorMessage(e)) });
       }
     },
     [id, load, words.kind],
@@ -125,7 +125,7 @@ export function ShareGate<T>({
         await api.session(token);
         await open();
       } catch (error) {
-        setPhase((p) => (p.kind === "sign-in" ? { ...p, error: failure(error) } : p));
+        setPhase((p) => (p.kind === "sign-in" ? { ...p, error: errorMessage(error) } : p));
       }
     },
     [open],
@@ -259,7 +259,7 @@ function SignIn({
   const webClientId = config?.web_client_id ?? null;
   useEffect(() => {
     if (!browserContinue || new URLSearchParams(location.search).get("native") === "1" || !webClientId || !button.current) return;
-    renderSignIn(button.current, webClientId, SIGN_IN_WIDTH, onToken).catch((e: unknown) => setLoadError(failure(e)));
+    renderSignIn(button.current, webClientId, SIGN_IN_WIDTH, onToken).catch((e: unknown) => setLoadError(errorMessage(e)));
   }, [webClientId, onToken, link.step, browserContinue]);
 
   const askLink = async () => {
@@ -269,7 +269,7 @@ function SignIn({
       const { message } = await api.askSignInLink(kind, id, email.trim());
       setLink({ step: "sent", message });
     } catch (e) {
-      setLinkError(failure(e));
+      setLinkError(errorMessage(e));
       setLink({ step: "asking" });
     }
   };
@@ -843,7 +843,7 @@ function OpenShare({
       if (status.notice) setToast(status.notice);
       return true;
     } catch (error) {
-      setToast(`Could not invite ${newcomers.join(", ")}: ${error instanceof Error ? error.message : String(error)}`);
+      setToast(`Could not invite ${newcomers.join(", ")}: ${errorMessage(error)}`);
       return false;
     }
   };
@@ -1062,7 +1062,7 @@ function OpenShare({
                       // Saved, but some invitations were held back: the owner hears why.
                       if (status.notice) setToast(status.notice);
                     })
-                    .catch((error: unknown) => setToast(`Could not change the reviewers: ${error instanceof Error ? error.message : String(error)}`))
+                    .catch((error: unknown) => setToast(`Could not change the reviewers: ${errorMessage(error)}`))
                 }
                 onClose={() => setReviewersOpen(false)}
               />

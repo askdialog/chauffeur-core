@@ -13,7 +13,7 @@
 
 import { useSyncExternalStore, type ComponentType } from "react";
 import type { EventEnvelope, ExtensionId, ExtensionUi, JsonValue, WorkspaceInfo } from "@chauffeur/protocol";
-import type { Lease, LeaseState } from "@/lib/rpc";
+import { errorMessage, type Lease, type LeaseState } from "@/lib/rpc";
 
 /** What an extension's UI may use of Core besides the shared modules. */
 export type ExtensionHost = {
@@ -175,7 +175,7 @@ async function load(id: ExtensionId, ui: ExtensionUi, slot: Slot): Promise<Loade
   } catch (error) {
     stylesheet?.remove();
     script?.remove();
-    slot.failed = { revision: ui.revision, error: error instanceof Error ? error.message : String(error) };
+    slot.failed = { revision: ui.revision, error: errorMessage(error) };
     changed();
     throw error;
   }
@@ -287,7 +287,7 @@ export function acceptRegistration(id: ExtensionId, setup: ExtensionSetup) {
   try {
     entry.contribution = setup(entry.host);
   } catch (error) {
-    entry.error = error instanceof Error ? error.message : String(error);
+    entry.error = errorMessage(error);
   }
 }
 

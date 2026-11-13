@@ -11,6 +11,7 @@ import { AtSign, FileText, LogOut, MessageSquarePlus, PenTool, Trash2, Users } f
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { groupActivity } from "@/lib/chat";
 import { commentParam, newMentions } from "@/lib/mentions";
+import { errorMessage } from "@/lib/rpc";
 import { placeComments } from "@/lib/shareComments";
 import { initials, liveLabel } from "@/lib/sharePage";
 import { canDeleteSuggestion, suggestionStateLabel } from "@/lib/workspaceShare";
@@ -154,7 +155,7 @@ function OpenWorkspace({
         setState((current) => loadFailed(current, shownChat));
         if (error instanceof ServiceError && error.status === 401) onSignedOut();
         else if (error instanceof ServiceError && [403, 410].includes(error.status)) onRefused(error.message);
-        else setNotice(`Could not read the chat: ${error instanceof Error ? error.message : String(error)}`);
+        else setNotice(`Could not read the chat: ${errorMessage(error)}`);
       },
     );
   }, [id, shownChat, needsRead, generation, onRefused, onSignedOut]);

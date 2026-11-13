@@ -3,6 +3,7 @@
 // a reporter is installed (the app's, `errorReports.ts`; never on the share pages).
 
 import { create } from "zustand";
+import { errorMessage } from "@/lib/rpc";
 
 /** Where an error toast's report stands: offered (`ask`), on its way, or done with a note. */
 export type ReportState = "ask" | "sending" | "done" | "failed";
@@ -77,7 +78,7 @@ async function send(id: number) {
     const note = await reporter.send(t.message, t.failure);
     patch(id, { report: "done", reportNote: note });
   } catch (error) {
-    patch(id, { report: "failed", reportNote: error instanceof Error ? error.message : String(error) });
+    patch(id, { report: "failed", reportNote: errorMessage(error) });
   }
 }
 

@@ -199,7 +199,7 @@ function TransferProgress({
     setRefused(null);
     call
       .then(onChanged)
-      .catch((error: unknown) => setRefused(error instanceof Error ? error.message : String(error)))
+      .catch((error: unknown) => setRefused(errorMessage(error)))
       .finally(() => setActing(false));
   };
   const act = (method: "cloud.transfer.start" | "cloud.transfer.cancel") => {
@@ -215,7 +215,7 @@ function TransferProgress({
         onChanged(cancelled);
         onDismiss(cancelled.id);
       })
-      .catch((error: unknown) => setRefused(error instanceof Error ? error.message : String(error)))
+      .catch((error: unknown) => setRefused(errorMessage(error)))
       .finally(() => setActing(false));
   };
   return (
