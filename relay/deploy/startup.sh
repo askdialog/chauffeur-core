@@ -144,6 +144,9 @@ WantedBy=multi-user.target
 SERVICE
 fi
 
+# Caddy's configuration is written aside and replaces the live one only once it validates: a run
+# that stops halfway leaves the sites served as they were.
+caddyfile="$artifact_tmp/Caddyfile"
 if $ip_mode; then
   # Serve ACME HTTP-01 without stopping the relay during renewals. Public IP
   # certificates require Certbot >=5.4 and Let's Encrypt's shortlived profile.
@@ -151,7 +154,7 @@ if $ip_mode; then
   python3 -m venv /opt/certbot
   /opt/certbot/bin/pip install --disable-pip-version-check certbot==5.4.0
   install -d -m 0755 /var/www/acme
-  cat > /etc/caddy/Caddyfile <<CADDY
+  cat > "$caddyfile" <<CADDY
 {
     default_sni $relay_domain
 }
@@ -165,10 +168,19 @@ if $ip_mode; then
     }
 }
 CADDY
-  systemctl restart caddy
-  /opt/certbot/bin/certbot certonly --non-interactive --agree-tos --register-unsafely-without-email \
-    --preferred-profile shortlived --webroot --webroot-path /var/www/acme \
-    --cert-name chauffeur-relay --ip-address "$relay_domain"
+  # Only the first certificate is asked for here, Caddy serving the challenge alone meanwhile;
+  # the timer below renews it. A VM that has one keeps its sites served while a deploy runs.
+  if [[ ! -s /etc/letsencrypt/live/chauffeur-relay/fullchain.pem ]]; then
+    install -m 0644 "$caddyfile" /etc/caddy/Caddyfile
+    systemctl restart caddy
+    # A renewal of an earlier run holds Certbot's lock: wait for it rather than fail on it.
+    while [[ $(systemctl show -p ActiveState --value chauffeur-relay-certificate.service 2>/dev/null) == activating ]]; do
+      sleep 5
+    done
+    /opt/certbot/bin/certbot certonly --non-interactive --agree-tos --register-unsafely-without-email \
+      --preferred-profile shortlived --webroot --webroot-path /var/www/acme \
+      --cert-name chauffeur-relay --ip-address "$relay_domain"
+  fi
   install -d -m 0750 -o root -g caddy /etc/caddy/certs
   cat > /usr/local/sbin/chauffeur-relay-certificate <<'HOOK'
 #!/bin/sh
@@ -179,7 +191,7 @@ install -m 0640 -o root -g caddy /etc/letsencrypt/live/chauffeur-relay/privkey.p
 HOOK
   chmod 0750 /usr/local/sbin/chauffeur-relay-certificate
   /usr/local/sbin/chauffeur-relay-certificate
-  cat >> /etc/caddy/Caddyfile <<CADDY
+  cat >> "$caddyfile" <<CADDY
 https://$relay_domain {
     tls /etc/caddy/certs/fullchain.pem /etc/caddy/certs/privkey.pem
     reverse_proxy 127.0.0.1:8080
@@ -210,7 +222,7 @@ TIMER
   systemctl daemon-reload
   systemctl enable --now chauffeur-relay-certificate.timer
 else
-  cat > /etc/caddy/Caddyfile <<CADDY
+  cat > "$caddyfile" <<CADDY
 $relay_domain {
     reverse_proxy 127.0.0.1:8080
 }
@@ -221,7 +233,7 @@ if [[ -n "$share_image" ]]; then
   # They answer 502 until the service runs.
   share_sites=$share_domain
   [[ "$share_workspace_domain" == "$share_domain" ]] || share_sites="$share_domain, $share_workspace_domain"
-  cat >> /etc/caddy/Caddyfile <<CADDY
+  cat >> "$caddyfile" <<CADDY
 $share_sites {
     handle /slack/* {
         reverse_proxy 127.0.0.1:8091
@@ -234,7 +246,7 @@ CADDY
   if [[ -n "$share_redirect_domain" ]]; then
     # The former host sends people to the new ones, path and query kept; the API and Slack's
     # callbacks stay served there, for older daemons and the Slack app's configured URLs.
-    cat >> /etc/caddy/Caddyfile <<CADDY
+    cat >> "$caddyfile" <<CADDY
 $share_redirect_domain {
     handle /slack/* {
         reverse_proxy 127.0.0.1:8091
@@ -256,8 +268,8 @@ CADDY
   fi
 fi
 # Caddy serves the relay again now: the phones' bridges need not wait for the service's image.
-chmod 0644 /etc/caddy/Caddyfile
-/usr/bin/caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+/usr/bin/caddy validate --config "$caddyfile" --adapter caddyfile
+install -m 0644 "$caddyfile" /etc/caddy/Caddyfile
 systemctl enable caddy
 systemctl restart caddy
 if [[ -n "$share_image" ]]; then
