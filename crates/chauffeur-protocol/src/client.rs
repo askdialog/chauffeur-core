@@ -1887,6 +1887,19 @@ pub struct WaitResult {
     /// Last assistant text of the workspace's first chat.
     pub last_text: Option<String>,
     pub timed_out: bool,
+    /// The questions, permission requests and MCP confirmations its chats wait on, oldest first
+    /// in each chat: what an orchestrator reads of a child that needs input.
+    #[serde(default)]
+    pub open_requests: Vec<OpenRequest>,
+}
+
+/// A request a chat waits on: a `question`, `permission_request` or `mcp_elicitation` event,
+/// answered with `chat.respond` on `chat_id` and its `request_id`.
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct OpenRequest {
+    pub chat_id: String,
+    pub request: ChatEvent,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]

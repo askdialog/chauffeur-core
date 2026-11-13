@@ -9,7 +9,8 @@ use std::collections::HashSet;
 
 use chauffeur_protocol::client::{
     ContextUsageResult, EnvReloadResult, GithubConnecting, GithubStatus, JevSettings,
-    OllamaInstalling, OllamaPull, OllamaRunning, OllamaStatus, ProcessInfo, SubagentMessagesResult,
+    OllamaInstalling, OllamaPull, OllamaRunning, OllamaStatus, OpenRequest, ProcessInfo,
+    SubagentMessagesResult,
 };
 use chauffeur_protocol::events::{
     ChatEvent, CompactionBy, ContextCategoryKind, Event, EventEnvelope, RegistryEvent, TaskKind,
@@ -768,6 +769,13 @@ fn raw_event(envelope: &EventEnvelope, chat_hint: &str) -> Option<String> {
         },
         Event::Office { .. } | Event::Extension { .. } => None,
     }
+}
+
+/// A request a chat waits on, with the `chauffeur respond` line that answers it.
+pub fn open_request(request: &OpenRequest) -> String {
+    chat_event(&request.request, &request.chat_id)
+        .map(sanitized)
+        .unwrap_or_default()
 }
 
 fn chat_event(event: &ChatEvent, chat_hint: &str) -> Option<String> {

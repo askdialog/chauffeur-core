@@ -2787,6 +2787,9 @@ fn wait_text(result: &WaitResult) -> String {
     if result.timed_out {
         out.push_str("\n(timed out: still working)");
     }
+    for request in &result.open_requests {
+        out.push_str(&format!("\n\n{}", render::open_request(request)));
+    }
     if let Some(text) = &result.last_text {
         out.push_str(&format!("\n\n{text}"));
     }

@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use chauffeur_protocol::client::{
     AddWorktreeParams, AddWorktreeResult, CreateChatParams, CreateWorkspaceParams,
-    CreateWorkspaceResult, ProcessInfo, ProcessesResult, PromoteLeftovers, RemoveWorktreeResult,
-    RepoLeftovers, SetTicketsResult, WaitResult, WorkspaceDesign,
+    CreateWorkspaceResult, OpenRequest, ProcessInfo, ProcessesResult, PromoteLeftovers,
+    RemoveWorktreeResult, RepoLeftovers, SetTicketsResult, WaitResult, WorkspaceDesign,
 };
 use chauffeur_protocol::events::{ProcessKind, RegistryEvent, WorkspaceEvent};
 use chauffeur_protocol::model::{
@@ -2960,10 +2960,12 @@ impl WorkspaceManager {
         let d = self.d();
         if let Some(chat) = d.store.chat(key)? {
             let (chat, timed_out) = d.chats.wait_settled(&chat.id, false, timeout).await?;
+            let chats = vec![chat];
             return Ok(WaitResult {
-                workspace: self.get(&chat.workspace_id)?,
-                last_text: d.chats.last_text(&chat.id)?,
-                chats: vec![chat],
+                workspace: self.get(&chats[0].workspace_id)?,
+                last_text: d.chats.last_text(&chats[0].id)?,
+                open_requests: open_requests_of(&d.store, &chats),
+                chats,
                 timed_out,
             });
         }
@@ -3001,11 +3003,28 @@ impl WorkspaceManager {
         };
         Ok(WaitResult {
             workspace: self.get(&row.id)?,
+            open_requests: open_requests_of(&d.store, &chats),
             chats,
             last_text,
             timed_out,
         })
     }
+}
+
+/// What the chats that need input wait on, chat by chat.
+fn open_requests_of(store: &crate::store::Store, chats: &[ChatInfo]) -> Vec<OpenRequest> {
+    chats
+        .iter()
+        .filter(|chat| chat.status == ChatStatus::NeedsInput)
+        .flat_map(|chat| {
+            crate::chats::open_request_events(store, &chat.id)
+                .into_iter()
+                .map(|request| OpenRequest {
+                    chat_id: chat.id.clone(),
+                    request,
+                })
+        })
+        .collect()
 }
 
 /// A group of the sidebar as it shows it, in its order: the top-level workspaces shown (not

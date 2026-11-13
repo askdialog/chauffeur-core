@@ -4552,39 +4552,52 @@ fn repos_for_agent(
     }
 }
 
-/// The requests of a chat's last turn no `request_resolved` event closed, oldest first.
+/// The ids of the requests of a chat's last turn no `request_resolved` event closed, oldest first.
 fn open_requests(store: &crate::store::Store, chat_id: &str) -> Vec<String> {
-    let read = || -> Result<Vec<String>> {
+    open_request_events(store, chat_id)
+        .into_iter()
+        .filter_map(|event| request_id(&event).map(str::to_string))
+        .collect()
+}
+
+fn request_id(event: &ChatEvent) -> Option<&str> {
+    match event {
+        ChatEvent::PermissionRequest { request_id, .. }
+        | ChatEvent::McpElicitation { request_id, .. }
+        | ChatEvent::Question { request_id, .. } => Some(request_id),
+        _ => None,
+    }
+}
+
+/// The requests of a chat's last turn no `request_resolved` event closed, oldest first.
+pub(crate) fn open_request_events(store: &crate::store::Store, chat_id: &str) -> Vec<ChatEvent> {
+    let read = || -> Result<Vec<ChatEvent>> {
         let turn_end = store
             .last_events_of_type(chat_id, "turn_ended", 1)?
             .first()
             .and_then(|envelope| envelope.seq)
             .unwrap_or(0);
-        let mut open: Vec<String> = Vec::new();
+        let mut open: Vec<(i64, ChatEvent)> = Vec::new();
         for kind in ["permission_request", "mcp_elicitation", "question"] {
             for envelope in store.events_of_type_after(chat_id, kind, turn_end)? {
-                if let Event::Chat {
-                    event:
-                        ChatEvent::PermissionRequest { request_id, .. }
-                        | ChatEvent::McpElicitation { request_id, .. }
-                        | ChatEvent::Question { request_id, .. },
-                    ..
-                } = envelope.event
+                if let Event::Chat { event, .. } = envelope.event
+                    && request_id(&event).is_some()
                 {
-                    open.push(request_id);
+                    open.push((envelope.seq.unwrap_or(0), event));
                 }
             }
         }
         for envelope in store.events_of_type_after(chat_id, "request_resolved", turn_end)? {
             if let Event::Chat {
-                event: ChatEvent::RequestResolved { request_id, .. },
+                event: ChatEvent::RequestResolved { request_id: id, .. },
                 ..
             } = envelope.event
             {
-                open.retain(|id| *id != request_id);
+                open.retain(|(_, event)| request_id(event) != Some(id.as_str()));
             }
         }
-        Ok(open)
+        open.sort_by_key(|(seq, _)| *seq);
+        Ok(open.into_iter().map(|(_, event)| event).collect())
     };
     read().unwrap_or_else(|error| {
         tracing::warn!("could not read chat {chat_id}'s open requests: {error:#}");

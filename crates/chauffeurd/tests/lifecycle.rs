@@ -3611,8 +3611,30 @@ async fn a_chat_works_while_its_agent_runs_a_turn_not_while_only_a_background_su
     d.chats.on_event(&chat.id, ChatEvent::TurnStarted);
     d.chats.on_event(&chat.id, request("r3"));
     assert_eq!(status(), ChatStatus::NeedsInput);
+    // `wait` returns on it, with what the chat waits on: an orchestrator reads its child's request.
+    let waited = d
+        .workspaces
+        .wait(&ws.id, Some(Duration::from_secs(2)))
+        .await
+        .unwrap();
+    assert!(!waited.timed_out);
+    let open: Vec<_> = waited
+        .open_requests
+        .iter()
+        .map(|open| (open.chat_id.as_str(), &open.request))
+        .collect();
+    assert_eq!(open, vec![(chat.id.as_str(), &request("r3"))]);
     d.chats.on_event(&chat.id, resolved("r3"));
     assert_eq!(status(), ChatStatus::Working);
+    let status_now = d
+        .workspaces
+        .wait(&ws.id, Some(Duration::ZERO))
+        .await
+        .unwrap();
+    assert!(
+        status_now.open_requests.is_empty(),
+        "an answered request is no longer open"
+    );
     d.chats.on_event(&chat.id, ended());
     assert_eq!(status(), ChatStatus::Idle);
 }

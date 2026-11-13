@@ -345,6 +345,7 @@ export type { OpenApp } from "./OpenApp";
 export type { OpenAppKind } from "./OpenAppKind";
 export type { OpenAppsResult } from "./OpenAppsResult";
 export type { OpenParams } from "./OpenParams";
+export type { OpenRequest } from "./OpenRequest";
 export type { OpenResult } from "./OpenResult";
 export type { OpenTerminalParams } from "./OpenTerminalParams";
 export type { OutgoingShare } from "./OutgoingShare";
