@@ -1,9 +1,11 @@
 import { type MutableRefObject, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
+import { revealChatRow } from "@/lib/chatRowScroll";
 import type { ChatRow } from "@/lib/chat";
 import {
   markTime,
   placeTicks,
+  pixelTicks,
   railShown,
   rowLayout,
   sameTicks,
@@ -12,9 +14,6 @@ import {
   type TimelineTick,
 } from "@/lib/timeline";
 import { cx } from "../ui";
-
-/** How long the scroll area must stay still for a jump to be over, in ms. */
-const SETTLE_MS = 140;
 
 /**
  * A thin rail along the right edge of the chat, one tick per user message placed where it sits in
@@ -28,7 +27,10 @@ export function TimelineRail({
   header,
   refresh,
   jumping,
+  navigation,
+  onNavigate,
   onArrive,
+  onUserScroll,
 }: {
   rows: readonly ChatRow[];
   list: RefObject<VirtuosoHandle | null>;
@@ -40,15 +42,21 @@ export function TimelineRail({
   refresh: MutableRefObject<() => void>;
   /** True while a jump scrolls: the list must not follow new output meanwhile. */
   jumping: MutableRefObject<boolean>;
+  /** Cancellation shared with Latest, find and other chat navigation. */
+  navigation: MutableRefObject<(() => void) | null>;
+  /** A new manual destination supersedes a pending global search result. */
+  onNavigate: () => void;
   /** The message a jump reached, to flash it. */
   onArrive: (key: string) => void;
+  /** The wheel over a tick is a user scroll, although the tick is outside the scroller. */
+  onUserScroll: (deltaY: number) => void;
 }) {
   const previousMarks = useRef<readonly TimelineMark[]>([]);
   const marks = useMemo(() => (previousMarks.current = timelineMarks(rows, previousMarks.current)), [rows]);
-  const latest = useRef({ marks, count: rows.length });
-  latest.current = { marks, count: rows.length };
   const [rail, setRail] = useState<{ shown: boolean; ticks: TimelineTick[] }>({ shown: false, ticks: [] });
   const [hovered, setHovered] = useState<string | null>(null);
+  const latest = useRef({ marks, count: rows.length, hovered });
+  latest.current = { marks, count: rows.length, hovered };
 
   // At most one measure per frame, however many tokens stream in or scroll events come.
   const frame = useRef(0);
@@ -57,7 +65,7 @@ export function TimelineRail({
     frame.current = requestAnimationFrame(() => {
       frame.current = 0;
       list.current?.getState(({ ranges }) => {
-        const { marks, count } = latest.current;
+        const { marks, count, hovered } = latest.current;
         const viewport = {
           scrollTop: scroller.scrollTop,
           clientHeight: scroller.clientHeight,
@@ -65,7 +73,7 @@ export function TimelineRail({
           header,
         };
         const shown = railShown(marks, viewport);
-        const ticks = shown ? placeTicks(marks, rowLayout(ranges, count), viewport) : [];
+        const ticks = shown ? pixelTicks(placeTicks(marks, rowLayout(ranges, count), viewport), scroller.clientHeight - 24, hovered) : [];
         setRail((current) => (current.shown === shown && sameTicks(current.ticks, ticks) ? current : { shown, ticks }));
       });
     });
@@ -94,57 +102,13 @@ export function TimelineRail({
   useEffect(measure, [marks, measure]);
 
   // A jump under way: cancelled by the next one or by unmounting.
-  const pending = useRef<(() => void) | null>(null);
-  useEffect(() => () => pending.current?.(), []);
+  const mine = useRef<(() => void) | null>(null);
+  useEffect(() => () => mine.current?.(), []);
 
   const jump = (tick: TimelineTick) => {
-    const handle = list.current;
-    if (!handle || !scroller) return;
-    pending.current?.();
-    jumping.current = true;
-    // The preview would hide the message it lands on.
+    onNavigate();
     setHovered(null);
-    handle.scrollToIndex({ index: tick.index, align: "start", behavior: "smooth" });
-    let interrupted = false;
-    let timer = setTimeout(() => finish(), SETTLE_MS);
-    const cap = setTimeout(() => finish(), 2500);
-    const onScroll = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => finish(), SETTLE_MS);
-    };
-    // The user scrolling meanwhile takes over: no correction, no flash.
-    const onUser = () => {
-      interrupted = true;
-    };
-    const stop = () => {
-      clearTimeout(timer);
-      clearTimeout(cap);
-      scroller.removeEventListener("scroll", onScroll);
-      scroller.removeEventListener("wheel", onUser);
-      scroller.removeEventListener("pointerdown", onUser);
-      pending.current = null;
-    };
-    const finish = () => {
-      stop();
-      if (!interrupted) {
-        // Rows measured on the way may have moved the target: put it at the top if it is not.
-        const row = scroller.querySelector(`[data-index="${tick.index}"]`);
-        const offset = row ? row.getBoundingClientRect().top - scroller.getBoundingClientRect().top : null;
-        const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
-        if (offset === null || (Math.abs(offset) > 2 && !atEnd)) handle.scrollToIndex({ index: tick.index, align: "start" });
-        onArrive(tick.key);
-      }
-      requestAnimationFrame(() => {
-        jumping.current = false;
-      });
-    };
-    scroller.addEventListener("scroll", onScroll, { passive: true });
-    scroller.addEventListener("wheel", onUser, { passive: true });
-    scroller.addEventListener("pointerdown", onUser);
-    pending.current = () => {
-      stop();
-      jumping.current = false;
-    };
+    mine.current = revealChatRow(list.current, scroller, tick.index, "start", navigation, jumping, () => onArrive(tick.key));
   };
 
   if (!rail.shown) return null;
@@ -156,7 +120,7 @@ export function TimelineRail({
       className="pointer-events-none absolute bottom-3 right-[10px] top-3 z-10 w-3.5"
       data-testid="timeline-rail"
     >
-      {rail.ticks.map((tick) => (
+      {rail.ticks.map((tick, index) => (
         <button
           key={tick.key}
           type="button"
@@ -167,14 +131,26 @@ export function TimelineRail({
           onFocus={() => setHovered(tick.key)}
           onBlur={() => setHovered((current) => (current === tick.key ? null : current))}
           // Sitting over the list, a tick would stop the wheel: it scrolls the chat as around it.
-          onWheel={(event) => scroller?.scrollBy({ top: event.deltaY })}
-          style={{ top: `${tick.top * 100}%` }}
-          className="pointer-events-auto absolute right-0 flex h-2 w-3.5 -translate-y-1/2 items-center justify-end rounded-sm"
+          onWheel={(event) => {
+            if (event.ctrlKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+            onUserScroll(event.deltaY);
+            const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? scroller?.clientHeight ?? 1 : 1;
+            scroller?.scrollBy({ top: event.deltaY * unit });
+          }}
+          style={{
+            top: `${tick.top * 100}%`,
+            height: Math.min(
+              8,
+              index > 0 ? (tick.top - rail.ticks[index - 1].top) * Math.max(1, (scroller?.clientHeight ?? 24) - 24) : 8,
+              index + 1 < rail.ticks.length ? (rail.ticks[index + 1].top - tick.top) * Math.max(1, (scroller?.clientHeight ?? 24) - 24) : 8,
+            ),
+          }}
+          className="pointer-events-auto absolute right-0 flex w-3.5 -translate-y-1/2 items-center justify-end rounded-sm"
           data-testid="timeline-tick"
         >
           <span
             className={cx(
-              "block h-[2px] rounded-full transition-[width,background-color] duration-150",
+              "pointer-events-none block h-[2px] shrink-0 rounded-full transition-[width,background-color] duration-150",
               hovered === tick.key
                 ? "w-3.5 bg-accent"
                 : tick.inView

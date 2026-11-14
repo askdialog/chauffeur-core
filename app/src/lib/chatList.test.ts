@@ -20,6 +20,10 @@ describe("remountLocation", () => {
     expect(remountLocation(rows, "s3", false)).toEqual({ index: 1, align: "start" });
   });
 
+  test("keeps the reader's offset inside a tall message when history arrives", () => {
+    expect(remountLocation(rows, "s4", false, 1780)).toEqual({ index: 2, align: "start", offset: 1780 });
+  });
+
   test("falls back to the bottom when the item is gone", () => {
     expect(remountLocation(rows, "s99", false)).toEqual({ index: "LAST", align: "end" });
   });

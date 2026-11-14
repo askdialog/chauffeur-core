@@ -28,7 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { type CSSProperties, memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Virtuoso, type ListRange, type VirtuosoHandle } from "react-virtuoso";
+import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useShallow } from "zustand/react/shallow";
 import { remountLocation, firstItemKey, type ListLocation } from "@/lib/chatList";
 import { type ChatRow, type ChatView, emptyChatView, groupActivity, openRequests, type QuestionItem } from "@/lib/chat";
@@ -48,6 +48,9 @@ import {
 } from "@/lib/chatTabs";
 import { onMenuAction } from "@/lib/native";
 import { tabPercent } from "@/lib/context";
+import { revealChatRow, scrollToChatRow } from "@/lib/chatRowScroll";
+import { CHAT_LIST_HEADER as LIST_HEADER, CHAT_ROW_ESTIMATE, type ChatScrollIntent } from "@/lib/chatScroll";
+import { useChatScroll } from "./useChatScroll";
 import { Deliverables } from "@/components/Deliverables";
 import { errorMessage } from "@/lib/rpc";
 import {
@@ -854,14 +857,22 @@ export function ChatConversation({
   partial?: boolean;
 }) {
   const list = useRef<VirtuosoHandle>(null);
+  const listHeight = useRef(0);
+  const scrollerElement = useRef<HTMLElement | null>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [atTop, setAtTop] = useState(false);
   // The timeline rail: the list's scroll area, its measure, and a jump under way (which the list
   // must not undo by following new output to the bottom).
   const [scroller, setScroller] = useState<HTMLElement | null>(null);
-  const scrollerRef = useCallback((el: HTMLElement | Window | null) => setScroller(el instanceof HTMLElement ? el : null), []);
+  const scrollerRef = useCallback((el: HTMLElement | Window | null) => {
+    scrollerElement.current = el instanceof HTMLElement ? el : null;
+    scrollerElement.current?.style.setProperty("--chat-height", `${listHeight.current}px`);
+    setScroller(scrollerElement.current);
+  }, []);
   const railRefresh = useRef<() => void>(() => {});
   const jumping = useRef(false);
+  const navigation = useRef<(() => void) | null>(null);
+  const scrollIntent = useRef<ChatScrollIntent>({ following: true, awaitingUserScroll: false });
   const root = useRef<HTMLDivElement>(null);
   const [highlight, setHighlight] = useState<string | null>(null);
   useEffect(() => {
@@ -869,8 +880,6 @@ export function ChatConversation({
     const timer = setTimeout(() => setHighlight(null), 1400);
     return () => clearTimeout(timer);
   }, [highlight]);
-  const toTop = () => list.current?.scrollTo({ top: 0 });
-  const toBottom = () => list.current?.scrollToIndex({ index: "LAST", align: "end", behavior: "auto" });
   const working = view.working || chat.status === "working" || chat.status === "starting" || chat.status === "needs_input";
   const signedOut = useApp((s) => s.usage?.find((u) => u.agent === chat.agent)?.account === "signed_out");
   // An idle chat has no session to hear an answer: a request still open in its log was cut by a
@@ -896,22 +905,49 @@ export function ChatConversation({
   const commentOn = owner.comment;
   const [selected, setSelected] = useState<Passage | null>(null);
   const [commenting, setCommenting] = useState<Passage | null>(null);
+  const cancelSearchNavigation = useCallback(() => {
+    if (useApp.getState().searchTarget?.chat === chat.id) clearSearchMatch();
+  }, [chat.id]);
+  const mount = useListMount(rows, partial, atBottom || scrollIntent.current.following, scroller);
+  const { refresh: refreshScroll, toTop, toBottom, userScroll } = useChatScroll(list, scroller, jumping, navigation, scrollIntent, mount.epoch, mount.initial, cancelSearchNavigation);
+  const revealedThread = useRef<{ key: string; scroller: HTMLElement } | null>(null);
   // A thread a mention opened: its message brought into view, then the thread itself.
   useEffect(() => {
-    if (!owner.targetBlock) return;
+    if (!owner.targetBlock) {
+      revealedThread.current = null;
+      return;
+    }
+    if (!scroller?.isConnected || partial || loading) return;
+    if (revealedThread.current?.key === owner.targetBlock && revealedThread.current.scroller === scroller) return;
     const index = rows.findIndex((row) => row.key === owner.targetBlock);
-    if (index >= 0) list.current?.scrollToIndex({ index, align: "center" });
-  }, [owner.targetBlock, rows]);
-  const mount = useListMount(rows, partial, atBottom);
+    if (index >= 0) {
+      revealedThread.current = { key: owner.targetBlock, scroller };
+      cancelSearchNavigation();
+      revealChatRow(list.current, scroller, index, "center", navigation, jumping);
+    }
+  }, [owner.targetBlock, rows, scroller, partial, loading, cancelSearchNavigation]);
   const searchTarget = useApp((s) => s.searchTarget);
   useEffect(() => {
-    if (searchTarget?.chat !== chat.id || partial || loading || !scroller) return;
+    if (searchTarget?.chat !== chat.id || partial || loading || !scroller?.isConnected) return;
     const index = rows.findIndex((row) => row.key === `s${searchTarget.seq}`);
     if (index < 0) return;
+    navigation.current?.();
     jumping.current = true;
     let frame = 0;
     let tries = 0;
     let settled = 0;
+    const cancel = () => {
+      cancelAnimationFrame(frame);
+      if (navigation.current === cancelTarget) {
+        navigation.current = null;
+        jumping.current = false;
+      }
+    };
+    const cancelTarget = () => {
+      cancel();
+      clearSearchMatch();
+    };
+    navigation.current = cancelTarget;
     const step = () => {
       const row = scroller.querySelector<HTMLElement>(`[data-index="${index}"]`);
       const range = row ? textRanges(row, searchTarget.word)[0] : null;
@@ -923,7 +959,7 @@ export function ChatConversation({
       else {
         settled = 0;
         if (range && box) scroller.scrollBy({ top: box.top - viewport.top - 48 });
-        else list.current?.scrollToIndex({ index, align: "start" });
+        else scrollToChatRow(list.current, scroller, index);
       }
       if (settled >= 3 || ++tries >= 60) {
         setHighlight(rows[index].key);
@@ -933,10 +969,7 @@ export function ChatConversation({
       frame = requestAnimationFrame(step);
     };
     frame = requestAnimationFrame(step);
-    return () => {
-      cancelAnimationFrame(frame);
-      jumping.current = false;
-    };
+    return cancel;
   }, [searchTarget, chat.id, partial, loading, scroller, rows]);
 
   const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(() => new Set());
@@ -979,7 +1012,7 @@ export function ChatConversation({
         toast(`Could not run “${command}”: ${errorMessage(error)}`, "error");
         if (!drafts.text(chat.id)) drafts.setText(chat.id, text);
       });
-      list.current?.scrollToIndex({ index: "LAST", behavior: "auto" });
+      toBottom();
       return;
     }
     try {
@@ -988,12 +1021,12 @@ export function ChatConversation({
       const suggestion = useWorkspaceShares.getState().editing[chat.id];
       await client.call("chat.send", { chat: chat.id, text: message, images: toImageInputs(images), mode, suggestion });
       if (suggestion) forgetEditing(chat.id);
-      list.current?.scrollToIndex({ index: "LAST", behavior: "auto" });
+      toBottom();
     } catch (error) {
       toast(`Could not send: ${errorMessage(error)}`, "error");
       throw error;
     }
-  }, [shellOffered, chat.id]);
+  }, [shellOffered, chat.id, toBottom]);
 
   const interrupt = useCallback(async () => {
     try {
@@ -1031,8 +1064,7 @@ export function ChatConversation({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [toTop, toBottom]);
 
   // A design chat (story 47): Claude Code only, its permission mode fixed, its brief in the composer.
   const design = chat.kind === "design";
@@ -1180,7 +1212,9 @@ export function ChatConversation({
           <Virtuoso
             key={mount.epoch}
             ref={list}
-            className="h-full"
+            // WebKit clamps scrollTop while virtual rows are replaced. Keep the total scroll
+            // extent present through those DOM updates, independently of the mounted rows.
+            className="h-full after:pointer-events-none after:absolute after:left-0 after:top-0 after:w-px after:content-[''] after:h-[var(--chat-height)]"
             data={rows}
             // Rounded heights accumulate drift in long chats; delayed measurements expose a
             // frame with stale offsets when rows enter the viewport or streamed text wraps.
@@ -1189,18 +1223,22 @@ export function ChatConversation({
             // and gives its height to every row it has not rendered yet: a long first message, such as a
             // child workspace's brief, then makes the list much taller than it is. Scrolling up from
             // the bottom, it shrinks under the reader, and WebKit puts them back at the bottom.
-            defaultItemHeight={ROW_ESTIMATE}
+            defaultItemHeight={CHAT_ROW_ESTIMATE}
             skipAnimationFrameInResizeObserver
             computeItemKey={(_, row) => row.key}
-            initialTopMostItemIndex={mount.initial}
+            initialTopMostItemIndex={0}
             rangeChanged={mount.rangeChanged}
-            followOutput={(bottom) => (bottom && !jumping.current ? "auto" : false)}
             atBottomStateChange={setAtBottom}
             atBottomThreshold={4}
             atTopStateChange={setAtTop}
             increaseViewportBy={{ top: 400, bottom: 400 }}
             scrollerRef={scrollerRef}
-            totalListHeightChanged={() => railRefresh.current()}
+            totalListHeightChanged={(height) => {
+              listHeight.current = height;
+              scrollerElement.current?.style.setProperty("--chat-height", `${height}px`);
+              refreshScroll();
+              railRefresh.current();
+            }}
             itemContent={(index, row) => (
               <ChatRowView row={row} last={index === rows.length - 1} working={working} readOnly={readOnly} respond={respond} />
             )}
@@ -1224,7 +1262,10 @@ export function ChatConversation({
             header={LIST_HEADER}
             refresh={railRefresh}
             jumping={jumping}
+            navigation={navigation}
+            onNavigate={cancelSearchNavigation}
             onArrive={setHighlight}
+            onUserScroll={userScroll}
           />
         )}
         {items.length > 0 && (
@@ -1234,6 +1275,8 @@ export function ChatConversation({
             list={list}
             scroller={scroller}
             jumping={jumping}
+            navigation={navigation}
+            onNavigate={cancelSearchNavigation}
             onClose={() => root.current?.querySelector<HTMLElement>('[data-testid="composer"]')?.focus()}
           />
         )}
@@ -1274,7 +1317,10 @@ export function ChatConversation({
           {permissions.length === 1 ? "The agent is waiting for your permission" : `${permissions.length} permission requests are waiting for you`}
           <button
             className="text-accent hover:underline"
-            onClick={() => list.current?.scrollToIndex({ index: firstRequestIndex, align: "center", behavior: "smooth" })}
+            onClick={() => {
+              cancelSearchNavigation();
+              revealChatRow(list.current, scroller, firstRequestIndex, "center", navigation, jumping);
+            }}
           >
             Show
           </button>
@@ -1490,14 +1536,13 @@ function JumpButton({
   );
 }
 
-/** The first item a row holds: an activity group stands for several. */
 /**
  * Where the list (re)mounts. While the start of a long conversation is still coming, the list holds
  * its end; when the rest arrives the list mounts again, at the bottom if the reader was there,
  * else on the row it was showing at the top, so nothing moves under them.
  */
-function useListMount(rows: ChatRow[], partial: boolean, atBottom: boolean) {
-  const top = useRef<string | null>(null);
+function useListMount(rows: ChatRow[], partial: boolean, atBottom: boolean, scroller: HTMLElement | null) {
+  const top = useRef<{ key: string; offset: number } | null>(null);
   const [state, setState] = useState<{ epoch: number; initial: ListLocation; partial: boolean }>({
     epoch: 0,
     initial: { index: "LAST", align: "end" },
@@ -1506,26 +1551,38 @@ function useListMount(rows: ChatRow[], partial: boolean, atBottom: boolean) {
   if (state.partial !== partial) {
     if (partial) setState({ ...state, partial });
     else {
-      const initial = remountLocation(rows, top.current, atBottom);
+      const initial = remountLocation(rows, top.current?.key ?? null, atBottom, top.current?.offset ?? 0);
       setState({ epoch: state.epoch + 1, initial, partial });
     }
   }
-  const rangeChanged = useCallback(
-    (range: ListRange) => {
-      const row = rows[range.startIndex];
-      if (row) top.current = firstItemKey(row);
-    },
-    [rows],
-  );
+  const frame = useRef(0);
+  const capture = useCallback(() => {
+    if (!scroller) return;
+    const viewport = scroller.getBoundingClientRect();
+    for (const element of scroller.querySelectorAll<HTMLElement>("[data-index]")) {
+      const box = element.getBoundingClientRect();
+      if (box.bottom <= viewport.top) continue;
+      const row = rows[Number(element.dataset.index)];
+      if (row) top.current = { key: firstItemKey(row), offset: viewport.top - box.top };
+      break;
+    }
+  }, [rows, scroller]);
+  const rangeChanged = useCallback(() => {
+    cancelAnimationFrame(frame.current);
+    frame.current = requestAnimationFrame(capture);
+  }, [capture]);
+  useEffect(() => {
+    scroller?.addEventListener("scroll", capture, { passive: true });
+    rangeChanged();
+    return () => {
+      scroller?.removeEventListener("scroll", capture);
+      cancelAnimationFrame(frame.current);
+    };
+  }, [scroller, capture, rangeChanged]);
   return { epoch: state.epoch, initial: state.initial, rangeChanged };
 }
 
-/** The space above the first row of a chat, in pixels: the list's Header. */
-const LIST_HEADER = 12;
 const NO_CHATS: ChatInfo[] = [];
-
-/** The height of a row not measured yet, in pixels: about a chat's average, folded activity lines and messages together. */
-const ROW_ESTIMATE = 60;
 
 function measureChatRow(element: HTMLElement) {
   return element.getBoundingClientRect().height;

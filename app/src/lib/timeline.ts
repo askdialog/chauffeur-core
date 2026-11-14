@@ -115,3 +115,16 @@ export function markTime(iso: string, now = new Date()): string {
   const day = t.toLocaleDateString([], { month: "short", day: "numeric" });
   return `${day}, ${time}`;
 }
+
+/** Marks sharing a 2px stroke keep one hit target, with the current message kept visible. */
+export function pixelTicks(ticks: readonly TimelineTick[], height: number, active: string | null = null): TimelineTick[] {
+  const pixels = new Map<number, TimelineTick>();
+  const extent = Math.max(2, Math.floor(height / 2) * 2);
+  for (const tick of ticks) {
+    const pixel = Math.round(tick.top * extent / 2) * 2;
+    const previous = pixels.get(pixel);
+    if (previous?.key === active) continue;
+    if (tick.key === active || !previous?.inView || tick.inView) pixels.set(pixel, tick);
+  }
+  return [...pixels.entries()].map(([pixel, tick]) => ({ ...tick, top: pixel / extent }));
+}

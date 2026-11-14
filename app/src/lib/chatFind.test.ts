@@ -203,3 +203,19 @@ describe("findOwner", () => {
     expect(findOwner([])).toBe(-1);
   });
 });
+
+test("searching a large plain history uses the same accents and occurrence ordering", () => {
+  const rows = Array.from({ length: 10000 }, (_, i) => answer(`s${i}`, `Answer ${i}. Plain paragraphs.\n\nneedle needle`));
+  const matches = findInChat(rows, "NÉEDLE");
+  expect(matches.length).toBe(20000);
+  expect(matches.at(-1)).toEqual({ index: 9999, key: "s9999", occurrence: 1 });
+  expect(findInChat([answer("greek", "ΟΣ Café")], "οσ CAFE")).toEqual([{ index: 0, key: "greek", occurrence: 0 }]);
+});
+
+test("cached searches update with streamed rows and omit heading syntax", () => {
+  const old = answer("s1", "Before");
+  expect(findInChat([old], "after")).toEqual([]);
+  expect(findInChat([answer("s1", "After")], "after").length).toBe(1);
+  expect(findInChat([answer("s2", "Heading\n===\n\nBody\n\n---")], "===")).toEqual([]);
+  expect(findInChat([answer("s3", "Heading\n===\n\nBody\n\n---")], "---")).toEqual([]);
+});
