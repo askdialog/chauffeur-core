@@ -79,7 +79,7 @@ export { dismissToast, toast } from "./toasts";
 
 export const client = new DaemonClient({
   resolve: resolveConnection,
-  clientName: "chauffeur-app 0.38.0",
+  clientName: "chauffeur-app 0.39.0",
   onCallError: rememberFailure,
 });
 installErrorReports(client);
