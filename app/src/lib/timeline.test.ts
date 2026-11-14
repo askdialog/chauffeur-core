@@ -4,6 +4,7 @@ import {
   markTime,
   messagePreview,
   placeTicks,
+  pixelTicks,
   railShown,
   rowLayout,
   sameTicks,
@@ -136,4 +137,12 @@ describe("markTime", () => {
     expect(before.length).toBeGreaterThan(today.length);
     expect(markTime("not a date", now)).toBe("");
   });
+});
+
+test("a huge timeline bounds hit targets to screen pixels while preserving the current message", () => {
+  const ticks = Array.from({ length: 50000 }, (_, i) => ({ index: i, key: `s${i}`, preview: "Message", ts: "t", top: i / 50000, inView: i === 25000 }));
+  const rendered = pixelTicks(ticks, 800);
+  expect(rendered.length).toBeLessThanOrEqual(801);
+  expect(rendered.some(tick => tick.index === 25000 && tick.inView)).toBe(true);
+  expect(rendered.at(-1)?.index).toBe(49999);
 });

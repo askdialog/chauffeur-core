@@ -48,6 +48,8 @@ const Fixture = !import.meta.env.DEV
     ? lazy(() => import("./dev/ElicitationFixture").then((m) => ({ default: m.ElicitationFixture })))
     : location.hash === "#chat-fixture"
     ? lazy(() => import("./dev/ChatFixture").then((m) => ({ default: m.ChatFixture })))
+    : location.hash === "#scroll-fixture"
+      ? lazy(() => import("./dev/ScrollFixture").then((m) => ({ default: m.ScrollFixture })))
     : location.hash === "#usage-fixture"
       ? lazy(() => import("./dev/UsageFixture").then((m) => ({ default: m.UsageFixture })))
       : null;

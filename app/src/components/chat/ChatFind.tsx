@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import { type MutableRefObject, type RefObject, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
+import { scrollToChatRow } from "@/lib/chatRowScroll";
 import type { ChatRow } from "@/lib/chat";
 import { type ChatMatch, findInChat, findInText, findOwner, firstMatchFrom, matchLabel, stepMatch } from "@/lib/chatFind";
 import { hasMod, hasSecondMod, inForeignEditor, kbd } from "@/lib/keys";
@@ -28,6 +29,8 @@ export function ChatFind({
   list,
   scroller,
   jumping,
+  navigation,
+  onNavigate,
   onClose,
 }: {
   /** The whole chat, its composer included: ⌘F opens this bar when typed or last clicked in it. */
@@ -38,6 +41,10 @@ export function ChatFind({
   scroller: HTMLElement | null;
   /** True while a jump scrolls: the list must not follow new output meanwhile. */
   jumping: MutableRefObject<boolean>;
+  /** Cancellation shared with Latest and the timeline rail. */
+  navigation: MutableRefObject<(() => void) | null>;
+  /** A new manual destination supersedes a pending global search result. */
+  onNavigate: () => void;
   /** Esc closed the bar: the focus goes back to the composer. */
   onClose: () => void;
 }) {
@@ -54,8 +61,10 @@ export function ChatFind({
   latest.current = { matches, current, search };
 
   // A jump to a match under way: cancelled by the next one, by closing or by unmounting.
-  const pending = useRef<(() => void) | null>(null);
+  const pending = navigation;
+  const mine = useRef<(() => void) | null>(null);
   const reveal = (match: ChatMatch) => {
+    onNavigate();
     pending.current?.();
     if (!scroller) return;
     jumping.current = true;
@@ -64,9 +73,10 @@ export function ChatFind({
     let settled = 0;
     const done = () => {
       cancelAnimationFrame(frame);
-      pending.current = null;
+      if (pending.current === done) pending.current = null;
+      if (mine.current === done) mine.current = null;
       requestAnimationFrame(() => {
-        jumping.current = false;
+        if (!pending.current) jumping.current = false;
       });
     };
     // Rows far away are only estimated until rendered: scroll to the row, then to the match in it
@@ -82,15 +92,16 @@ export function ChatFind({
           scroller.scrollBy({ top: box.top + box.height / 2 - (area.top + area.height / 2) });
         }
       } else if (tries % 6 === 0) {
-        list.current?.scrollToIndex({ index: match.index, align: "center" });
+        scrollToChatRow(list.current, scroller, match.index, "center");
       }
       if (settled >= 2 || ++tries > 40) return done();
       frame = requestAnimationFrame(step);
     };
-    step();
     pending.current = done;
+    mine.current = done;
+    step();
   };
-  useEffect(() => () => pending.current?.(), []);
+  useEffect(() => () => mine.current?.(), []);
 
   const go = (direction: 1 | -1) => {
     const { matches, current } = latest.current;
@@ -193,7 +204,7 @@ export function ChatFind({
   }, [open, scroller, matches, current, search]);
 
   const close = () => {
-    pending.current?.();
+    mine.current?.();
     setOpen(false);
     setPicked(-1);
     onClose();

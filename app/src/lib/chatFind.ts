@@ -18,7 +18,7 @@ export type ChatMatch = { index: number; key: string; occurrence: number };
  * whitespace one space (the page lays out line breaks and the gaps between blocks its own way),
  * with where each of its characters comes from in the original text, so that a match maps back to it.
  */
-export function foldText(text: string): { folded: string; from: number[]; to: number[] } {
+function fold(text: string, offsets: boolean): { folded: string; from: number[]; to: number[] } {
   let folded = "";
   const from: number[] = [];
   const to: number[] = [];
@@ -34,14 +34,27 @@ export function foldText(text: string): { folded: string; from: number[]; to: nu
     space = blank;
     const plain = blank ? " " : char.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
     for (let i = 0; i < plain.length; i++) {
-      from.push(offset);
-      to.push(end);
+      if (offsets) {
+        from.push(offset);
+        to.push(end);
+      }
     }
     folded += plain;
     offset = end;
   }
   return { folded, from, to };
 }
+
+/** Text offsets are only needed to highlight the few rows mounted in the viewport. */
+export function foldText(text: string): { folded: string; from: number[]; to: number[] } {
+  return fold(text, true);
+}
+
+function searchFold(text: string): string {
+  return /[^\x00-\x7f]/.test(text) ? fold(text, false).folded : text.toLowerCase().replace(/\s+/g, " ");
+}
+
+const foldedRows = new WeakMap<ChatRow, string | null>();
 
 /** Where `query` appears in `text`, ignoring case and accents, without overlaps; none for a blank query. */
 export function findInText(text: string, query: string): TextMatch[] {
@@ -60,18 +73,31 @@ export function findInText(text: string, query: string): TextMatch[] {
 /** The text a row offers to the search, or null: the user's messages and the main agent's text, as drawn. */
 export function searchableText(row: ChatRow): string | null {
   if (row.kind === "user") return row.text;
-  if (row.kind === "assistant" && row.depth === 0) return markdownText(row.text);
+  if (row.kind === "assistant" && row.depth === 0) {
+    // Plain paragraphs need no Markdown AST; folding already collapses paragraph whitespace.
+    return /[*_`[\]<>#!|~\\&]|(?:^|\n)[ \t]*(?:[-+]|\d+[.)])\s|(?:^|\n)[ \t]*[-=]+[ \t]*(?:\n|$)/.test(row.text) ? markdownText(row.text) : row.text;
+  }
   return null;
 }
 
 /** Every match of `query` in the chat, from its top. */
 export function findInChat(rows: readonly ChatRow[], query: string): ChatMatch[] {
   if (!query.trim()) return [];
+  const needle = searchFold(query);
+  if (!needle) return [];
   const matches: ChatMatch[] = [];
   rows.forEach((row, index) => {
-    const text = searchableText(row);
+    let text = foldedRows.get(row);
+    if (text === undefined) {
+      const source = searchableText(row);
+      text = source ? searchFold(source) : null;
+      foldedRows.set(row, text);
+    }
     if (!text) return;
-    findInText(text, query).forEach((_, occurrence) => matches.push({ index, key: row.key, occurrence }));
+    let occurrence = 0;
+    for (let at = text.indexOf(needle); at !== -1; at = text.indexOf(needle, at + needle.length)) {
+      matches.push({ index, key: row.key, occurrence: occurrence++ });
+    }
   });
   return matches;
 }
