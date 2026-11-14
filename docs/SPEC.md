@@ -111,8 +111,25 @@ Recommendations keep their original date, evidence, next check and status (propo
 tried, observed effect, or effect unknown). Adoption requires an explicit user decision or
 observed action; an incident summarized in several reports counts once. Missing, incomplete
 and truncated evidence is stated. Reviews remain read-only analyses; follow-up and results
-stay in their conversations, without a new interface (decided with Justin 2026-11-14, see
+stay in their conversations (decided with Justin 2026-11-14, see
 [reviews-learn-across-days](adr/reviews-learn-across-days.md)).
+
+Reviews is also accessible from the Daily reviews section, independently of its name or folded
+state. Its Overview presents patterns and up to three experiments; pattern detail links original
+observations, confidence, counterexamples and gaps; Experiments records dated user decisions
+and measured results; Report history opens live or archived source conversations. Observations
+are conservatively counted once per original chat/local day, never per repeated report mention.
+Missing or shortened coverage remains explicit. A tool-free projection of the last 28 days of
+stored reports builds these views with the configured review model, on demand when the view
+is stale; automatic refresh follows the existing schedule's enablement, while manual refresh
+remains available. Failed refreshes preserve prior insights. Explicit follow-up is written only
+by the daemon, is idempotent, survives refresh/restart, overrides model-derived status and enters
+future reviews' history. A note-only update records no status and never adopts or pins a model-derived
+status. Source coverage is sampled across local days and chats, with incomplete periods shown as
+unknown or lower bounds. Streaming reports do not trigger repeated projection calls. An observed
+effect requires a dated source and a measurement note.
+Settings explain the shared daily/weekly enablement, model, cadence and windows, without adding
+new controls (approved by Justin 2026-11-14, see [reviews-interface](adr/reviews-interface.md)).
 
 ## Implementation decisions
 

@@ -567,6 +567,11 @@ function DailyReview({ settings, update, busy }: SectionProps) {
         value={{ agent: review.agent, model: review.model, effort: null, fast: false }}
         onChange={(choice) => void update({ daily_review: { ...review, agent: choice.agent, model: choice.model } })} />
     </Field>}
+    <div className="border-t border-line pt-3 text-[12px] text-muted" data-testid="weekly-review-settings">
+      <p className="font-medium text-fg">Weekly synthesis</p>
+      <p className="mt-1">Sunday at 18:00 local time, for active weeks. Uses the same enablement and model.</p>
+      <p className="mt-1">Daily context: 7 calendar days + latest weekly synthesis. Weekly context: 4 weeks. Schedule and windows are fixed.</p>
+    </div>
     <p className="text-[12px] text-muted">The report appears in its workspace. Reviews analyze your sessions and propose changes; they do not apply them.</p>
     <Button size="sm" variant="ghost" onClick={() => openSettings(true, "sleep")}>Configure wake in Sleep settings</Button>
   </>;

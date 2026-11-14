@@ -244,6 +244,13 @@ CREATE TABLE IF NOT EXISTS weekly_reviews (
     day TEXT PRIMARY KEY,
     workspace_id TEXT UNIQUE
 );
+CREATE TABLE IF NOT EXISTS review_followups (
+    id TEXT PRIMARY KEY,
+    experiment_id TEXT NOT NULL,
+    json TEXT NOT NULL,
+    recorded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS review_followups_by_experiment ON review_followups(experiment_id, recorded_at);
 CREATE INDEX IF NOT EXISTS events_by_date ON events(ts);
 CREATE TABLE IF NOT EXISTS news_read (
     id TEXT PRIMARY KEY,
@@ -1104,6 +1111,7 @@ impl Store {
 
     /// The sidebar's sections, in order.
     pub fn list_sections(&self) -> Result<Vec<SectionInfo>> {
+        let review_section = self.kv_get("daily_review.section")?;
         self.with(|c| {
             c.prepare(
                 "SELECT id, name, folded FROM sections ORDER BY position ASC, created_at ASC",
@@ -1113,6 +1121,8 @@ impl Store {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     folded: row.get(2)?,
+                    reviews: (review_section.as_deref() == Some(row.get::<_, String>(0)?.as_str()))
+                        .then_some(true),
                 })
             })?
             .collect()

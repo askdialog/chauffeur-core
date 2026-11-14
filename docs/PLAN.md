@@ -82,7 +82,10 @@ reviews included (2026-11-06, [decision](adr/daily-reviews-in-their-own-section.
 Daily history and weekly synthesis (2026-11-14): previous seven days of reports and the latest
 weekly synthesis for dailies; Sunday synthesis over four weeks, recommendation follow-up,
 bounded conversation snapshots including archived follow-ups, and persistent weekly claims
-([decision](adr/reviews-learn-across-days.md)). Same settings and section, no new interface.
+([decision](adr/reviews-learn-across-days.md)). Same settings and section.
+Visual Reviews (2026-11-14): Overview, pattern evidence, experiments with durable dated follow-up,
+and report history; bounded tool-free projection of existing reports, original source links and
+explicit coverage; shared settings with weekly explanation ([decision](adr/reviews-interface.md)).
 
 ### Routines (story 56, 2026-11-08)
 

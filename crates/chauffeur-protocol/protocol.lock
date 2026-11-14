@@ -1,7 +1,7 @@
 # The fingerprint of each protocol version: its methods, and their params' fields with their
 # presence (`chauffeur_protocol::methods::surface`). A test fails when they change and the line
 # of the current version no longer matches: bump the version, then write its new fingerprint.
-client 16 896ff165cbb3c27f
+client 17 aaef667b8d53941d
 peer 3 c28913e2cb22ba1c
 extension-host 1 1391106b4da2d247
 extension-engine 1 275af28c08579295

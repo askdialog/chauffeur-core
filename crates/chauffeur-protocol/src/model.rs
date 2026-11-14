@@ -204,6 +204,10 @@ pub struct SectionInfo {
     /// Folded in the sidebar: its workspaces hidden, ⌘1–9 skipping them.
     #[serde(default)]
     pub folded: bool,
+    // The daemon-owned reviews section, independent of its user-editable name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reviews: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]

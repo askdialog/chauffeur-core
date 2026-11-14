@@ -60,6 +60,7 @@ import {
   openCreate,
   openSettings,
   showSharing,
+  showReviews,
   openSwitcher,
   renameSection,
   resizeSidebar,
@@ -123,9 +124,11 @@ type Dragging = { kind: "workspace" | "section"; id: string } | null;
 type Drop = { kind: "row" | "heading"; id: string; below: boolean } | null;
 
 export function Sidebar() {
+  const reviewsShown = useApp((s) => s.reviewsShown);
   const sharingShown = useApp((s) => s.sharingShown);
   const workspaces = useApp(useShallow((s) => s.workspaces));
   const sections = useApp((s) => s.sections);
+  const reviewSectionId = sections.find(s => s.reviews)?.id;
   const loaded = useApp((s) => s.workspacesLoaded);
   const connection = useApp((s) => s.connection);
   const officeEnabled = useApp((s) => s.officeEnabled);
@@ -307,6 +310,7 @@ export function Sidebar() {
             {...headingDrop(group.key, true)}
           />
           {group.key === routinesSectionId && <SuggestionsEntry />}
+          {group.key === reviewSectionId && <ReviewsEntry selected={reviewsShown} />}
           {!group.section.folded && shownRows(group.rows, collapsed).map(renderRow)}
         </Fragment>
       );
@@ -315,6 +319,7 @@ export function Sidebar() {
     return (
       <Fragment key={group.key}>
         {group.kind === "workspaces" && !routinesSectionId && <RoutinesHeading />}
+        {group.kind === "workspaces" && !reviewSectionId && <><SectionTitle>Daily reviews</SectionTitle><ReviewsEntry selected={reviewsShown} /></>}
         {group.kind === "workspaces" && newSection && (
           <NewSectionField workspace={newSection.workspace} onDone={() => setNewSection(null)} />
         )}
@@ -856,7 +861,7 @@ const WorkspaceRow = memo(function WorkspaceRow({
   const onPick = (range: boolean) => actions.pick(workspace, range);
   const onArchive = () => actions.archive(workspace);
   // In the Office, the workspace whose chat is open beside the scene.
-  const selected = useApp((s) => (s.officeShown ? s.officeChat?.workspace === workspace.id : s.selectedId === workspace.id));
+  const selected = useApp((s) => (!s.reviewsShown && (s.officeShown ? s.officeChat?.workspace === workspace.id : s.selectedId === workspace.id)));
   const routine = useApp((s) => routineOfWorkspace(s.routines, workspace.id));
   // Marked unread from its menu, the workspace shown says so too.
   const unread = !!workspace.unread;
@@ -1283,4 +1288,11 @@ function RowBadge({ workspace }: { workspace: WorkspaceInfo }) {
       </span>
     );
   return null;
+}
+
+function ReviewsEntry({selected}: {selected: boolean}) {
+  return <button type="button" onClick={showReviews} data-testid="reviews-entry" aria-current={selected ? "page" : undefined}
+    className={cx("my-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-hover", selected ? "bg-hover text-accent" : "text-muted")}>
+    <ClipboardCheck size={13} /> Reviews
+  </button>;
 }
