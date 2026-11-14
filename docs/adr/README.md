@@ -153,3 +153,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [A chat's images are saved to Downloads by the desktop shell](attachments-saved-to-downloads.md) | 2026-11-13 | accepted |
 | [A shared markdown file can carry the files it links to, on the same link](share-linked-files.md) | 2026-11-13 | accepted |
 | [A child workspace's requests reach its parent, where the user or the parent's agent answers them](child-questions-reach-the-parent.md) | 2026-11-14 | accepted |
+| [Reviews learn across days and follow their recommendations](reviews-learn-across-days.md) | 2026-11-14 | accepted |

@@ -79,6 +79,11 @@ threshold; missed days catch up at restart/wake. Local lifecycle tests use a fak
 Review workspaces are filed in a "Daily reviews" sidebar section, created folded, earlier
 reviews included (2026-11-06, [decision](adr/daily-reviews-in-their-own-section.md)).
 
+Daily history and weekly synthesis (2026-11-14): previous seven days of reports and the latest
+weekly synthesis for dailies; Sunday synthesis over four weeks, recommendation follow-up,
+bounded conversation snapshots including archived follow-ups, and persistent weekly claims
+([decision](adr/reviews-learn-across-days.md)). Same settings and section, no new interface.
+
 ### Routines (story 56, 2026-11-08)
 
 A prompt the daemon runs by itself at set times ([decision](adr/routines.md)): `routine.*` methods,

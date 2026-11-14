@@ -96,6 +96,24 @@ Codex chats show an estimated token cost in USD after each turn and in the compo
 56. As a developer, I want to turn a chat into a routine, a prompt Chauffeur runs by itself at set times on my Mac, refined by hand until it is good enough, so that the work I repeat every day or week happens without me. A chat tab's "Make a routine" (or `chauffeur routine new --from <chat>`) creates a workspace of its own for the routine (`routine-<name>`, the source chat's repos, filed in the "Routines" sidebar section) whose first chat is the refining chat: its agent drafts the routine's file from the source conversation. The file is TOML: `name`, `prompt`, `repos`, `agent`, `model`, `effort`, `permission_mode` (`auto` by default) and `[schedule]` with `days` (`mon`…`sun`), or `every_days` counted from the date `from` (see docs/adr/find-routines.md), and `times` (`"08:00"`, local time). Each edit (`chauffeur routine edit`, validated by the daemon; the current version is in the workspace's notes as `routine.toml`) is a new version. A routine is a Draft (Run now only), Active (it also runs on its schedule) or Paused. Each run is a new chat of the routine's workspace; before it, each worktree with no change and no unpushed commit is put back on the freshly fetched `origin/<base>`, any other is left as it is and the run's prompt says so; the tabs of earlier runs that ended and do not wait for me are closed. A missed occurrence (the Mac off or asleep, or the previous run still working or waiting for me) is caught up once, however many were missed; a time the clock skips at a DST change runs right after the gap. The workspace's Routine tab shows the file, the state, the next run, Run now, Activate/Pause, the versions and the runs; the sidebar tags the workspace with the routine's state. CLI: `chauffeur routine new|ls|show|edit|run|activate|pause|rm|history`. Only I activate, pause, run or delete a routine; an agent reads, drafts and edits one. Not yet: sharing, waking the Mac for a run, triggers other than the time (asked by Justin 2026-11-08, see docs/adr/routines.md).
 57. As a developer, I want Chauffeur to look through my recent requests, on demand, for the work worth a routine and to propose those routines written properly, so that what I keep asking for runs by itself without my having to notice it. The "Find routines" button of the sidebar's "Routines" section opens a modal where I choose the days to read (14 by default) and the agent and model, with the composer's picker. It reads my own messages of those days, every workspace included, archived ones too (not the agents' answers, tool outputs, nor what an agent sent: delegated chats, child workspaces), and asks that model in one turn, without tools, for routines from two signals: a request that comes back worded differently (grouped by meaning when the search index has vectors) and a request that names a time window ("des 3 derniers jours" gives every 3 days). Each proposal is a card: its requests with a link to their chat, and the routine (name, a prompt generalised with dates relative to the run, repos, cadence and time). Create the routine makes a draft as "Make a routine" does, with the proposal as its first version; Ignore never proposes it again; Later keeps it below the new ones. The cards stay behind a "Suggestions (n)" entry under the "Routines" heading until created or ignored. CLI: `chauffeur routine find|suggestions|suggestion` (asked by Justin 2026-11-09, see docs/adr/find-routines.md).
 
+## Reviews across days
+
+Daily session reviews run at 18:00 local time on active days, with catch-up after sleep or
+restart. Each reads the previous seven calendar days of daily review conversations and the
+latest weekly synthesis within 28 days, including the user's follow-up decisions. Reports
+identify new findings, recurrences, improvements and regressions without repeating unchanged
+advice. Every Sunday at 18:00, an active week's separate weekly review synthesizes four weeks
+of reports and proposes one to three experiments with observable success measures. It uses the
+daily review's enablement and model, waits for ongoing daily reports, catches up after sleep,
+and lives in the same Daily reviews section. Archived or deleted reviews are not recreated.
+
+Recommendations keep their original date, evidence, next check and status (proposed, decided,
+tried, observed effect, or effect unknown). Adoption requires an explicit user decision or
+observed action; an incident summarized in several reports counts once. Missing, incomplete
+and truncated evidence is stated. Reviews remain read-only analyses; follow-up and results
+stay in their conversations, without a new interface (decided with Justin 2026-11-14, see
+[reviews-learn-across-days](adr/reviews-learn-across-days.md)).
+
 ## Implementation decisions
 
 **Open-source scope (decided with Justin 2026-11-09).** Only Chauffeur Core is released under MIT,

@@ -240,6 +240,10 @@ CREATE TABLE IF NOT EXISTS daily_reviews (
     day TEXT PRIMARY KEY,
     workspace_id TEXT UNIQUE
 );
+CREATE TABLE IF NOT EXISTS weekly_reviews (
+    day TEXT PRIMARY KEY,
+    workspace_id TEXT UNIQUE
+);
 CREATE INDEX IF NOT EXISTS events_by_date ON events(ts);
 CREATE TABLE IF NOT EXISTS news_read (
     id TEXT PRIMARY KEY,
@@ -953,13 +957,13 @@ impl Store {
     pub(crate) fn insert_review_workspace(
         &self,
         row: &WorkspaceRow,
-        day: Option<&str>,
+        review: Option<(&str, crate::daily_review::ReviewKind)>,
     ) -> Result<()> {
         let tickets = serde_json::to_string(&row.tickets)?;
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
-            if let Some(day) = day {
-                tx.execute("INSERT INTO daily_reviews (day, workspace_id) VALUES (?1, ?2)", params![day, row.id])?;
+            if let Some((day, kind)) = review {
+                tx.execute(&format!("INSERT INTO {} (day, workspace_id) VALUES (?1, ?2)", kind.table()), params![day, row.id])?;
             }
             tx.execute(
                 "INSERT INTO workspaces (id, slug, path, branch, parent_id, state, tickets, created_at, archived_at, last_error, explore, title, auto_title, title_source, section_id, position)
