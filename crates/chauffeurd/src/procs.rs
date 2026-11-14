@@ -18,6 +18,27 @@ use crate::shellenv::ShellEnv;
 
 const TAIL_LINES: usize = 300;
 
+/// Spawns `command`, waiting out "Text file busy" (ETXTBSY) for up to two seconds. On Linux a
+/// binary cannot be run while any process holds a write descriptor to it, and a process forked
+/// while another thread writes the file keeps a copy of that descriptor until its own `exec`: a
+/// binary written a moment ago (an update, a test's stand-in) can fail to start for an instant.
+pub async fn spawn_when_free<T>(
+    mut spawn: impl FnMut() -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let mut attempts = 0;
+    loop {
+        match spawn() {
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 200 =>
+            {
+                attempts += 1;
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            spawned => return spawned,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct ProcessManager {
     events: EventBus,
@@ -849,12 +870,24 @@ mod tests {
         .unwrap();
         std::fs::set_permissions(&docker, std::fs::Permissions::from_mode(0o755)).unwrap();
         // macOS checks a freshly written executable on its first exec, which can take seconds:
-        // paid here, it stays out of the deadlines under test.
-        let warm_up = std::process::Command::new(&docker)
-            .arg("--warm-up")
-            .status()
-            .unwrap();
-        assert!(warm_up.success());
+        // paid here, it stays out of the deadlines under test. On Linux it is also "Text file
+        // busy" while a process another test forked meanwhile holds the file open for writing.
+        let mut warm_up = None;
+        for _ in 0..200 {
+            match std::process::Command::new(&docker)
+                .arg("--warm-up")
+                .status()
+            {
+                Err(error) if error.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                status => {
+                    warm_up = Some(status.unwrap());
+                    break;
+                }
+            }
+        }
+        assert!(warm_up.expect("the fake docker stays busy").success());
         let mut vars: BTreeMap<String, String> = std::env::vars().collect();
         let path = format!("{}:{}", bin.display(), vars["PATH"]);
         vars.insert("PATH".into(), path);
@@ -946,6 +979,30 @@ mod tests {
                 .starts_with("`docker compose -p qa-shop down` did not end within 300 s"),
             "{down}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_binary_still_open_for_writing_starts_once_it_is_closed() {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let binary = dir.path().join("tool");
+        let mut writer = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o700)
+            .open(&binary)
+            .unwrap();
+        writer.write_all(b"#!/bin/sh\nexit 0\n").unwrap();
+        // Another thread's fork would hold the descriptor like this one, then drop it.
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            drop(writer);
+        });
+        let mut command = Command::new(&binary);
+        let mut child = spawn_when_free(|| command.spawn()).await.unwrap();
+        assert!(child.wait().await.unwrap().success());
+        release.join().unwrap();
     }
 
     #[tokio::test]

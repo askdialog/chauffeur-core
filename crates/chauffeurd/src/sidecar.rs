@@ -132,8 +132,8 @@ impl Sidecar {
             // outlives it under PID 1, where `access::is_agent` could not tell it from the user.
             .process_group(0)
             .kill_on_drop(true);
-        let mut child = command
-            .spawn()
+        let mut child = crate::procs::spawn_when_free(|| command.spawn())
+            .await
             .with_context(|| format!("spawning {}", binary.display()))?;
         tracing::info!(binary = %binary.display(), "agent sidecar started");
         if let Some(pid) = child.id() {
