@@ -18882,7 +18882,364 @@ async fn daily_reviews_catch_up_once_with_evidence_and_the_chosen_model() {
     chauffeurd::daily_review::run_due(d, at(today + Days::new(1), 18))
         .await
         .unwrap();
-    assert_eq!(d.store.list_workspaces().unwrap().len(), 2);
+    assert_eq!(
+        d.store
+            .list_workspaces()
+            .unwrap()
+            .iter()
+            .filter(|w| w.slug.starts_with("daily-review-"))
+            .count(),
+        1
+    );
+    d.chats.sidecar.shutdown().await;
+}
+
+#[tokio::test]
+async fn weekly_reviews_wait_for_daily_reports_retry_once_and_carry_history() {
+    use chauffeur_protocol::{events::ChatEvent, model::TurnOutcome};
+    use chrono::{Datelike, Days, Local, TimeZone};
+    let f = fixture(46900);
+    let d = &f.daemon;
+    let log = f.root.join("weekly-sidecar.log");
+    d.chats
+        .sidecar
+        .use_binary(daily_review_sidecar(&f.root, &log));
+    let source = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("weekly-source".into()),
+            explore: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let source_chat = new_chat(d, &source.id).await;
+    d.events.chat(
+        &source.id,
+        &source_chat.id,
+        ChatEvent::UserMessage {
+            text: "Investigate repeated CI failures".into(),
+            queued: false,
+            attachments: None,
+            message_id: None,
+            suggested_by: None,
+            delegated_answer: None,
+        },
+    );
+    let today = Local::now().date_naive();
+    let sunday = today + Days::new(u64::from(6 - today.weekday().num_days_from_monday()));
+    let at = |day: chrono::NaiveDate, hour| {
+        Local
+            .from_local_datetime(&day.and_hms_opt(hour, 0, 0).unwrap())
+            .earliest()
+            .unwrap()
+    };
+    chauffeurd::daily_review::run_due(d, at(today, 18))
+        .await
+        .unwrap();
+    let daily = d
+        .store
+        .list_workspaces()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.slug.starts_with("daily-review-"))
+        .unwrap();
+    let daily_chat = d.store.chats_of(&daily.id).unwrap().remove(0);
+    chauffeurd::daily_review::run_due(d, at(sunday, 18))
+        .await
+        .unwrap();
+    assert_eq!(
+        d.store.list_workspaces().unwrap().len(),
+        2,
+        "weekly waits for the daily to finish"
+    );
+    d.chats.on_event(
+        &daily_chat.id,
+        ChatEvent::AssistantText {
+            message_id: "finding".into(),
+            text: "Try checking before opening a PR".into(),
+            parent_tool_use_id: None,
+        },
+    );
+    d.chats.on_event(
+        &daily_chat.id,
+        ChatEvent::TurnEnded {
+            outcome: TurnOutcome::Success,
+            duration_ms: None,
+            cost_usd: None,
+            estimated_cost_usd: None,
+            session_tokens: None,
+            tokens: None,
+            context_tokens: None,
+            error: None,
+            fork_point: None,
+        },
+    );
+    d.events.chat(
+        &daily.id,
+        &daily_chat.id,
+        ChatEvent::UserMessage {
+            text: "I decided to try the earlier checks".into(),
+            queued: false,
+            attachments: None,
+            message_id: None,
+            suggested_by: None,
+            delegated_answer: None,
+        },
+    );
+    // The historical workspace files can disappear; its stored conversation remains readable.
+    d.chats.close(&daily_chat.id, true).await.unwrap();
+    d.workspaces.archive(&daily.id, true).await.unwrap();
+    let fail = f.root.join("fail-review-start");
+    std::fs::write(&fail, "").unwrap();
+    assert!(
+        chauffeurd::daily_review::run_due(d, at(sunday + Days::new(1), 8))
+            .await
+            .is_err()
+    );
+    let weekly = d
+        .store
+        .list_workspaces()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.slug.starts_with("weekly-review-"))
+        .unwrap();
+    let weekly_chat = d.store.chats_of(&weekly.id).unwrap().remove(0);
+    assert_eq!(weekly.section_id, daily.section_id);
+    assert!(weekly.explore);
+    assert!(d.store.port_block(&weekly.id).unwrap().is_none());
+    let folder = Path::new(&weekly.path).join(".chauffeur/weekly-review");
+    let manifest = std::fs::read_to_string(folder.join("history.json")).unwrap();
+    assert!(manifest.contains(&daily_chat.id));
+    let conversation =
+        std::fs::read_to_string(folder.join(format!("history/{}.json", daily_chat.id))).unwrap();
+    assert!(conversation.contains("Try checking"));
+    assert!(conversation.contains("I decided to try"));
+    assert!(
+        !manifest.contains(&weekly_chat.id),
+        "a weekly report never reads itself"
+    );
+    std::fs::remove_file(fail).unwrap();
+    chauffeurd::daily_review::run_due(d, at(sunday + Days::new(1), 8))
+        .await
+        .unwrap();
+    assert_eq!(d.store.chats_of(&weekly.id).unwrap().len(), 1);
+    assert_eq!(d.store.chats_of(&weekly.id).unwrap()[0].id, weekly_chat.id);
+    assert!(
+        d.store.chats_of(&weekly.id).unwrap()[0]
+            .agent_session_id
+            .is_some()
+    );
+    chauffeurd::daily_review::run_due(d, at(sunday + Days::new(1), 8))
+        .await
+        .unwrap();
+    assert_eq!(d.store.list_workspaces().unwrap().len(), 3);
+    let starts = std::fs::read_to_string(&log).unwrap();
+    assert!(starts.contains("1–3 concrete experiments"));
+    assert!(starts.contains("a finding repeated in multiple reports counts once"));
+    assert!(starts.contains("effect unknown"));
+    // Weekly analysis itself must not trigger daily reviews or Find routines.
+    chauffeurd::daily_review::run_due(d, at(sunday + Days::new(1), 18))
+        .await
+        .unwrap();
+    assert_eq!(d.store.list_workspaces().unwrap().len(), 3);
+    d.chats.close(&weekly_chat.id, true).await.unwrap();
+    d.workspaces.archive(&weekly.id, true).await.unwrap();
+    d.store
+        .kv_set("weekly_review.next_day", &sunday.to_string())
+        .unwrap();
+    chauffeurd::daily_review::run_due(d, at(sunday + Days::new(1), 8))
+        .await
+        .unwrap();
+    assert_eq!(
+        d.store.list_workspaces().unwrap().len(),
+        3,
+        "archiving does not recreate a weekly review"
+    );
+    d.chats.sidecar.shutdown().await;
+}
+
+#[tokio::test]
+async fn catch_up_runs_sundays_synthesis_before_monday_and_does_not_wait_for_unanswered_followups()
+{
+    use chauffeur_protocol::{
+        events::ChatEvent,
+        model::{ChatStatus, TurnOutcome},
+    };
+    use chrono::{Datelike, Days, Local, TimeZone, Utc};
+    let f = fixture(46900);
+    let d = &f.daemon;
+    d.chats
+        .sidecar
+        .use_binary(daily_review_sidecar(&f.root, &f.root.join("catch-up.log")));
+    let source = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("catch-up-source".into()),
+            explore: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let source_chat = new_chat(d, &source.id).await;
+    let today = Local::now().date_naive();
+    let sunday = today + Days::new(u64::from(6 - today.weekday().num_days_from_monday()));
+    let monday = sunday + Days::new(1);
+    let at = |day: chrono::NaiveDate, hour| {
+        Local
+            .from_local_datetime(&day.and_hms_opt(hour, 0, 0).unwrap())
+            .earliest()
+            .unwrap()
+    };
+    for day in [sunday, monday, monday + Days::new(1)] {
+        let ts = at(day, 12)
+            .with_timezone(&Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let payload = serde_json::json!({"ts": ts, "event": {"scope": "chat", "workspace_id": source.id, "chat_id": source_chat.id,
+            "event": {"type": "user_message", "text": "Find the CI failure", "queued": false}}});
+        d.store
+            .append_event(
+                &ts,
+                Some(&source.id),
+                Some(&source_chat.id),
+                false,
+                &payload.to_string(),
+            )
+            .unwrap();
+    }
+    let finish = |chat: &str, text: &str| {
+        d.chats.on_event(
+            chat,
+            ChatEvent::AssistantText {
+                message_id: format!("report-{chat}"),
+                text: text.into(),
+                parent_tool_use_id: None,
+            },
+        );
+        d.chats.on_event(
+            chat,
+            ChatEvent::TurnEnded {
+                outcome: TurnOutcome::Success,
+                duration_ms: None,
+                cost_usd: None,
+                estimated_cost_usd: None,
+                session_tokens: None,
+                tokens: None,
+                context_tokens: None,
+                error: None,
+                fork_point: None,
+            },
+        );
+    };
+    let unanswered = |chat: &str| {
+        d.chats.on_event(
+            chat,
+            ChatEvent::PermissionRequest {
+                request_id: format!("question-{chat}"),
+                tool_name: "read".into(),
+                input: serde_json::json!({}),
+                title: None,
+                agent: None,
+            },
+        );
+        assert_eq!(
+            d.chats.resolve(chat).unwrap().status,
+            ChatStatus::NeedsInput
+        );
+    };
+    d.store
+        .kv_set("daily_review.next_day", &sunday.to_string())
+        .unwrap();
+    d.store
+        .kv_set("weekly_review.next_day", &sunday.to_string())
+        .unwrap();
+    chauffeurd::daily_review::run_due(d, at(monday, 18))
+        .await
+        .unwrap();
+    let sunday_review = d
+        .store
+        .list_workspaces()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.slug == format!("daily-review-{sunday}"))
+        .unwrap();
+    let sunday_chat = d.store.chats_of(&sunday_review.id).unwrap().remove(0);
+    chauffeurd::daily_review::run_due(d, at(monday, 18))
+        .await
+        .unwrap();
+    assert_eq!(
+        d.store.list_workspaces().unwrap().len(),
+        2,
+        "Monday waits for Sunday's report"
+    );
+    finish(&sunday_chat.id, "A recurring failure; try checking earlier");
+    unanswered(&sunday_chat.id);
+    chauffeurd::daily_review::run_due(d, at(monday, 18))
+        .await
+        .unwrap();
+    let weekly = d
+        .store
+        .list_workspaces()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.slug == format!("weekly-review-{sunday}"))
+        .unwrap();
+    let weekly_chat = d.store.chats_of(&weekly.id).unwrap().remove(0);
+    chauffeurd::daily_review::run_due(d, at(monday, 18))
+        .await
+        .unwrap();
+    assert_eq!(
+        d.store.list_workspaces().unwrap().len(),
+        3,
+        "Monday waits for the weekly synthesis"
+    );
+    finish(
+        &weekly_chat.id,
+        "This week's experiment: check before opening the PR",
+    );
+    unanswered(&weekly_chat.id);
+    chauffeurd::daily_review::run_due(d, at(monday, 18))
+        .await
+        .unwrap();
+    let monday_review = d
+        .store
+        .list_workspaces()
+        .unwrap()
+        .into_iter()
+        .find(|w| w.slug == format!("daily-review-{monday}"))
+        .unwrap();
+    let folder = Path::new(&monday_review.path).join(".chauffeur/daily-review");
+    let history = std::fs::read_to_string(folder.join("history.json")).unwrap();
+    assert!(history.contains(&weekly_chat.id));
+    assert!(history.contains("needs_input"));
+    assert!(
+        std::fs::read_to_string(folder.join(format!("history/{}.json", weekly_chat.id)))
+            .unwrap()
+            .contains("This week's experiment")
+    );
+    assert_eq!(d.store.list_workspaces().unwrap().len(), 4);
+    let monday_chat = d.store.chats_of(&monday_review.id).unwrap().remove(0);
+    d.chats.on_event(&monday_chat.id, ChatEvent::TurnStarted);
+    d.settings
+        .update(|doc| {
+            doc["resume_interrupted_turns"] = toml_edit::value(false);
+        })
+        .unwrap();
+    d.chats.on_sidecar_exit();
+    assert_eq!(
+        d.chats.resolve(&monday_chat.id).unwrap().status,
+        ChatStatus::Idle
+    );
+    chauffeurd::daily_review::run_due(d, at(monday + Days::new(1), 18))
+        .await
+        .unwrap();
+    assert_eq!(
+        d.store.list_workspaces().unwrap().len(),
+        5,
+        "a cut first turn without auto-resume does not stop future reviews"
+    );
     d.chats.sidecar.shutdown().await;
 }
 

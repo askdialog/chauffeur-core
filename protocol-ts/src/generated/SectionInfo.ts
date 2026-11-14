@@ -8,4 +8,4 @@ export type SectionInfo = { id: string, name: string,
 /**
  * Folded in the sidebar: its workspaces hidden, ⌘1–9 skipping them.
  */
-folded: boolean, };
+folded: boolean, reviews?: boolean, };

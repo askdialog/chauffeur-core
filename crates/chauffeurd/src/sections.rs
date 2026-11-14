@@ -89,6 +89,7 @@ pub(crate) fn owned(d: &Daemon, key: &str, name: &str, folded: bool) -> Result<S
         None => insert(d, name, None, folded)?.id,
     };
     d.store.kv_set(key, &id)?;
+    publish(d)?;
     Ok(id)
 }
 

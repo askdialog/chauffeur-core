@@ -117,6 +117,7 @@ impl Store {
                    AND json_extract(e.payload, '$.event.event.suggested_by') IS NULL
                    AND c.kind = 'chat' AND c.parent_chat IS NULL AND w.parent_id IS NULL
                    AND NOT EXISTS (SELECT 1 FROM daily_reviews r WHERE r.workspace_id = w.id)
+                   AND NOT EXISTS (SELECT 1 FROM weekly_reviews r WHERE r.workspace_id = w.id)
                    AND NOT EXISTS (SELECT 1 FROM routines r WHERE r.workspace_id = w.id)
                    AND NOT EXISTS (SELECT 1 FROM routine_suggestion_messages s WHERE s.seq = e.seq)
                  ORDER BY e.seq",
@@ -1146,17 +1147,18 @@ mod tests {
                 c.execute_batch(
                     "INSERT INTO workspaces(id,slug,path,branch,state,created_at) VALUES
                        ('w','w','/tmp/w','','archived','old'), ('review','review','/tmp/r','','ready','old'),
-                       ('routine','routine','/tmp/o','','ready','old');
+                       ('routine','routine','/tmp/o','','ready','old'), ('weekly','weekly','/tmp/weekly','','ready','old');
                      INSERT INTO workspaces(id,slug,path,branch,state,created_at,parent_id) VALUES
                        ('child','child','/tmp/c','','ready','old','w');
                      INSERT INTO chats(id,workspace_id,agent,permission_mode,status,created_at) VALUES
                        ('c','w','claude','auto','idle','old'), ('rc','review','claude','auto','idle','old'),
-                       ('oc','routine','claude','auto','idle','old'), ('cc','child','claude','auto','idle','old');
+                       ('oc','routine','claude','auto','idle','old'), ('wc','weekly','claude','auto','idle','old'), ('cc','child','claude','auto','idle','old');
                      INSERT INTO chats(id,workspace_id,agent,permission_mode,status,created_at,parent_chat) VALUES
                        ('delegated','w','codex','auto','idle','old','c');
                      INSERT INTO chats(id,workspace_id,agent,permission_mode,status,created_at,kind) VALUES
                        ('design','w','claude','auto','idle','old','design');
                      INSERT INTO daily_reviews(day,workspace_id) VALUES ('2026-11-01','review');
+                     INSERT INTO weekly_reviews(day,workspace_id) VALUES ('2026-11-01','weekly');
                      INSERT INTO routines(id,workspace_id,state,version,created_at) VALUES ('r','routine','draft',1,'old');",
                 )
             })
@@ -1197,6 +1199,7 @@ mod tests {
             ("w", "delegated"),
             ("w", "design"),
             ("review", "rc"),
+            ("weekly", "wc"),
             ("routine", "oc"),
             ("child", "cc"),
         ] {

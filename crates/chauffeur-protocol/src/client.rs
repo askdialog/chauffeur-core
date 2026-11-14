@@ -436,6 +436,22 @@ methods! {
         #[access(User)]
         #[relay(Local)]
         RoutineDelete(crate::routines::RoutineParams) -> crate::routines::RoutinesResult,
+        /// Review history, grounded insights, and explicit user decisions.
+        #[serde(rename = "reviews.info")]
+        #[access(User)]
+        #[relay(Local)]
+        ReviewsInfo(EmptyParams) -> crate::reviews::ReviewsInfo,
+        /// Builds insights from stored reports in one tool-free model call.
+        #[serde(rename = "reviews.refresh")]
+        #[access(User)]
+        #[relay(Local)]
+        ReviewsRefresh(EmptyParams) -> crate::reviews::ReviewsInfo,
+        /// Saves a dated user decision or outcome, without posting to any external system.
+        #[serde(rename = "reviews.follow_up")]
+        #[access(User)]
+        #[relay(Local)]
+        ReviewsFollowUp(crate::reviews::ReviewFollowUpParams) -> crate::reviews::ReviewsInfo,
+
         /// Find routines as it stands: the analysis under way and the suggestions waiting.
         #[serde(rename = "routine.suggestions")]
         #[access(Any)]

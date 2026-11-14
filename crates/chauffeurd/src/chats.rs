@@ -4062,7 +4062,7 @@ pub fn needs_attention(before: ChatStatus, after: ChatStatus) -> bool {
 
 /// What a chat started without agent or model gets: `default_agent` and `default_model` from
 /// settings.toml when set, else the first favorite of the app's model picker, else Claude.
-fn default_choice(d: &Daemon) -> Result<LoadoutEntry> {
+pub(crate) fn default_choice(d: &Daemon) -> Result<LoadoutEntry> {
     let settings = d.settings.get();
     if settings.default_agent.is_some() || settings.default_model.is_some() {
         return Ok(LoadoutEntry {
@@ -4090,7 +4090,7 @@ fn default_choice(d: &Daemon) -> Result<LoadoutEntry> {
 /// What a chat of `agent` gets when the user picked no model (a design chat, a fork into the other
 /// agent): the user's default model when it is that agent's, else its first favorite of the model
 /// picker, else the agent's own default.
-fn agent_choice(d: &Daemon, agent: AgentKind) -> Result<LoadoutEntry> {
+pub(crate) fn agent_choice(d: &Daemon, agent: AgentKind) -> Result<LoadoutEntry> {
     let default = default_choice(d)?;
     if default.agent == agent {
         return Ok(default);

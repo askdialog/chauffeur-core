@@ -8,6 +8,7 @@ import { SettingsDialog } from "./components/SettingsDialog";
 import { FindRoutinesDialog } from "./components/FindRoutinesDialog";
 import { TransferBatch } from "./components/TransferBatch";
 import { ShowSidebarButton } from "./components/ShowSidebarButton";
+import { ReviewsPage } from "./components/ReviewsPage";
 import { SharingPage } from "./components/SharingPage";
 import { Sidebar } from "./components/Sidebar";
 import { Button, cx, EmptyState, Kbd } from "./components/ui";
@@ -19,6 +20,7 @@ import {
   goInHistory,
   goToWorkspace,
   openCreate,
+  openReviewConversation,
   openSettings,
   openSwitcher,
   requestFiles,
@@ -46,6 +48,7 @@ export function App() {
   const loaded = useApp((s) => s.workspacesLoaded);
   const firstRun = useApp((s) => s.workspacesLoaded && Object.keys(s.workspaces).length === 0);
   const sidebarHidden = useApp((s) => s.sidebarHidden);
+  const reviewsShown = useApp((s) => s.reviewsShown);
   const sharingShown = useApp((s) => s.sharingShown);
   const officeShown = useApp((s) => s.officeShown);
   // The Office is there only while it shows: closed, it lets go of its scene, models and textures,
@@ -64,7 +67,7 @@ export function App() {
             </ErrorBoundary>
           </div>
         )}
-        {officeShown ? null : sharingShown ? <SharingPage /> : workspace ? (
+        {officeShown ? null : reviewsShown ? <ErrorBoundary><ReviewsPage onOpenSource={openReviewConversation} /></ErrorBoundary> : sharingShown ? <SharingPage /> : workspace ? (
           <ErrorBoundary key={workspace.id}>
             <WorkspaceView workspace={workspace} />
           </ErrorBoundary>
@@ -185,7 +188,7 @@ function useShortcuts() {
   }, []);
 
   // Drop a selection that no longer exists once the list is known.
-  const selectedMissing = useApp((s) => s.workspacesLoaded && !!s.selectedId && !s.workspaces[s.selectedId]);
+  const selectedMissing = useApp((s) => s.workspacesLoaded && !s.reviewsShown && !!s.selectedId && !s.workspaces[s.selectedId]);
   useEffect(() => {
     if (selectedMissing) selectWorkspace(null);
   }, [selectedMissing]);

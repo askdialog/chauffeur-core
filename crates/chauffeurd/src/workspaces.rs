@@ -628,11 +628,11 @@ impl WorkspaceManager {
         self.create_for_review(params, None, None).await
     }
 
-    /// `day` claims that day's daily review for the new workspace, filed in `section`.
+    /// Claims the daily or weekly review atomically with its workspace, filed in `section`.
     pub(crate) async fn create_for_review(
         &self,
         mut params: CreateWorkspaceParams,
-        day: Option<&str>,
+        review: Option<(&str, crate::daily_review::ReviewKind)>,
         section: Option<String>,
     ) -> Result<CreateWorkspaceResult> {
         let d = self.d();
@@ -809,7 +809,7 @@ impl WorkspaceManager {
                 .or(section),
             house_position: None,
         };
-        d.store.insert_review_workspace(&row, day)?;
+        d.store.insert_review_workspace(&row, review)?;
         self.publish(&row.id);
         for warning in ticket_warnings {
             self.warn(&row.id, warning);

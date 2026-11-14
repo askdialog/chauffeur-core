@@ -251,6 +251,8 @@ import type { ReposPageResult } from "./ReposPageResult";
 import type { ResizeTerminalParams } from "./ResizeTerminalParams";
 import type { RespondParams } from "./RespondParams";
 import type { RetitleWorkspaceParams } from "./RetitleWorkspaceParams";
+import type { ReviewFollowUpParams } from "./ReviewFollowUpParams";
+import type { ReviewsInfo } from "./ReviewsInfo";
 import type { RoutineCreateParams } from "./RoutineCreateParams";
 import type { RoutineEditParams } from "./RoutineEditParams";
 import type { RoutineFindInfo } from "./RoutineFindInfo";
@@ -357,7 +359,7 @@ import type { WorktreeCreateParams } from "./WorktreeCreateParams";
 import type { WorktreeCreateResult } from "./WorktreeCreateResult";
 import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 
-export const PROTOCOL_VERSION = 16;
+export const PROTOCOL_VERSION = 17;
 export const MIN_PROTOCOL_VERSION = 1;
 export const PEER_PROTOCOL_VERSION = 3;
 
@@ -451,6 +453,9 @@ export type ClientMethods = {
   "routine.set_active": [RoutineSetActiveParams, RoutineInfo];
   "routine.history": [RoutineParams, RoutineHistory];
   "routine.delete": [RoutineParams, RoutinesResult];
+  "reviews.info": [EmptyParams, ReviewsInfo];
+  "reviews.refresh": [EmptyParams, ReviewsInfo];
+  "reviews.follow_up": [ReviewFollowUpParams, ReviewsInfo];
   "routine.suggestions": [EmptyParams, RoutineFindInfo];
   "routine.find": [RoutineFindParams, RoutineFindInfo];
   "routine.suggestion_create": [RoutineSuggestionParams, RoutineInfo];
@@ -829,6 +834,9 @@ export const METHOD_NAMES = [
   "routine.set_active",
   "routine.history",
   "routine.delete",
+  "reviews.info",
+  "reviews.refresh",
+  "reviews.follow_up",
   "routine.suggestions",
   "routine.find",
   "routine.suggestion_create",

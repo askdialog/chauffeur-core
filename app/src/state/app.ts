@@ -145,6 +145,7 @@ export type AppState = {
   /** The sidebar's width in pixels, dragged from its right edge. */
   sidebarWidth: number;
   sharingShown: boolean;
+  reviewsShown: boolean;
   /** The 3D Office (docs/office.md) fills the main area instead of the selected workspace. */
   officeShown: boolean;
   /** The daemon's Office is on (`office.state` says it is configured); off, nothing shows it. */
@@ -255,6 +256,7 @@ export const useApp = create<AppState>(() => ({
   sidebarHidden: localStorage.getItem(SIDEBAR_KEY) === "1",
   sidebarWidth: storedSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_KEY)),
   sharingShown: false,
+  reviewsShown: false,
   officeShown: false,
   officeEnabled: false,
   extensions: null,
@@ -319,7 +321,7 @@ function select(id: string | null) {
   if (id) localStorage.setItem(SELECTED_KEY, id);
   else localStorage.removeItem(SELECTED_KEY);
   const { selectedId, nav } = get();
-  set({ sharingShown: false, selectedId: id, nav: id ? visit(nav, selectedId, id) : nav, switcherOpen: false });
+  set({ sharingShown: false, reviewsShown: false, selectedId: id, nav: id ? visit(nav, selectedId, id) : nav, switcherOpen: false });
   keptUnread = null;
   if (id) markSeen(id);
 }
@@ -348,7 +350,7 @@ function reachable(workspaces: Record<string, WorkspaceInfo>, id: string): boole
 /** Shows the 3D Office in the main area, or the selected workspace again. */
 export function showOffice(shown = !get().officeShown) {
   if (shown && !get().officeEnabled) return;
-  set({ sharingShown: false, officeShown: shown });
+  set({ sharingShown: false, reviewsShown: false, officeShown: shown });
 }
 
 /** Said in the Office in the browser of what only the app does. */
@@ -480,7 +482,7 @@ export async function setWorkspaceSection(workspace: string, section: string | n
 
 /** Whether the user is looking at this workspace right now. */
 function viewing(id: string): boolean {
-  return windowFocused() && get().selectedId === id;
+  return windowFocused() && !get().reviewsShown && get().selectedId === id;
 }
 
 /** Opens an archived conversation at the message found, without changing its closed state. */
@@ -1574,5 +1576,29 @@ export function chatsOf(chats: Record<string, ChatInfo>, workspaceId: string): C
 }
 
 export function showSharing() {
-  set({ sharingShown: true, officeShown: false });
+  set({ sharingShown: true, reviewsShown: false, officeShown: false });
+}
+
+/** Opens the global review overview without changing any report conversation. */
+export function showReviews() {
+  set({ reviewsShown: true, sharingShown: false, officeShown: false });
+}
+
+/** Opens a live or archived review source at its cited event, preserving its closed state. */
+export async function openReviewConversation(workspaceId: string, chatId: string, sourceSeq?: number): Promise<void> {
+  const [workspace, result] = await Promise.all([
+    client.call("workspace.get", {workspace: workspaceId}),
+    client.call("chat.list", {workspace: workspaceId, all: true}),
+  ]);
+  if (!result.chats.some(c => c.id === chatId)) throw new Error("This source conversation is no longer available");
+  upsertWorkspace(workspace);
+  upsertChats(result.chats);
+  set({officeShown: false});
+  if (sourceSeq !== undefined) openSearchMatch(workspaceId, chatId, sourceSeq, "");
+  else {
+    selectWorkspace(workspaceId);
+    selectChat(workspaceId, chatId);
+    setTab(workspaceId, "chat");
+    clearSearchMatch();
+  }
 }

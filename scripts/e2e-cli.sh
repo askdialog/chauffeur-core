@@ -52,6 +52,12 @@ TOML
 
 c() { "$BIN/chauffeur" "$@"; }
 c daemon start
+echo "== reviews. history is empty on a fresh daemon and no model runs without reports"
+bun scripts/app-call.ts reviews.info '{}' | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["reports"] == [] and r["followups"] == [] and r["projection"] is None and not r["running"] and not r["auto_refresh_enabled"], r'
+if bun scripts/app-call.ts reviews.refresh '{}' > "$T/reviews-refresh.txt" 2>&1; then
+  echo "review insights ran without a report"; exit 1
+fi
+python3 -c 'import sys; text=open(sys.argv[1]).read(); assert "No review text" in text, text' "$T/reviews-refresh.txt"
 if [[ -f distribution/e2e-extensions.sh ]]; then
   # shellcheck source=/dev/null
   source distribution/e2e-extensions.sh

@@ -82,6 +82,7 @@ pub mod relay_ports;
 pub mod remote;
 pub mod repos;
 pub mod review_wake;
+pub mod reviews;
 pub mod routines;
 pub mod rpc;
 pub mod runtime;
@@ -139,6 +140,7 @@ pub struct Daemon {
     pub extension_web: extensions::web::ExtensionWeb,
     pub paths: paths::Paths,
     pub settings: Arc<settings::LiveSettings>,
+    pub(crate) review_insights: reviews::ReviewInsights,
     pub(crate) review_settings_lock: tokio::sync::Mutex<()>,
     pub store: store::Store,
     pub remote: remote::RemoteTrust,
@@ -265,6 +267,7 @@ impl Daemon {
             power: power::Power::new(&paths.home),
             search: search::Search::new(weak.clone(), &paths),
             paths,
+            review_insights: Default::default(),
             review_settings_lock: tokio::sync::Mutex::new(()),
             settings,
             store,
