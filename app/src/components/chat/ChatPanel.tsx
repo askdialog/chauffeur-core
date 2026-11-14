@@ -111,6 +111,7 @@ import { AttachButton, DropOverlay, ImageStrip, useImageAttachments } from "./Im
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { ContextMeter } from "./ContextMeter";
 import { McpServers } from "./McpServers";
+import { ChildRequestsPanel, respondTo, useChildRequests } from "./ChildRequests";
 import { QuestionPrompt } from "./QuestionPrompt";
 import { QueuePanel } from "./QueuePanel";
 import { TasksPanel } from "./TasksPanel";
@@ -877,6 +878,13 @@ export function ChatConversation({
   const requests = chat.status === "idle" ? [] : openRequests(view);
   // The oldest open question is answered in place of the composer; permissions stay in the list.
   const question = requests.find((r): r is QuestionItem => r.kind === "question") ?? null;
+  // A child workspace's requests show here too; its oldest question takes the composer's place
+  // when the chat has none of its own, until Esc sets it aside.
+  const childRequests = useChildRequests(chat.workspace_id);
+  const [asideQuestions, setAsideQuestions] = useState<ReadonlySet<string>>(() => new Set());
+  const childQuestion = readOnly || question
+    ? null
+    : (childRequests.find((r) => r.item.kind === "question" && !asideQuestions.has(r.item.requestId)) ?? null);
   const permissions = requests.filter((r) => r.kind === "permission" || r.kind === "elicitation");
   // An AskUserQuestion call answered through its question is shown there only.
   const items = useMemo(() => view.items.filter((item) => !(item.kind === "tool" && item.asked)), [view.items]);
@@ -1272,6 +1280,24 @@ export function ChatConversation({
           </button>
         </div>
       )}
+      {!readOnly && (
+        <ChildRequestsPanel
+          requests={childRequests}
+          shownQuestion={childQuestion?.item.requestId ?? null}
+          onAnswer={(requestId) =>
+            setAsideQuestions((current) => {
+              const next = new Set(current);
+              next.delete(requestId);
+              // The questions before it go aside, so that this one is the oldest shown.
+              for (const r of childRequests) {
+                if (r.item.requestId === requestId) break;
+                if (r.item.kind === "question") next.add(r.item.requestId);
+              }
+              return next;
+            })
+          }
+        />
+      )}
       {signedOut && !readOnly && (
         <div className="mx-auto flex w-full max-w-[860px] items-center gap-2 px-5 pb-1 text-[12px] text-danger" data-testid="chat-signed-out">
           <span className="h-1.5 w-1.5 rounded-full bg-danger" />
@@ -1316,6 +1342,13 @@ export function ChatConversation({
         </div>
       ) : question ? (
         <QuestionPrompt key={question.requestId} item={question} respond={respond} />
+      ) : childQuestion?.item.kind === "question" ? (
+        <QuestionPrompt
+          key={childQuestion.item.requestId}
+          item={childQuestion.item}
+          respond={respondTo(childQuestion)}
+          onEscape={() => setAsideQuestions((current) => new Set(current).add(childQuestion.item.requestId))}
+        />
       ) : (
         <ComposerBox
           key={chat.id}

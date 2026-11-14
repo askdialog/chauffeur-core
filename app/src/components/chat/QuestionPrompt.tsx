@@ -32,9 +32,12 @@ export const DECLINED =
 export function QuestionPrompt({
   item,
   respond,
+  onEscape,
 }: {
   item: QuestionItem;
   respond: (requestId: string, response: RequestResponse) => Promise<void>;
+  /** Esc sets the question aside rather than declining it: a child's, answered from its parent. */
+  onEscape?: () => void;
 }) {
   const questions = item.questions;
   const [state, setState] = useState(() => initialState(questions));
@@ -94,7 +97,10 @@ export function QuestionPrompt({
     else if (/^[1-9]$/.test(key)) void apply(choose(questions, state, Number(key) - 1));
     else if (review && (key === "ArrowRight" || (key === "Tab" && !event.shiftKey))) setState(goToTab(questions, state, state.tab + 1));
     else if (review && (key === "ArrowLeft" || (key === "Tab" && event.shiftKey))) setState(goToTab(questions, state, state.tab - 1));
-    else if (key === "Escape") void apply({ state, send: false, decline: true });
+    else if (key === "Escape") {
+      if (onEscape) onEscape();
+      else void apply({ state, send: false, decline: true });
+    }
     else return;
     event.preventDefault();
   };
@@ -264,7 +270,7 @@ export function QuestionPrompt({
         <div className="mt-3 flex items-center gap-2 text-[11px] text-faint">
           {busy && <Spinner size={10} />}
           <span>
-            Enter to select · ↑↓ to move{review ? " · ←→ between questions" : ""} · Esc to answer in the chat
+            Enter to select · ↑↓ to move{review ? " · ←→ between questions" : ""} · Esc {onEscape ? "to set it aside" : "to answer in the chat"}
           </span>
         </div>
       </div>

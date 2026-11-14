@@ -32,6 +32,7 @@ import type {
   AssistantItem,
   ChatItem,
   ChatRow,
+  ElicitationItem,
   NoticeItem,
   PermissionItem,
   QuestionItem,
@@ -146,6 +147,17 @@ export const ChatRowView = memo(function ChatRowView({
   );
 });
 
+/** A permission request or an MCP confirmation, as the chat shows it: also shown in a parent's chat. */
+export function RequestCard({ item, readOnly, respond }: { item: PermissionItem | ElicitationItem; readOnly: boolean; respond: Respond }) {
+  if (item.kind === "elicitation") return <ElicitationCard item={item} readOnly={readOnly} respond={respond} />;
+  const proposal = repoProposal(item);
+  return proposal ? (
+    <AddRepoCard item={item} proposal={proposal} readOnly={readOnly} respond={respond} />
+  ) : (
+    <PermissionCard item={item} readOnly={readOnly} respond={respond} />
+  );
+}
+
 function ItemBody({
   item,
   working,
@@ -172,16 +184,9 @@ function ItemBody({
         ) : (
           <ToolCall item={item} working={working} />
         );
-      case "permission": {
-        const proposal = repoProposal(item);
-        return proposal ? (
-          <AddRepoCard item={item} proposal={proposal} readOnly={readOnly} respond={respond} />
-        ) : (
-          <PermissionCard item={item} readOnly={readOnly} respond={respond} />
-        );
-      }
+      case "permission":
       case "elicitation":
-        return <ElicitationCard item={item} readOnly={readOnly} respond={respond} />;
+        return <RequestCard item={item} readOnly={readOnly} respond={respond} />;
       case "question":
         return <QuestionRecord item={item} />;
       case "notice":
