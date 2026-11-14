@@ -53,14 +53,16 @@ impl Process {
         env: &BTreeMap<String, String>,
         services: Arc<dyn Services>,
     ) -> Result<Arc<Self>> {
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .env_clear()
             .envs(env)
             .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
+            .stderr(Stdio::inherit());
+        let mut child = crate::procs::spawn_when_free(|| command.spawn())
+            .await
             .map_err(|error| {
                 Error::Unavailable(format!(
                     "Could not start {}: {error}; reinstall this extension",
