@@ -129,6 +129,20 @@
   border: 1px solid var(--color-line);
   border-radius: 6px;
 }
+/* Maths (KaTeX): its serif is small and tight beside the interface's sans, so it is drawn a little
+   larger with room between lines. A formula only wraps between its terms, never inside a word. */
+.md .katex {
+  font-size: 1.28em;
+  line-height: 1.5;
+}
+.md .katex .base {
+  white-space: nowrap;
+}
+.md .katex-display {
+  margin: 1.1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
 /* A ```mermaid block, drawn. */
 .md .md-mermaid {
   margin: 0.5em 0;

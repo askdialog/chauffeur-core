@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import { foldText } from "./chatFind";
 import { markdownBlocks, markdownText, remarkPlugins } from "./markdown";
 
@@ -103,4 +104,15 @@ describe("markdownBlocks", () => {
       expect(markdownBlocks(text)).toEqual([text]);
     }
   });
+});
+
+test("maths between dollars gives its source to find in a chat", () => {
+  expect(markdownText("Soit $c^* = \\max_j x_j$ ici")).toBe("Soit c^* = \\max_j x_j ici");
+});
+
+test("a formula is drawn by KaTeX and a broken one stays as written", () => {
+  const html = (text: string) =>
+    renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins, rehypePlugins: [[rehypeKatex, { throwOnError: false, strict: false }]] }, text));
+  expect(html("$$p_i = \\frac{a}{2} \\qquad \\text{écarté si } x < 0{,}5$$")).toContain('class="katex');
+  expect(html("$\\frac{$")).not.toContain("katex-error\" style");
 });

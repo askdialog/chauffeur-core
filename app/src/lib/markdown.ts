@@ -4,6 +4,7 @@
 import type { Nodes } from "hast";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
 import { type PluggableList, unified } from "unified";
@@ -11,8 +12,9 @@ import { parseDeliverable } from "./deliverables";
 import { remarkFileCitations } from "./fileCitations";
 import { remarkCodeComments } from "./codeComments";
 
-// Agents write single newlines meaning line breaks (lists of lines, poems, logs).
-export const remarkPlugins: PluggableList = [remarkCodeComments, remarkGfm, remarkBreaks, remarkFileCitations];
+// Agents write single newlines meaning line breaks (lists of lines, poems, logs). `$…$` and `$$…$$`
+// are maths, drawn by rehype-katex in components/Markdown.tsx.
+export const remarkPlugins: PluggableList = [remarkCodeComments, remarkGfm, remarkMath, remarkBreaks, remarkFileCitations];
 
 // As react-markdown builds its tree: raw HTML is kept, and shown as text.
 const processor = unified().use(remarkParse).use(remarkPlugins).use(remarkRehype, { allowDangerousHtml: true });

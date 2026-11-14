@@ -1,8 +1,11 @@
 import { createContext, memo, useContext, useState } from "react";
 import type { Element } from "hast";
+import rehypeKatex from "rehype-katex";
 import ReactMarkdown, { type Components, defaultUrlTransform } from "react-markdown";
+import "katex/dist/katex.min.css";
 import { codeBlockText } from "@/lib/codeBlock";
 import { highlight } from "@/lib/highlight";
+import type { PluggableList } from "unified";
 import { markdownBlocks, remarkPlugins } from "@/lib/markdown";
 import { openExternal } from "@/lib/native";
 import { parseDeliverable } from "@/lib/deliverables";
@@ -44,6 +47,9 @@ function Pre({ node, children }: { node?: Element; children?: React.ReactNode })
     </div>
   );
 }
+
+// A formula KaTeX cannot parse stays as written, not as a red error.
+const rehypePlugins: PluggableList = [[rehypeKatex, { throwOnError: false, strict: false }]];
 
 const components: Components = {
   table({ node, children, ...props }) {
@@ -187,7 +193,7 @@ function urlTransform(url: string): string {
 
 const Block = memo(function Block({ text }: { text: string }) {
   return (
-    <ReactMarkdown remarkPlugins={remarkPlugins} components={components} urlTransform={urlTransform}>
+    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components} urlTransform={urlTransform}>
       {text}
     </ReactMarkdown>
   );
