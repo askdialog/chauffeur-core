@@ -18811,6 +18811,14 @@ async fn daily_reviews_catch_up_once_with_evidence_and_the_chosen_model() {
     d.chats.close(&chat.id, true).await.unwrap();
     d.workspaces.archive(&source.id, true).await.unwrap();
     let today = Local::now().date_naive();
+    // Daily reviews only: on a Sunday the weekly synthesis would add its own workspace (its
+    // schedule has tests of its own in daily_review.rs).
+    d.store
+        .kv_set(
+            "weekly_review.next_day",
+            &(today + Days::new(30)).to_string(),
+        )
+        .unwrap();
     let at = |date: chrono::NaiveDate, hour| {
         Local
             .from_local_datetime(&date.and_hms_opt(hour, 0, 0).unwrap())
