@@ -3222,6 +3222,7 @@ mod tests {
             activity: chauffeur_protocol::model::Activity::Idle,
             explore: false,
             daily_review_date: None,
+            weekly_review: false,
             tickets: vec![],
             worktrees: vec![],
             port_base: 0,

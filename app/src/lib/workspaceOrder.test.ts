@@ -117,6 +117,7 @@ describe("sections", () => {
       ws("a", "10:00"),
       ws("r1", "11:00", { daily_review_date: "2026-11-14", section_id: "api", activity: "working" }),
       ws("r2", "12:00", { daily_review_date: "2026-11-13", state: "archived" }),
+      ws("r3", "13:00", { daily_review_date: "2026-11-15", weekly_review: true, section_id: "api" }),
     );
     expect(sidebarGroups(withReviews, sections()).map((g) => [g.key, ids(g.rows)])).toEqual([
       ["api", []],

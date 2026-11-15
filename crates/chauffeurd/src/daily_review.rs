@@ -41,14 +41,22 @@ const SECTION: &str = "daily_review.section";
 const SECTION_NAME: &str = "Daily reviews";
 
 impl Store {
-    pub(crate) fn review_day(&self, workspace: &str) -> Result<Option<String>> {
+    /// The date of a daily or weekly review's workspace, and whether it is the weekly one.
+    pub(crate) fn review_day(&self, workspace: &str) -> Result<Option<(String, bool)>> {
         self.with(|c| {
-            c.query_row(
-                "SELECT day FROM daily_reviews WHERE workspace_id = ?1",
-                [workspace],
-                |r| r.get(0),
-            )
-            .optional()
+            for (table, weekly) in [("daily_reviews", false), ("weekly_reviews", true)] {
+                let day: Option<String> = c
+                    .query_row(
+                        &format!("SELECT day FROM {table} WHERE workspace_id = ?1"),
+                        [workspace],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                if let Some(day) = day {
+                    return Ok(Some((day, weekly)));
+                }
+            }
+            Ok(None)
         })
     }
 

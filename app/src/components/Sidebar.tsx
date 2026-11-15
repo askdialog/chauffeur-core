@@ -667,9 +667,12 @@ function SectionHeading({
           </span>
         )}
         {routines && <FindRoutinesButton />}
-        <span className="shrink-0 text-[10.5px] font-normal tabular-nums normal-case" data-testid="section-count">
-          {rows.length}
-        </span>
+        {/* The reviews' section lists none: its count would always read 0. */}
+        {!section.reviews && (
+          <span className="shrink-0 text-[10.5px] font-normal tabular-nums normal-case" data-testid="section-count">
+            {rows.length}
+          </span>
+        )}
       </div>
       {menu && (
         <ContextMenu

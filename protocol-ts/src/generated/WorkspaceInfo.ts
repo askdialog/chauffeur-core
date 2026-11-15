@@ -26,7 +26,11 @@ explore: boolean,
 /**
  * Local date of the automatic session review, independent of its displayed name.
  */
-daily_review_date?: string, tickets: Array<TicketRef>, worktrees: Array<WorktreeInfo>, 
+daily_review_date?: string, 
+/**
+ * The review is the weekly synthesis: `daily_review_date` then holds its date.
+ */
+weekly_review: boolean, tickets: Array<TicketRef>, worktrees: Array<WorktreeInfo>, 
 /**
  * First port of the workspace's block (`CHAUFFEUR_PORT`).
  */

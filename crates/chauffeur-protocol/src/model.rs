@@ -142,6 +142,9 @@ pub struct WorkspaceInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub daily_review_date: Option<String>,
+    /// The review is the weekly synthesis: `daily_review_date` then holds its date.
+    #[serde(default)]
+    pub weekly_review: bool,
     pub tickets: Vec<TicketRef>,
     pub worktrees: Vec<WorktreeInfo>,
     /// First port of the workspace's block (`CHAUFFEUR_PORT`).

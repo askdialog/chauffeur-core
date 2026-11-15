@@ -141,6 +141,7 @@ impl WorkspaceManager {
                 .map(|s| s.name),
             None => None,
         };
+        let review = d.store.review_day(&row.id)?;
         Ok(WorkspaceInfo {
             id: row.id.clone(),
             slug: row.slug.clone(),
@@ -154,7 +155,8 @@ impl WorkspaceManager {
                 |r| r.activity,
             ),
             explore: row.explore,
-            daily_review_date: d.store.review_day(&row.id)?,
+            daily_review_date: review.as_ref().map(|(day, _)| day.clone()),
+            weekly_review: review.as_ref().is_some_and(|(_, weekly)| *weekly),
             tickets: row.tickets.clone(),
             worktrees,
             port_base: block.as_ref().map(|b| b.base).unwrap_or(0),
