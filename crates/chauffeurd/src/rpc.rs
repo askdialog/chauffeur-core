@@ -586,41 +586,19 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::FilesComments(params) => {
             to_value(crate::file_comments::list(daemon, &params.workspace, &params.path).await?)
         }
-        ClientCall::DeckRead(params) => to_value(crate::deck::read(daemon, &params)?),
-        ClientCall::DeckChange(params) => to_value(crate::deck::change(daemon, &params)?),
-        ClientCall::DeckEditText(params) => to_value(crate::deck::edit_text(daemon, &params)?),
-        ClientCall::DeckExport(params) => {
-            to_value(crate::deck_export::export(daemon, &params).await?)
-        }
-        ClientCall::DeckPresent(params) => {
-            to_value(crate::deck_export::presenter(daemon, &params)?)
-        }
-        ClientCall::DeckApplyBrand(params) => to_value(crate::deck::apply_brand(daemon, &params)?),
-        ClientCall::DeliverablesVersions(params) => {
-            let (row, _) = file_roots(daemon, &params.workspace)?;
-            to_value(
-                crate::versions::folder_of(std::path::Path::new(&row.path), &params.path)
-                    .map(|folder| crate::versions::list(&folder))
-                    .unwrap_or_default(),
-            )
-        }
-        ClientCall::DeliverablesRestore(params) => {
-            let (row, _) = file_roots(daemon, &params.workspace)?;
-            let folder = crate::versions::folder_of(std::path::Path::new(&row.path), &params.path)
-                .ok_or_else(|| Error::BadRequest(format!("{} keeps no versions", params.path)))?;
-            to_value(crate::versions::restore(&folder, params.n)?)
-        }
-        ClientCall::BrandsList(_) => to_value(crate::brands::list(daemon)),
-        ClientCall::BrandsCreate(params) => to_value(crate::brands::create(daemon, params).await?),
-        ClientCall::BrandsDelete(params) => to_value(crate::brands::delete(daemon, &params.id)?),
-        ClientCall::BrandsSetDefault(params) => {
-            to_value(crate::brands::set_default(daemon, params.id.as_deref())?)
-        }
-        ClientCall::ChatSetBrand(params) => to_value(
-            daemon
-                .chats
-                .set_brand(&params.chat, params.brand.as_deref())?,
-        ),
+        call @ (ClientCall::DeckRead(_)
+        | ClientCall::DeckChange(_)
+        | ClientCall::DeckEditText(_)
+        | ClientCall::DeckExport(_)
+        | ClientCall::DeckPresent(_)
+        | ClientCall::DeckApplyBrand(_)
+        | ClientCall::DeliverablesVersions(_)
+        | ClientCall::DeliverablesRestore(_)
+        | ClientCall::BrandsList(_)
+        | ClientCall::BrandsCreate(_)
+        | ClientCall::BrandsDelete(_)
+        | ClientCall::BrandsSetDefault(_)
+        | ClientCall::ChatSetBrand(_)) => handle_deliverables(daemon, call).await,
         ClientCall::FilesCommentAdd(params) => {
             to_value(crate::file_comments::add(daemon, &params).await?)
         }
@@ -995,6 +973,64 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
             Error::BadRequest("subscriptions are handled by the connection".into()),
         ),
     }
+}
+
+// Slide decks, deliverable versions and brands (docs/adr/slide-decks.md): their exports and a
+// brand chat's creation hold large futures, kept out of the general dispatch's frame.
+#[inline(never)]
+fn handle_deliverables(
+    daemon: &Arc<Daemon>,
+    call: ClientCall,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
+    Box::pin(async move {
+        match call {
+            ClientCall::DeckRead(params) => to_value(crate::deck::read(daemon, &params)?),
+            ClientCall::DeckChange(params) => to_value(crate::deck::change(daemon, &params)?),
+            ClientCall::DeckEditText(params) => to_value(crate::deck::edit_text(daemon, &params)?),
+            ClientCall::DeckExport(params) => {
+                to_value(crate::deck_export::export(daemon, &params).await?)
+            }
+            ClientCall::DeckPresent(params) => {
+                to_value(crate::deck_export::presenter(daemon, &params)?)
+            }
+            ClientCall::DeckApplyBrand(params) => {
+                to_value(crate::deck::apply_brand(daemon, &params)?)
+            }
+            ClientCall::DeliverablesVersions(params) => {
+                let (row, _) = file_roots(daemon, &params.workspace)?;
+                to_value(
+                    crate::versions::folder_of(std::path::Path::new(&row.path), &params.path)
+                        .map(|folder| crate::versions::list(&folder))
+                        .unwrap_or_default(),
+                )
+            }
+            ClientCall::DeliverablesRestore(params) => {
+                let (row, _) = file_roots(daemon, &params.workspace)?;
+                let folder =
+                    crate::versions::folder_of(std::path::Path::new(&row.path), &params.path)
+                        .ok_or_else(|| {
+                            Error::BadRequest(format!("{} keeps no versions", params.path))
+                        })?;
+                to_value(crate::versions::restore(&folder, params.n)?)
+            }
+            ClientCall::BrandsList(_) => to_value(crate::brands::list(daemon)),
+            ClientCall::BrandsCreate(params) => {
+                to_value(crate::brands::create(daemon, params).await?)
+            }
+            ClientCall::BrandsDelete(params) => {
+                to_value(crate::brands::delete(daemon, &params.id)?)
+            }
+            ClientCall::BrandsSetDefault(params) => {
+                to_value(crate::brands::set_default(daemon, params.id.as_deref())?)
+            }
+            ClientCall::ChatSetBrand(params) => to_value(
+                daemon
+                    .chats
+                    .set_brand(&params.chat, params.brand.as_deref())?,
+            ),
+            _ => unreachable!("only deliverable calls reach this handler"),
+        }
+    })
 }
 
 // Construct the future in a separate frame: debug builds otherwise reserve all these
