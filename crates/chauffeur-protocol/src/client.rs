@@ -939,6 +939,74 @@ methods! {
         #[access(Any)]
         #[relay(Local)]
         FilesCommentsSend(FileCommentsParams) -> CommentsSendResult,
+        /// A slide deck (docs/adr/slide-decks.md): its `deck.json` and slides, each with the URL the
+        /// reader frames it at; an earlier version, read-only, with `version`.
+        #[serde(rename = "deck.read")]
+        #[access(Any)]
+        #[relay(Local)]
+        DeckRead(crate::deck::DeckParams) -> crate::deck::DeckResult,
+        /// Reorders, skips, duplicates or deletes a slide, or changes its notes; a version is kept.
+        #[serde(rename = "deck.change")]
+        #[access(User)]
+        #[relay(Local)]
+        DeckChange(crate::deck::DeckChangeParams) -> crate::deck::DeckResult,
+        /// Writes a text retyped in the reader into its slide, refused when the slide no longer
+        /// holds the text edited; a version is kept.
+        #[serde(rename = "deck.edit_text")]
+        #[access(User)]
+        #[relay(Local)]
+        DeckEditText(crate::deck::DeckEditTextParams) -> crate::deck::DeckResult,
+        /// A deck as a PDF, one slide as a PNG, or the deck as one self-contained HTML page,
+        /// rendered by a headless Chrome of the machine into the deck's `exports/`.
+        #[serde(rename = "deck.export")]
+        #[access(Any)]
+        #[relay(Local)]
+        DeckExport(crate::deck::DeckExportParams) -> crate::deck::DeckExportResult,
+        /// A one-time page that presents the deck with its notes, a clock and the next slide, for the
+        /// user's browser; it opens the slides' own window to show on the audience's screen.
+        #[serde(rename = "deck.present")]
+        #[access(User)]
+        #[relay(Local)]
+        DeckPresent(crate::deck::DeckParams) -> String,
+        /// Copies the deck's brand again from the brand's folder, as it is now.
+        #[serde(rename = "deck.apply_brand")]
+        #[access(User)]
+        #[relay(Local)]
+        DeckApplyBrand(crate::deck::DeckParams) -> crate::deck::DeckResult,
+        /// A deliverable's versions, the newest first (docs/adr/deliverable-versions.md).
+        #[serde(rename = "deliverables.versions")]
+        #[access(Any)]
+        #[relay(Local)]
+        DeliverablesVersions(crate::deck::DeckParams) -> Vec<crate::deck::DeliverableVersion>,
+        /// Copies an earlier version back, as a new version.
+        #[serde(rename = "deliverables.restore")]
+        #[access(User)]
+        #[relay(Local)]
+        DeliverablesRestore(crate::deck::VersionRestoreParams) -> crate::deck::DeliverableVersion,
+        /// The user's brands and the default one (docs/adr/brands.md).
+        #[serde(rename = "brands.list")]
+        #[access(Any)]
+        #[relay(Local)]
+        BrandsList(EmptyParams) -> crate::deck::BrandsResult,
+        /// A new brand's folder and the brand chat that makes it.
+        #[serde(rename = "brands.create")]
+        #[access(User)]
+        #[relay(Local)]
+        BrandsCreate(crate::deck::BrandCreateParams) -> ChatInfo,
+        /// Removes a brand's folder; decks made with it keep their copy.
+        #[serde(rename = "brands.delete")]
+        #[access(User)]
+        #[relay(Local)]
+        BrandsDelete(crate::deck::BrandParams) -> crate::deck::BrandsResult,
+        #[serde(rename = "brands.set_default")]
+        #[access(User)]
+        #[relay(Local)]
+        BrandsSetDefault(crate::deck::BrandDefaultParams) -> crate::deck::BrandsResult,
+        /// The brand a chat builds with, from its next session.
+        #[serde(rename = "chat.set_brand")]
+        #[access(Any)]
+        #[relay(Local)]
+        ChatSetBrand(crate::deck::ChatBrandParams) -> ChatInfo,
         /// A markdown file's share (story 57): its state, as the Share dialog shows it.
         #[serde(rename = "files.share_state")]
         #[access(Any)]
@@ -2621,6 +2689,10 @@ pub struct FileCommentAddParams {
     /// reply takes its thread's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quote: Option<String>,
+    /// The point of a deck's slide commented on, with the element under it; a slide's comments
+    /// only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin: Option<CommentPin>,
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<String>,

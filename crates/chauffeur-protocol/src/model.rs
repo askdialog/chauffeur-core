@@ -386,6 +386,12 @@ pub struct ChatInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub forked_from_agent: Option<AgentKind>,
+    /// A chat: the brand its decks and documents are built with (`none`: no brand), the default
+    /// brand when absent. A design chat: the brand it makes, whose folder is its design folder
+    /// (docs/adr/brands.md).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub brand: Option<String>,
 }
 
 /// Steps done out of all, in an agent's plan.

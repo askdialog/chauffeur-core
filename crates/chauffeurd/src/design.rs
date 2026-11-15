@@ -45,6 +45,21 @@ pub fn design_dir(workspace_path: &str, chat_id: &str) -> std::io::Result<String
     Ok(dir.to_string_lossy().into_owned())
 }
 
+/// A design chat's folder: the brand's folder for a brand chat (docs/adr/brands.md), else
+/// [`design_dir`].
+pub fn folder_of(
+    daemon: &crate::Daemon,
+    workspace_path: &str,
+    chat: &chauffeur_protocol::model::ChatInfo,
+) -> std::io::Result<String> {
+    match chat.brand.as_deref() {
+        Some(id) => crate::brands::dir(daemon, id)
+            .map(|dir| dir.to_string_lossy().into_owned())
+            .map_err(|error| std::io::Error::other(error.to_string())),
+        None => design_dir(workspace_path, &chat.id),
+    }
+}
+
 /// A design folder copied into another, as a share carries it (served kinds, no exports, no
 /// dotfiles), with its comments, none sent: the new chat's agent has read nothing.
 pub fn copy(from: &Path, to: &Path) -> crate::Result<()> {

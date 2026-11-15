@@ -144,7 +144,7 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [A delegated chat outlives its parent's turn, and its answer comes as a message](delegated-chats-outlive-the-parents-turn.md) | 2026-11-09 | accepted |
 | [Find routines: proposing routines from the user's own recent requests](find-routines.md) | 2026-11-09 | accepted |
 | [One design comment thread is sent to the agent alone](send-one-comment-thread.md) | 2026-11-09 | accepted |
-| [HTML and PDF deliverables stay in their conversation](chat-document-deliverables.md) | 2026-11-10 | accepted |
+| [HTML and PDF deliverables stay in their conversation](chat-document-deliverables.md) | 2026-11-10 | version history superseded by [deliverable-versions](deliverable-versions.md) |
 | [Core CI checks the changed surface and packages Linux on a separate schedule](core-ci-by-changed-surface.md) | 2026-11-10 | accepted |
 | [Core starts with a new GitHub repository and a single initial commit](core-fresh-public-history.md) | 2026-11-10 | accepted |
 | [Independent extension releases share the Core download repository](independent-extension-releases-on-core.md) | 2026-11-10 | accepted |
@@ -152,7 +152,10 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Separate Core and Dialog release artifacts](separate-core-and-dialog-releases.md) | 2026-11-11 | accepted |
 | [A chat's images are saved to Downloads by the desktop shell](attachments-saved-to-downloads.md) | 2026-11-13 | accepted |
 | [A shared markdown file can carry the files it links to, on the same link](share-linked-files.md) | 2026-11-13 | accepted |
+| [Brands give decks and documents one look, shared by link](brands.md) | 2026-11-14 | accepted |
 | [A child workspace's requests reach its parent, where the user or the parent's agent answers them](child-questions-reach-the-parent.md) | 2026-11-14 | accepted |
+| [Deliverables keep their versions](deliverable-versions.md) | 2026-11-14 | accepted |
 | [Reviews has an overview, evidence and dated recommendation follow-up](reviews-interface.md) | 2026-11-14 | accepted |
 | [Reviews learn across days and follow their recommendations](reviews-learn-across-days.md) | 2026-11-14 | accepted |
+| [Slide decks are chat deliverables with a reader, presenting and text editing](slide-decks.md) | 2026-11-14 | accepted |
 | [The phone creates a workspace on the Mac](mobile-workspace-creation.md) | 2026-11-15 | accepted |

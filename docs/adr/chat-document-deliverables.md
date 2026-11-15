@@ -1,7 +1,7 @@
 # HTML and PDF deliverables stay in their conversation
 
 - **Date:** 2026-11-10
-- **Status:** accepted
+- **Status:** version history superseded by [deliverable-versions](deliverable-versions.md)
 
 ## Context
 

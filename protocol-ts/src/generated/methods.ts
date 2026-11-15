@@ -30,7 +30,12 @@ import type { BackupRecoverParams } from "./BackupRecoverParams";
 import type { BackupRecovered } from "./BackupRecovered";
 import type { BackupRecoveryPlan } from "./BackupRecoveryPlan";
 import type { BackupStatus } from "./BackupStatus";
+import type { BrandCreateParams } from "./BrandCreateParams";
+import type { BrandDefaultParams } from "./BrandDefaultParams";
+import type { BrandParams } from "./BrandParams";
+import type { BrandsResult } from "./BrandsResult";
 import type { CanvasResult } from "./CanvasResult";
+import type { ChatBrandParams } from "./ChatBrandParams";
 import type { ChatForkParams } from "./ChatForkParams";
 import type { ChatInfo } from "./ChatInfo";
 import type { ChatListParams } from "./ChatListParams";
@@ -102,6 +107,13 @@ import type { DatabaseQueryParams } from "./DatabaseQueryParams";
 import type { DatabaseResult } from "./DatabaseResult";
 import type { DatabaseSaveParams } from "./DatabaseSaveParams";
 import type { DatabaseTable } from "./DatabaseTable";
+import type { DeckChangeParams } from "./DeckChangeParams";
+import type { DeckEditTextParams } from "./DeckEditTextParams";
+import type { DeckExportParams } from "./DeckExportParams";
+import type { DeckExportResult } from "./DeckExportResult";
+import type { DeckParams } from "./DeckParams";
+import type { DeckResult } from "./DeckResult";
+import type { DeliverableVersion } from "./DeliverableVersion";
 import type { DesignComment } from "./DesignComment";
 import type { DesignExportParams } from "./DesignExportParams";
 import type { DesignExportResult } from "./DesignExportResult";
@@ -334,6 +346,7 @@ import type { TransferSizeEstimate } from "./TransferSizeEstimate";
 import type { UnsubscribeParams } from "./UnsubscribeParams";
 import type { UpdateStatus } from "./UpdateStatus";
 import type { UsageResult } from "./UsageResult";
+import type { VersionRestoreParams } from "./VersionRestoreParams";
 import type { WaitParams } from "./WaitParams";
 import type { WaitResult } from "./WaitResult";
 import type { WorkerClaudeConfigChunk } from "./WorkerClaudeConfigChunk";
@@ -359,7 +372,7 @@ import type { WorktreeCreateParams } from "./WorktreeCreateParams";
 import type { WorktreeCreateResult } from "./WorktreeCreateResult";
 import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 
-export const PROTOCOL_VERSION = 17;
+export const PROTOCOL_VERSION = 18;
 export const MIN_PROTOCOL_VERSION = 1;
 export const PEER_PROTOCOL_VERSION = 3;
 
@@ -548,6 +561,19 @@ export type ClientMethods = {
   "files.comment_delete": [FileCommentParams, EmptyParams];
   "files.comment_resolve": [FileCommentResolveParams, DesignComment];
   "files.comments_send": [FileCommentsParams, CommentsSendResult];
+  "deck.read": [DeckParams, DeckResult];
+  "deck.change": [DeckChangeParams, DeckResult];
+  "deck.edit_text": [DeckEditTextParams, DeckResult];
+  "deck.export": [DeckExportParams, DeckExportResult];
+  "deck.present": [DeckParams, string];
+  "deck.apply_brand": [DeckParams, DeckResult];
+  "deliverables.versions": [DeckParams, Array<DeliverableVersion>];
+  "deliverables.restore": [VersionRestoreParams, DeliverableVersion];
+  "brands.list": [EmptyParams, BrandsResult];
+  "brands.create": [BrandCreateParams, ChatInfo];
+  "brands.delete": [BrandParams, BrandsResult];
+  "brands.set_default": [BrandDefaultParams, BrandsResult];
+  "chat.set_brand": [ChatBrandParams, ChatInfo];
   "files.share_state": [FileCommentsParams, DesignShareState];
   "files.linked": [FileCommentsParams, FilesLinkedResult];
   "files.share_start": [FileShareStartParams, DesignShareState];
@@ -929,6 +955,19 @@ export const METHOD_NAMES = [
   "files.comment_delete",
   "files.comment_resolve",
   "files.comments_send",
+  "deck.read",
+  "deck.change",
+  "deck.edit_text",
+  "deck.export",
+  "deck.present",
+  "deck.apply_brand",
+  "deliverables.versions",
+  "deliverables.restore",
+  "brands.list",
+  "brands.create",
+  "brands.delete",
+  "brands.set_default",
+  "chat.set_brand",
   "files.share_state",
   "files.linked",
   "files.share_start",

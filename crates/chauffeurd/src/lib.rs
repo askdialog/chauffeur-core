@@ -10,6 +10,7 @@ pub const BUILD: &str = match option_env!("CHAUFFEUR_BUILD") {
 
 pub mod access;
 pub mod attachments;
+pub mod brands;
 pub mod canvas;
 pub mod chat_sends;
 pub mod chat_shell;
@@ -37,6 +38,8 @@ pub mod cloud_workspace_snapshot;
 pub mod comments;
 pub mod conductor;
 pub mod daily_review;
+pub mod deck;
+pub mod deck_export;
 pub mod design;
 pub mod design_export;
 pub mod diff;
@@ -103,6 +106,7 @@ pub mod terminals;
 pub mod transfer_controller;
 pub mod update;
 pub mod usage;
+pub mod versions;
 mod worker_claude_config;
 mod worker_credentials;
 pub mod worker_lifecycle;

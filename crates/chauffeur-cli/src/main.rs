@@ -1689,6 +1689,7 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
                     workspace,
                     path,
                     quote,
+                    pin: None,
                     text,
                     reply_to,
                 }))

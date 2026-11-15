@@ -27,6 +27,7 @@ pub mod cloud_backup;
 pub mod cloud_transfer;
 pub mod conductor;
 pub mod database;
+pub mod deck;
 pub mod design_share;
 pub mod dev_services;
 pub mod events;
@@ -47,7 +48,7 @@ pub mod workspace_share;
 /// The client protocol's version (`ClientCall`), sent by clients in `hello`. Bumped whenever its
 /// methods or their params' fields change: `protocol.lock` keeps the fingerprint of each version,
 /// and a test fails when the methods no longer match it.
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 
 /// The oldest client protocol the daemon still serves: clients of an older Chauffeur keep working
 /// against a newer daemon. Raised only when a method they rely on goes.

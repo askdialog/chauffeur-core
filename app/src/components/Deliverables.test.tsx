@@ -31,7 +31,7 @@ test("a document opens beside its chat, switches format, refreshes without reset
   const render = (revision: number, exports = [pdf], primary = html) => act(async () => { root.render(
     <Deliverables workspaceId="w" revision={revision}>
       <div data-testid="conversation">Conversation and draft</div>
-      <DeliverableCard document={{ title: "Report", path: primary, exports }} streaming={false} />
+      <DeliverableCard document={{ title: "Report", path: primary, exports, kind: "document" }} streaming={false} />
     </Deliverables>,
   ); });
   const click = async (label: string) => {

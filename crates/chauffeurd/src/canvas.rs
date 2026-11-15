@@ -27,6 +27,10 @@ use crate::{Daemon, Error, Result};
 /// Export PNG nor Open › Browser), story 51. The share service appends the same one.
 const CAPTURE_SCRIPT: &str = chauffeur_protocol::design_share::DESIGN_CAPTURE_SCRIPT;
 
+/// Appended with the capture script to a slide the deck reader frames (`?deck=1`): retyping
+/// its texts, its arrows sent to the reader (docs/adr/slide-decks.md).
+const DECK_READER_SCRIPT: &str = include_str!("deck_reader.js");
+
 /// What a screen may load: anything over https (CDNs, fonts), its own files, inline code; never
 /// plain http, so never localhost (the daemon, the user's dev servers). Only the app may frame it.
 const SCREEN_CSP: &str = "default-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval'; \
@@ -137,7 +141,7 @@ pub fn canvas(daemon: &Daemon, chat_key: &str) -> Result<CanvasResult> {
             "this Canvas is on another machine; open it on the Mac".into(),
         ));
     }
-    let dir = crate::design::design_dir(&workspace.path, &chat.id)
+    let dir = crate::design::folder_of(daemon, &workspace.path, &chat)
         .map_err(|error| Error::Internal(anyhow::anyhow!("the design folder: {error}")))?;
     let base = daemon.designs.base_url(&workspace.id, &chat.id);
     Ok(read_canvas(&chat.id, Path::new(&dir), base.as_deref()))
@@ -151,6 +155,10 @@ fn design_file(daemon: &Daemon, workspace: &str, chat_key: &str, file: &str) -> 
     let Ok(row) = daemon.workspaces.row(workspace) else {
         return None;
     };
+    if let Some(id) = chat.brand.as_deref() {
+        let (path, _) = screen_file(&crate::brands::dir(daemon, id).ok()?, file)?;
+        return Some(path);
+    }
     resource_path(Path::new(&row.path), &chat.id, file)
 }
 
@@ -310,6 +318,7 @@ async fn screen_handler(
 async fn file_handler(
     State(daemon): State<std::sync::Arc<Daemon>>,
     UrlPath((secret, workspace, path)): UrlPath<(String, String, String)>,
+    RawQuery(query): RawQuery,
 ) -> Response {
     let not_found = || (StatusCode::NOT_FOUND, "not found").into_response();
     if secret != daemon.designs.secret {
@@ -325,9 +334,19 @@ async fn file_handler(
         Some((id, machine)) => remote_workspace_file(&daemon, &machine, &id, &path).await,
         None => workspace_file(&daemon, &workspace, &path).await,
     };
-    let Some((media_type, bytes)) = file else {
+    let Some((media_type, mut bytes)) = file else {
         return not_found();
     };
+    if media_type.starts_with("text/html")
+        && crate::deck::is_slide(&path)
+        && asks(query.as_deref(), crate::deck::READER_QUERY)
+    {
+        for script in [CAPTURE_SCRIPT, DECK_READER_SCRIPT] {
+            bytes.extend_from_slice(b"\n<script>");
+            bytes.extend_from_slice(script.as_bytes());
+            bytes.extend_from_slice(b"</script>\n");
+        }
+    }
     (
         [
             (header::CONTENT_TYPE, media_type),

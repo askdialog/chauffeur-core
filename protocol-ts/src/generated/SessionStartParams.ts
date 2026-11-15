@@ -40,6 +40,11 @@ design_dir?: string,
  */
 notes_dir?: string, 
 /**
+ * The folder of the brand the chat builds with (`~/.chauffeur/brands/<id>`): Claude reads it
+ * without asking, though it sits outside its working directories.
+ */
+brand_dir?: string, 
+/**
  * Resume this agent session instead of starting a new one.
  */
 resume_session_id?: string, 

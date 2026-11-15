@@ -79,6 +79,7 @@ import { AGENT_NAMES, designChoice, effectiveLoadout, initialChoice, loadoutIn, 
 import { ExploreModePicker } from "../ExploreModePicker";
 import { ModelPicker } from "../ModelPicker";
 import { PermissionPicker } from "../PermissionPicker";
+import { BrandPicker } from "../BrandsSettings";
 import { Badge, Button, cx, DesignOnlyMode, EmptyState, IconButton, inputClass, Kbd, Modal, Spinner } from "../ui";
 import { ContextMenu, type MenuItem } from "../ContextMenu";
 import { FileLinkContext } from "../FileLinks";
@@ -1161,6 +1162,7 @@ export function ChatConversation({
             onChange={(permission_mode) => void configure({ permission_mode })}
           />
         )}
+        {!design && !explore && <BrandPicker chat={chat} />}
         {formatCost(view.costUsd) && !partial && (
           <span className="text-[11px] text-faint" title={view.costEstimated ? "Estimated token cost at API rates, including cache and Fast mode; excludes tool fees and may differ from your ChatGPT subscription charges." : undefined}>
             {formatCost(view.costUsd, view.costEstimated)}
@@ -1189,7 +1191,7 @@ export function ChatConversation({
     <ForkTurnContext.Provider value={forkTurn}>
     <SendNowContext.Provider value={sendNow}>
     <ShareCommentsContext.Provider value={owner.context}>
-    <Deliverables key={chat.id} workspaceId={chat.workspace_id} revision={view.turns}>
+    <Deliverables key={chat.id} workspaceId={chat.workspace_id} chat={chat} revision={view.turns}>
     <div ref={root} className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div
         className="group/list relative min-h-0 flex-1"

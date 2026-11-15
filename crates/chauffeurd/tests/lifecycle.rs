@@ -11766,6 +11766,7 @@ async fn a_shared_markdown_file_reaches_the_service_alone_and_a_reviewer_s_comme
             workspace: ws.id.clone(),
             path: path.into(),
             quote: Some("on Friday".into()),
+            pin: None,
             text: "Too early?".into(),
             reply_to: None,
         },

@@ -507,7 +507,7 @@ async fn deliverable_handler(
         // Only a peer on the owner's private Unix socket can request a path without a ticket.
         query.get("path").cloned()
     };
-    let Some(asked) = path.as_ref().filter(|path| deliverable_path(path)) else {
+    let Some(asked) = path.as_ref().filter(|path| downloadable_path(path)) else {
         return (
             StatusCode::UNAUTHORIZED,
             "download link expired: download the document again from its chat",
@@ -554,7 +554,10 @@ async fn deliverable_handler(
             .into_response();
     }
     let pdf = asked.to_ascii_lowercase().ends_with(".pdf");
-    if pdf && !crate::files::is_media("application/pdf", &bytes) {
+    let png = asked.to_ascii_lowercase().ends_with(".png");
+    if (pdf && !crate::files::is_media("application/pdf", &bytes))
+        || (png && !bytes.starts_with(b"\x89PNG\r\n\x1a\n"))
+    {
         return not_found();
     }
     let filename: String = asked
@@ -576,6 +579,8 @@ async fn deliverable_handler(
                 header::CONTENT_TYPE,
                 if pdf {
                     "application/pdf".to_string()
+                } else if png {
+                    "image/png".to_string()
                 } else {
                     "text/html; charset=utf-8".to_string()
                 },
@@ -594,6 +599,14 @@ async fn deliverable_handler(
         bytes,
     )
         .into_response()
+}
+
+/// What `/deliverables` downloads: an HTML or PDF document, or a PNG a deck exported.
+pub(crate) fn downloadable_path(path: &str) -> bool {
+    deliverable_path(path)
+        || (deliverable_path(&format!("{path}.html"))
+            && path.to_ascii_lowercase().ends_with(".png")
+            && path.contains(&format!("/{}/", crate::versions::EXPORTS_DIR)))
 }
 
 pub(crate) fn deliverable_path(path: &str) -> bool {

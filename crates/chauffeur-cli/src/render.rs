@@ -1474,6 +1474,7 @@ mod tests {
             parent_chat: None,
             parent_tool_use: None,
             forked_from_agent: None,
+            brand: None,
         };
         assert!(!chat_line(&chat).contains('\x1b'));
         assert!(chat_line(&chat).ends_with("fix [31mred[0m"));

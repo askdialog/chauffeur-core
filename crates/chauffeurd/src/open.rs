@@ -372,7 +372,7 @@ pub async fn open(daemon: &Daemon, params: &OpenParams) -> Result<OpenResult> {
                 )));
             }
             Some(
-                crate::design::design_dir(&workspace.path, &chat.id).map_err(|error| {
+                crate::design::folder_of(daemon, &workspace.path, &chat).map_err(|error| {
                     Error::Internal(anyhow::anyhow!("the design folder: {error}"))
                 })?,
             )

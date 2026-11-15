@@ -40,7 +40,7 @@ or set CHAUFFEUR_CHROME to a Chrome binary, then export again.";
 pub struct ExportPages(Mutex<HashMap<String, (String, Instant)>>);
 
 impl ExportPages {
-    fn add(&self, html: String) -> String {
+    pub(crate) fn add(&self, html: String) -> String {
         let token = random_hex();
         let mut pages = self.0.lock().unwrap();
         pages.retain(|_, (_, since)| since.elapsed() < PAGE_TTL);
@@ -53,7 +53,7 @@ impl ExportPages {
         self.0.lock().unwrap().remove(token).map(|(html, _)| html)
     }
 
-    fn forget(&self, token: &str) {
+    pub(crate) fn forget(&self, token: &str) {
         self.0.lock().unwrap().remove(token);
     }
 }
@@ -78,7 +78,7 @@ pub async fn export(daemon: &Daemon, params: &DesignExportParams) -> Result<Desi
         ));
     }
     let workspace = daemon.workspaces.row(&chat.workspace_id)?;
-    let dir = crate::design::design_dir(&workspace.path, &chat.id)
+    let dir = crate::design::folder_of(daemon, &workspace.path, &chat)
         .map_err(|error| Error::Internal(anyhow::anyhow!("the design folder: {error}")))?;
     let dir = Path::new(&dir);
     let base = daemon
@@ -237,14 +237,37 @@ fn export_path(dir: &Path, name: &str) -> PathBuf {
         .expect("some suffix is free")
 }
 
-/// Chrome's screenshot of `url` into `out`. Chrome is ended as soon as the PNG is whole: new
-/// headless Chrome takes ten seconds and more to leave on its own.
+/// Chrome's screenshot of `url` into `out`.
 async fn render(chrome: &Path, url: &str, page: &Page, out: &Path) -> Result<()> {
+    run_chrome(
+        chrome,
+        vec![
+            format!("--window-size={},{}", page.width, page.height),
+            format!("--force-device-scale-factor={}", page.scale),
+            format!("--screenshot={}", out.display()),
+            url.to_string(),
+        ],
+        out,
+        png_complete,
+    )
+    .await
+}
+
+/// Runs a headless Chrome with `args` (after its common ones) until `complete` says `out` is
+/// whole. Chrome is ended then: new headless Chrome takes ten seconds and more to leave on its
+/// own.
+pub(crate) async fn run_chrome(
+    chrome: &Path,
+    args: Vec<String>,
+    out: &Path,
+    complete: fn(&Path) -> bool,
+) -> Result<()> {
     if let Some(parent) = out.parent() {
         tokio::fs::create_dir_all(parent)
             .await
             .map_err(|error| Error::Internal(anyhow::anyhow!("the exports folder: {error}")))?;
     }
+    let _ = tokio::fs::remove_file(out).await;
     let profile = std::env::temp_dir().join(format!("chauffeur-export-{}", random_hex()));
     let mut child = tokio::process::Command::new(chrome)
         .args([
@@ -255,11 +278,8 @@ async fn render(chrome: &Path, url: &str, page: &Page, out: &Path) -> Result<()>
             "--no-default-browser-check".into(),
             "--disable-crash-reporter".into(),
             format!("--user-data-dir={}", profile.display()),
-            format!("--window-size={},{}", page.width, page.height),
-            format!("--force-device-scale-factor={}", page.scale),
-            format!("--screenshot={}", out.display()),
-            url.to_string(),
         ])
+        .args(args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -271,14 +291,15 @@ async fn render(chrome: &Path, url: &str, page: &Page, out: &Path) -> Result<()>
         })?;
     let started = Instant::now();
     let outcome = loop {
-        if png_complete(out) {
+        if complete(out) {
             break Ok(());
         }
         match child.try_wait() {
-            Ok(Some(_)) if png_complete(out) => break Ok(()),
+            Ok(Some(_)) if complete(out) => break Ok(()),
             Ok(Some(status)) => {
                 break Err(Error::Unavailable(format!(
-                    "Chrome ended ({status}) without writing the PNG"
+                    "Chrome ended ({status}) without writing {}",
+                    out.file_name().unwrap_or_default().to_string_lossy()
                 )));
             }
             Ok(None) => {}
@@ -290,7 +311,7 @@ async fn render(chrome: &Path, url: &str, page: &Page, out: &Path) -> Result<()>
         }
         if started.elapsed() > RENDER_TIMEOUT {
             break Err(Error::Unavailable(format!(
-                "Chrome did not render the screens within {} seconds",
+                "Chrome did not render within {} seconds",
                 RENDER_TIMEOUT.as_secs()
             )));
         }
@@ -305,6 +326,22 @@ async fn render(chrome: &Path, url: &str, page: &Page, out: &Path) -> Result<()>
     let _ = child.wait().await;
     let _ = tokio::fs::remove_dir_all(&profile).await;
     outcome
+}
+
+/// Whether `path` is a PDF written to its end.
+pub fn pdf_complete(path: &Path) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 5];
+    if file.read_exact(&mut head).is_err() || &head != b"%PDF-" {
+        return false;
+    }
+    let mut tail = Vec::new();
+    let len = file.seek(SeekFrom::End(0)).unwrap_or(0);
+    file.seek(SeekFrom::Start(len.saturating_sub(64))).is_ok()
+        && file.read_to_end(&mut tail).is_ok()
+        && String::from_utf8_lossy(&tail).contains("%%EOF")
 }
 
 /// Whether `path` is a PNG written to its end: Chrome writes it in one go, but a reader may see

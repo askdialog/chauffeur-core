@@ -67,6 +67,14 @@ export function PinPopover({ left, top, onEscape, children }: { left: number; to
   );
 }
 
+/** The widest box shown at a pin (a thread), in pixels. */
+const POPOVER_WIDTH = 320;
+
+/** Right of its pin, or left of it when the screen has no room on the right. */
+export function popoverLeft(x: number, width: number): number {
+  return x + 12 + POPOVER_WIDTH <= width ? x + 12 : Math.max(0, x - 12 - POPOVER_WIDTH);
+}
+
 /**
  * The pins, the Comment mode cover and the open box over a screen `width` × `height` on screen;
  * `frame` finds its iframe, asked for the element under a new pin.
@@ -112,7 +120,7 @@ export function ScreenComments({
         />
       ))}
       {anchor && (
-        <PinPopover left={anchor.x + 12} top={anchor.y - 8} onEscape={onEscape}>
+        <PinPopover left={popoverLeft(anchor.x, width)} top={anchor.y - 8} onEscape={onEscape}>
           {popover}
         </PinPopover>
       )}

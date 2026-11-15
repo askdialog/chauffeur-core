@@ -234,6 +234,11 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
   // A design chat reads the workspace's notes (the user's attachments, other chats' screenshots)
   // without asking, though they sit outside its working directories.
   if (params.design_dir) settings.permissions = { ask: [...DESIGN_ASK_RULES], ...notesReadRules(params.notes_dir) };
+  // The brand a chat builds its decks and documents with (docs/adr/brands.md): read without
+  // asking, though it sits outside the working directories; never written from this chat.
+  if (params.brand_dir && !params.design_dir) {
+    settings.permissions = { ...settings.permissions, allow: [...(settings.permissions?.allow ?? []), ...(notesReadRules(params.brand_dir).allow ?? [])] };
+  }
   // The repo tools (story 48), never in a design chat: allowed here so that neither a mode that asks
   // nor auto mode's classifier stands between the agent and `add_repo`'s own question.
   if (deps.repoTools && !params.design_dir) {

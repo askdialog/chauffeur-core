@@ -77,4 +77,10 @@ tab_position?: number,
  * A fork or switch into the other agent: the agent its conversation was held with. Until the chat's
  * own agent has a session, each message handed over begins with that conversation as text.
  */
-forked_from_agent?: AgentKind, };
+forked_from_agent?: AgentKind, 
+/**
+ * A chat: the brand its decks and documents are built with (`none`: no brand), the default
+ * brand when absent. A design chat: the brand it makes, whose folder is its design folder
+ * (docs/adr/brands.md).
+ */
+brand?: string, };

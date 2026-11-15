@@ -793,6 +793,13 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
     if !has_forked_from_agent {
         conn.execute_batch("ALTER TABLE chats ADD COLUMN forked_from_agent TEXT")?;
     }
+    let has_brand = conn
+        .prepare("SELECT 1 FROM pragma_table_info('chats') WHERE name = 'brand'")?
+        .exists([])?;
+    if !has_brand {
+        // Brands came with slide decks (docs/adr/brands.md).
+        conn.execute_batch("ALTER TABLE chats ADD COLUMN brand TEXT")?;
+    }
     // A chat's events of one type, without reading the others' payloads. Built once over the
     // existing history, which can take a few seconds on a large log.
     conn.execute_batch(&format!(
@@ -821,8 +828,8 @@ fn envelopes(rows: Vec<(i64, String)>) -> Result<Vec<EventEnvelope>> {
 /// Inserts a chat into a workspace that still exists: 1 row, or 0 when the workspace is gone.
 pub(crate) fn insert_chat_row(c: &Connection, chat: &ChatInfo) -> rusqlite::Result<usize> {
     c.execute(
-        "INSERT INTO chats (id, workspace_id, agent, model, effort, fast, permission_mode, title, status, agent_session_id, created_at, closed, auto_title, kind, source_chat, brief, parent_chat, parent_tool_use, tab_position, forked_from_agent)
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?8, ?13, ?14, ?15, ?16, ?17, ?18, ?19
+        "INSERT INTO chats (id, workspace_id, agent, model, effort, fast, permission_mode, title, status, agent_session_id, created_at, closed, auto_title, kind, source_chat, brief, parent_chat, parent_tool_use, tab_position, forked_from_agent, brand)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?8, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
          WHERE EXISTS (SELECT 1 FROM workspaces WHERE id = ?2)",
         params![
             chat.id,
@@ -843,7 +850,8 @@ pub(crate) fn insert_chat_row(c: &Connection, chat: &ChatInfo) -> rusqlite::Resu
             chat.parent_chat,
             chat.parent_tool_use,
             chat.tab_position,
-            chat.forked_from_agent.map(AgentKind::as_str)
+            chat.forked_from_agent.map(AgentKind::as_str),
+            chat.brand
         ],
     )
 }
@@ -1795,6 +1803,7 @@ impl Store {
             parent_tool_use: row.get("parent_tool_use")?,
             tab_position: row.get("tab_position")?,
             forked_from_agent: forked_from_agent.as_deref().and_then(AgentKind::parse),
+            brand: row.get("brand")?,
         })
     }
 
@@ -1832,6 +1841,16 @@ impl Store {
             c.execute(
                 "UPDATE chats SET brief = ?2 WHERE id = ?1",
                 params![id, brief_json(brief)],
+            )
+        })?;
+        Ok(())
+    }
+
+    pub fn set_chat_brand(&self, id: &str, brand: Option<&str>) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE chats SET brand = ?2 WHERE id = ?1",
+                params![id, brand],
             )
         })?;
         Ok(())

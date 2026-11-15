@@ -477,6 +477,7 @@ impl ChatManager {
             parent_tool_use: parent.as_ref().and_then(|p| p.tool_use.clone()),
             parent_chat: parent.map(|p| p.chat),
             forked_from_agent: None,
+            brand: None,
         };
         let chat = ChatInfo {
             last_activity_at: Some(chat.created_at.clone()),
@@ -1006,7 +1007,7 @@ impl ChatManager {
         self.stale_briefing.lock().unwrap().remove(&chat.id);
         // A design chat's agent starts in its own folder, the one place it may write.
         let design_dir = match chat.kind {
-            ChatKind::Design => match design::design_dir(&workspace.path, &chat.id) {
+            ChatKind::Design => match design::folder_of(&d, &workspace.path, &chat) {
                 Ok(dir) => Some(dir),
                 Err(error) => {
                     let message = format!("could not make the chat's design folder: {error}");
@@ -1037,6 +1038,7 @@ impl ChatManager {
             );
         }
         crate::ollama::codex_env(&d.paths.home, chat.agent, chat.model.as_deref(), &mut env)?;
+        let brand = crate::brands::of_chat(&d, &chat);
         let params = SessionStartParams {
             launch_id: None,
             chat_id: chat.id.clone(),
@@ -1059,12 +1061,14 @@ impl ChatManager {
                     .to_string_lossy()
                     .into_owned()
             }),
+            brand_dir: brand.as_ref().map(|b| b.path.clone()),
             resume_session_id: chat.agent_session_id.clone(),
             env,
             append_system_prompt: system_prompt(
                 &workspace,
                 &chat,
                 design_dir.as_deref().map(|dir| (dir, chat.agent)),
+                brand.as_ref(),
                 self.subagent_notice(&chat).as_deref(),
                 // Codex keeps its plan natively; Claude, with Chauffeur's tool.
                 (chat.agent == AgentKind::Claude && design_dir.is_none()).then_some(PLAN_NOTICE),
@@ -1752,6 +1756,7 @@ impl ChatManager {
         }
         if turn_ended {
             self.forget_auto_resume(&chat.id);
+            self.after_turn(&chat);
         }
         if let Some(status) = next
             && status != chat.status
@@ -1759,6 +1764,61 @@ impl ChatManager {
         {
             self.set_status(&chat, status);
         }
+    }
+
+    /// After a turn: a version of each deliverable it changed, and the agent's answer in the
+    /// threads of the slide comments the turn was sent (docs/adr/slide-decks.md).
+    fn after_turn(&self, chat: &ChatInfo) {
+        if chat.kind != ChatKind::Chat {
+            return;
+        }
+        let d = self.d();
+        let Ok(workspace) = d.workspaces.row(&chat.workspace_id) else {
+            return;
+        };
+        if crate::relay::machine_of(&d, &workspace.id).is_some() {
+            return;
+        }
+        let answer = self.last_text(&chat.id).ok().flatten();
+        let asked = self.turn_messages(&chat.id);
+        let chat = chat.clone();
+        tokio::task::spawn_blocking(move || {
+            let path = std::path::Path::new(&workspace.path);
+            crate::versions::after_turn(path);
+            if let Some(answer) = answer
+                && let Err(error) = crate::file_comments::answer_slide_threads(
+                    &path.join(crate::paths::NOTES_DIR),
+                    &asked,
+                    &answer,
+                    agent_name(chat.agent),
+                )
+            {
+                tracing::warn!(%error, chat = chat.id, "could not answer the slide comments");
+            }
+        });
+    }
+
+    /// The user's messages of a chat's last turn, between the two last `turn_ended`.
+    fn turn_messages(&self, chat_id: &str) -> Vec<String> {
+        let d = self.d();
+        let since = d
+            .store
+            .last_events_of_type(chat_id, "turn_ended", 2)
+            .ok()
+            .and_then(|ends| ends.get(1).and_then(|e| e.seq))
+            .unwrap_or(0);
+        d.store
+            .events_of_type_after(chat_id, "user_message", since)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|envelope| match envelope.event {
+                Event::Chat {
+                    event: ChatEvent::UserMessage { text, .. },
+                    ..
+                } => Some(text),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The agent said which permission mode it runs in: clients see it on the chat.
@@ -2853,16 +2913,15 @@ impl ChatManager {
     /// sees a banner on the canvas, the agent reads it at its next turn.
     fn with_canvas_note(&self, chat: &ChatInfo, text: &str) -> String {
         if chat.kind != ChatKind::Design {
-            return text.to_string();
+            return crate::deck::with_hand_edits(&chat.id, text);
         }
         let Ok(workspace) = self.d().workspaces.row(&chat.workspace_id) else {
             return text.to_string();
         };
-        let dir = std::path::Path::new(&workspace.path)
-            .join(crate::paths::NOTES_DIR)
-            .join(crate::paths::DESIGNS_DIR)
-            .join(&chat.id);
-        match crate::canvas::manifest_error(&dir) {
+        let Ok(dir) = design::folder_of(&self.d(), &workspace.path, chat) else {
+            return text.to_string();
+        };
+        match crate::canvas::manifest_error(std::path::Path::new(&dir)) {
             Some(error) => format!(
                 "{text}\n\n(Chauffeur: your canvas.json is invalid, so the canvas sorts the screens by itself: {error}. Fix it as you go on.)"
             ),
@@ -3048,6 +3107,21 @@ impl ChatManager {
             .collect();
         d.store
             .set_chat_title(&chat.id, (!title.is_empty()).then_some(title.as_str()))?;
+        let chat = self.current(&chat.id)?;
+        d.events
+            .registry(RegistryEvent::ChatUpserted { chat: chat.clone() });
+        Ok(chat)
+    }
+
+    /// The brand a chat builds with (`none`: no brand, None: the default one), from its next
+    /// session; a design chat's brand is the one it makes.
+    pub fn set_brand(&self, key: &str, brand: Option<&str>) -> Result<ChatInfo> {
+        let d = self.d();
+        let chat = self.resolve(key)?;
+        if let Some(id) = brand.filter(|id| *id != chauffeur_protocol::deck::NO_BRAND) {
+            crate::brands::dir(&d, id)?;
+        }
+        d.store.set_chat_brand(&chat.id, brand)?;
         let chat = self.current(&chat.id)?;
         d.events
             .registry(RegistryEvent::ChatUpserted { chat: chat.clone() });
@@ -3287,6 +3361,10 @@ impl ChatManager {
             parent_chat: None,
             parent_tool_use: None,
             forked_from_agent,
+            brand: source
+                .brand
+                .clone()
+                .filter(|_| source.kind == ChatKind::Chat),
         };
         let Some(copied) =
             d.store
@@ -4353,16 +4431,30 @@ Once files exist and have been checked, present HTML/PDF deliverables in a fence
 ```
 The primary path can be HTML or PDF. Add optional exports only for other versions you chose to generate and checked; omit exports for a single-format deliverable. Chauffeur does not convert files or require a pair of formats. Paths must be workspace-relative under .chauffeur/artifacts/, with .html, .htm or .pdf extensions. Chauffeur renders this as a document card that opens beside this chat, with format choices and download. It is not a canvas. Other file types use normal file links. Never put HTML markup in the declaration. Keep responding in this conversation to revise the document or produce another format."#;
 
+/// Slide decks (docs/adr/slide-decks.md): how the agent lays one out so that the reader shows,
+/// edits and comments it.
+const DECK_NOTICE: &str = r#"Slide decks: when the user asks for slides, a deck or a presentation, make a deck deliverable. Ask for the purpose, the audience and the sources when they are missing; for a long deck, propose an outline first. Put a visible placeholder where a figure is missing, and name each one in your reply. Write speaker notes when they help the presenter.
+Lay a deck out in .chauffeur/artifacts/<deck-name>/: one HTML file per slide (01-title.html, 02-problem.html…), a fixed 1920 × 1080 page each, with shared CSS and assets beside them, and deck.json:
+{"title": "Q3 review", "width": 1920, "height": 1080, "slides": [{"file": "01-title.html", "title": "Title", "notes": "What to say"}]}
+Write each slide's texts directly in its HTML, in plain elements (h1, h2, p, li, td…) holding text, <b>, <i> or <br> only: the user retypes such a text by double-clicking it in the reader. Text drawn by a script cannot be retyped. External resources load over https only. Check a few slides' renders before presenting the deck.
+When revising, change only the slides the user names by number or title, keep the files of the others, and keep deck.json's slide order, "skip" and "notes" unless asked: the user changes those in the reader. Present a deck with the deliverable block, "kind": "deck" and the path of its deck.json:
+```deliverable
+{"title":"Q3 review","path":".chauffeur/artifacts/q3-review/deck.json","kind":"deck"}
+```
+Chauffeur shows it beside this chat with its slides, notes, Present and its PDF, PNG and HTML downloads: do not make those yourself unless asked."#;
+
 /// What every session of the workspace is told: that a design chat designs, or that an
 /// exploration is read-only; that a delegated chat answers its parent; the tickets and reply format.
 fn system_prompt(
     workspace: &WorkspaceRow,
     chat: &ChatInfo,
     design: Option<(&str, AgentKind)>,
+    brand: Option<&chauffeur_protocol::deck::BrandInfo>,
     subagent: Option<&str>,
     plan: Option<&str>,
 ) -> Option<String> {
     let notice = match design {
+        Some((dir, _)) if chat.brand.is_some() => Some(crate::brands::system_prompt(dir)),
         Some((dir, agent)) => Some(design::system_prompt(dir, agent)),
         None if workspace.explore => Some(format!(
             "{EXPLORE_NOTICE}\n\nFor an interface mockup, direct the user to this chat tab's “Design from this chat” action: this exploration's agent cannot use the Chauffeur CLI."
@@ -4386,6 +4478,9 @@ fn system_prompt(
         Some("You are replying in Chauffeur. It does not render the `visualize` skill's inline content references: never emit a visualize marker or rely on the Codex inline visualization runtime. Interface mockups belong in a Chauffeur design chat's canvas, as self-contained HTML screens, not HTML fragments written into the notes and referenced in a reply.".to_string()),
         notice,
         (!workspace.explore && design.is_none()).then(|| DOCUMENT_NOTICE.to_string()),
+        (!workspace.explore && design.is_none())
+            .then(|| DECK_NOTICE.to_string()),
+        brand.map(crate::brands::notice),
         subagent.map(str::to_string),
         plan.map(str::to_string),
         ticket_briefing(&workspace.path),

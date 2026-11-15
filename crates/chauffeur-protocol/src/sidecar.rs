@@ -657,6 +657,11 @@ pub struct SessionStartParams {
     /// design chat (it reads the notes, the user's attachments among them, without asking).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes_dir: Option<String>,
+    /// The folder of the brand the chat builds with (`~/.chauffeur/brands/<id>`): Claude reads it
+    /// without asking, though it sits outside its working directories.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub brand_dir: Option<String>,
     /// Resume this agent session instead of starting a new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_session_id: Option<String>,

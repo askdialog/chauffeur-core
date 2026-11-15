@@ -458,7 +458,7 @@ fn folder(daemon: &Daemon, chat_key: &str) -> Result<Folder> {
         return Err(Error::BadRequest("only a design chat has comments".into()));
     }
     let workspace = daemon.workspaces.row(&chat.workspace_id)?;
-    let dir = crate::design::design_dir(&workspace.path, &chat.id)
+    let dir = crate::design::folder_of(daemon, &workspace.path, &chat)
         .map_err(|error| Error::Internal(anyhow::anyhow!("the design folder: {error}")))?;
     Ok(Folder {
         chat,
