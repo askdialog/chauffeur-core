@@ -1,5 +1,5 @@
 import { JsonChannel, HISTORY_PAGE_EVENTS, HISTORY_PAGE_BYTES, HISTORY_PAGE_TOO_LARGE, Tunnels, type TunnelEnd, type TunnelHandle } from "@chauffeur/remote";
-import type { CanvasResult } from "@chauffeur/protocol";
+import type { CanvasResult, ReposListResult } from "@chauffeur/protocol";
 import { MOBILE_HOST_METHODS, PHONE_METHODS } from "@chauffeur/protocol";
 import { connectDaemon, daemonSocket, openPreview, type DaemonConnection } from "./daemon";
 
@@ -9,7 +9,7 @@ const METHODS = new Set<string>(PHONE_METHODS);
 const HOST_METHODS = new Set<string>(MOBILE_HOST_METHODS);
 
 // Deliberately scoped: no terminals, filesystem, settings, archive, shutdown or
-// arbitrary RPC forwarding. The daemon still validates every method's params.
+// arbitrary RPC forwarding. A workspace is created only as `phoneWorkspace` allows. The daemon still validates every method's params.
 // Beside them, tunnels (`tunnel_*` messages) carry connections to a moved workspace's declared
 // previews only: the daemon's `/preview` route refuses any other port.
 export function allowedRequest(method: string, params: unknown): boolean {
@@ -31,10 +31,43 @@ export function allowedRequest(method: string, params: unknown): boolean {
   if (method === "events.subscribe") return p.all === false && Array.isArray(p.chats) && Array.isArray(p.workspaces) && (
     (p.chats.length <= 1 && p.workspaces.length === 0) || (transferSubscription(p) && p.after_seq === undefined));
   if (method === "cloud.transfer.start" || method === "cloud.transfer.cancel") return transferBetweenHereAndMachine(p);
+  if (method === "workspace.create") return phoneWorkspace(p);
+  // The list as the Mac last read it: refreshing it from GitHub stays the Mac's.
+  if (method === "repos.cached") return Object.keys(p).every(key => key === "refresh") && (p.refresh === undefined || p.refresh === false);
+  if (method === "linear.search") return Object.keys(p).every(key => ["query", "mine", "limit"].includes(key)) &&
+    (p.query === undefined || (typeof p.query === "string" && p.query.length <= 200)) && (p.mine === undefined || typeof p.mine === "boolean") &&
+    (p.limit === undefined || (Number.isInteger(p.limit) && Number(p.limit) >= 1 && Number(p.limit) <= 50));
   if (method === "cloud.transfer.interrupt") return Object.keys(p).length === 1 && typeof p.workspace === "string";
   if (method === "previews.list" || method === "workspace.seen") return Object.keys(p).length === 1 && typeof p.workspace === "string";
   if (method === "chat.send" || method === "chat.send_confirmed") return typeof p.text === "string" && p.text.trim().length > 0 && p.text.length <= 16_000 && !p.images;
   return true;
+}
+
+const text = (value: unknown, max: number) => typeof value === "string" && value.trim().length > 0 && value.length <= max;
+const names = (value: unknown, max: number) => Array.isArray(value) && value.length <= max && value.every(item => text(item, 200));
+
+// A workspace from the phone (docs/adr/mobile-workspace-creation.md): repos the Mac has cloned,
+// tickets, a first prompt and its model, created in the background. Never a share, a parent,
+// an exploration, a design, images or a permission mode.
+function phoneWorkspace(p: Record<string, unknown>) {
+  return Object.keys(p).every(key => ["repos", "tickets", "name", "branch", "prompt", "agent", "model", "effort", "fast", "background"].includes(key)) &&
+    p.background === true && names(p.repos, 20) && (p.repos as unknown[]).length > 0 && (p.tickets === undefined || names(p.tickets, 10)) &&
+    text(p.prompt, 16_000) && [p.name, p.branch, p.model, p.effort].every(value => value === undefined || text(value, 200)) &&
+    (p.agent === undefined || p.agent === "claude" || p.agent === "codex") && (p.fast === undefined || typeof p.fast === "boolean");
+}
+
+/** Only the repos cloned on this Mac, without where they are on its disk. */
+export function phoneRepos(list: ReposListResult): ReposListResult {
+  return { ...list, repos: list.repos.filter(repo => repo.clone_path).map(repo => ({ ...repo, clone_path: null })) };
+}
+
+// A phone creates a workspace from the repos already cloned on this Mac: the daemon would clone a
+// missing one, which stays the Mac's decision.
+async function clonedRepos(connection: DaemonConnection, params: unknown) {
+  const { repos } = await connection.call("repos.cached", { refresh: false }) as ReposListResult;
+  const cloned = new Set(repos.filter(repo => repo.clone_path).flatMap(repo => [repo.key, repo.name]));
+  const missing = (params as { repos: string[] }).repos.filter(repo => !cloned.has(repo));
+  if (missing.length) throw new Error(`Not cloned on this Mac: ${missing.join(", ")}`);
 }
 
 /** A phone needs screen availability, never the Mac server's filesystem capability URLs. */
@@ -43,7 +76,7 @@ export function phoneCanvas(canvas: CanvasResult): CanvasResult {
   return { ...canvas, pages: canvas.pages.map(page => ({ ...page, sections: page.sections.map(section => ({ ...section, screens: section.screens.map(screen) })) })), unsorted: canvas.unsorted.map(screen) };
 }
 
-// One workspace, to follow its transfer: only its `transfer` events reach the phone. No
+// One workspace, to follow its transfer or its creation: only those events reach the phone. No
 // registry or Office scope, whose events could pass before the subscription's id is known.
 function transferSubscription(p: Record<string, unknown>) {
   return Array.isArray(p.chats) && p.chats.length === 0 && Array.isArray(p.workspaces) && p.workspaces.length === 1 && typeof p.workspaces[0] === "string" && !p.registry && !p.office;
@@ -67,12 +100,20 @@ function endpoint(value: unknown): "here" | "machine" | null {
   return null;
 }
 
-// A workspace's other events carry terminal and script output. A transfer subscription's chat
-// events are dropped once its id is known; any before that are chats the phone may read anyway.
-function forwarded(event: unknown, transferSubscriptions: Set<string>) {
-  const params = (event as { params?: { subscription?: string; envelope?: { event?: { scope?: string; event?: { type?: string } } } } } | null)?.params;
+const CREATION_EVENTS = new Set(["transfer", "state_changed", "progress", "warning", "worktree_added"]);
+
+// A workspace's other events carry terminal, run and archive output: of scripts, only its setup
+// scripts' reach the phone, which follows its creation. A transfer subscription's chat events are
+// dropped once its id is known; any before that are chats the phone may read anyway.
+function forwarded(event: unknown, transferSubscriptions: Set<string>, setups: Set<string>) {
+  const params = (event as { params?: { subscription?: string; envelope?: { event?: { scope?: string; event?: { type?: string; kind?: string; process_id?: string } } } } } | null)?.params;
   const scoped = params?.envelope?.event;
-  if (scoped?.scope === "workspace") return scoped.event?.type === "transfer";
+  if (scoped?.scope === "workspace") {
+    const inner = scoped.event;
+    if (inner?.type === "process_started" && inner.kind === "setup" && inner.process_id) setups.add(inner.process_id);
+    if (inner?.type === "process_started" || inner?.type === "process_output" || inner?.type === "process_exited") return setups.has(inner.process_id ?? "");
+    return CREATION_EVENTS.has(inner?.type ?? "");
+  }
   return !transferSubscriptions.has(params?.subscription ?? "");
 }
 
@@ -89,6 +130,7 @@ export function createBridge(channel: JsonChannel, connect: () => Promise<Daemon
   const pending = new Set<number>();
   const subscriptions = new Set<string>();
   const transferSubscriptions = new Set<string>();
+  const setups = new Set<string>();
   let greeted = false;
   const tunnels = new Tunnels((message) => channel.send(message), async (workspace, offset, handle) => {
     await options.beforeCall?.();
@@ -132,6 +174,7 @@ export function createBridge(channel: JsonChannel, connect: () => Promise<Daemon
       await options.beforeCall?.();
       if (closed) throw new Error("Session ended");
       if (options.pushCall && HOST_METHODS.has(message.method!)) return options.pushCall(message.method!, message.params);
+      if (message.method === "workspace.create") await clonedRepos(connection, message.params);
       return connection.call(message.method!, message.params);
     })().then((result) => {
       if (message.method === "events.subscribe") {
@@ -145,7 +188,8 @@ export function createBridge(channel: JsonChannel, connect: () => Promise<Daemon
       }
       if (message.method === "events.history" && Buffer.byteLength(JSON.stringify({ type: "result", id, result }), "utf8") > HISTORY_PAGE_BYTES) {
         reply(null, HISTORY_PAGE_TOO_LARGE);
-      } else reply(message.method === "design.canvas" ? phoneCanvas(result as CanvasResult) : result);
+      } else reply(message.method === "design.canvas" ? phoneCanvas(result as CanvasResult)
+        : message.method === "repos.cached" ? phoneRepos(result as ReposListResult) : result);
     }, (error: Error) => reply(null, error.message)).finally(() => pending.delete(id));
   };
   return {
@@ -159,7 +203,7 @@ export function createBridge(channel: JsonChannel, connect: () => Promise<Daemon
         daemon = connection;
         daemon.onClose = () => close("daemon_closed");
         daemon.onEvent = (event) => {
-          if (!forwarded(event, transferSubscriptions)) return;
+          if (!forwarded(event, transferSubscriptions, setups)) return;
           try { channel.send({ type: "event", event }); } catch { close(); }
         };
         channel.send({ type: "authorized", ...authorization });

@@ -1,6 +1,6 @@
 # Mobile companion
 
-The phone follows and drives a Mac's agents: workspace and chat lists, history and live events, sending and steering, interrupting, answering permissions and questions, and transfers. The Expo iOS and Android app is maintained in its own repository; the opaque relay and the Mac's host are in [`relay/`](../relay/README.md).
+The phone follows and drives a Mac's agents: workspace and chat lists, history and live events, sending and steering, interrupting, answering permissions and questions, transfers, and creating a workspace. The Expo iOS and Android app is maintained in its own repository; the opaque relay and the Mac's host are in [`relay/`](../relay/README.md).
 
 Decisions: [ADR 0023](adr/0023-mobile-companion.md) (companion, relay, pairing, host, push; 2026-10-18) and [ADR 0028](adr/0028-mobile-store-preparation.md) (store preparation; 2026-10-20). Their full text is in `SPEC.md`, Mobile follow-up.
 
@@ -22,7 +22,7 @@ phone (Expo app) ── Noise XX over WSS ── relay (opaque) ── Mac mobil
 
 - The relay forwards ciphertext only: it cannot read commands, conversations or attachments. It runs where its operator deploys it (`relay/deploy/gcp.sh` provisions one on GCP, on a reserved public IPv4 with a public IP certificate or on a hostname). Core names no relay: `[mobile] relay` in `settings.toml` (Settings › Mobile) is empty by default, and mobile access stays off until it is set.
 - Pairing is a five-minute QR shown in a native window of the Mac app, approved on the Mac. Approved devices (16 at most) reconnect with a fresh, mutually pinned Noise handshake; the Mac revokes them from its pairing page.
-- The daemon supervises the bundled `chauffeur-mobile-host` once mobile access is on (Settings › Mobile). The host forwards an allowlist of RPCs over the daemon's private Unix socket: no terminals, files or settings, and the phone never receives the daemon's token.
+- The daemon supervises the bundled `chauffeur-mobile-host` once mobile access is on (Settings › Mobile). The host forwards an allowlist of RPCs over the daemon's private Unix socket: no terminals, files or settings, no workspace mutation but creating one, and the phone never receives the daemon's token.
 - Push (FCM on Android, APNs on iOS) is opt-in per category and carries no conversation content; workspace names only if the user allows it.
 
 ## Delivery notes
@@ -91,6 +91,15 @@ the workspace's execution host. The daemon enforces provider-switch confirmation
 and its existing restrictions. Older mobile hosts refuse these methods; the app
 shows an update message rather than retrying a write through another endpoint.
 See [the decision](adr/mobile-models-and-workspace-hierarchy.md).
+
+An approved phone also creates a workspace: `workspace.create` with `background`, at least one
+repo cloned on the Mac (the host checks `repos.cached` before the call), optional `tickets`, a
+required `prompt`, `agent`, `model`, `effort`, `fast`, `name` and `branch`, nothing else.
+`repos.cached` reaches it without refresh and with `clone_path` removed; `linear.search` with
+`query`, `mine` and `limit` only. A one-workspace subscription forwards the workspace's
+`state_changed`, `progress`, `warning`, `worktree_added` and `transfer` events and its setup
+scripts' `process_*` events, never terminal, run or archive output. See
+[the decision](adr/mobile-workspace-creation.md).
 
 ## Dictation
 

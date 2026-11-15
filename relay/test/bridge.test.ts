@@ -23,7 +23,9 @@ async function fixture(adaptiveHistory = false) {
     if (data.length) ws.send(Buffer.concat([Buffer.from(`echo ${upgrade.url}:`), data])); else ws.close();
   }) : ws.on("message", (data) => {
     const request = JSON.parse(data.toString()); calls.push(request.method);
-    const results: Record<string, unknown> = { hello: { protocol_version: 1 }, "workspace.list": { workspaces: [{ id: "w", title: "Private workspace" }] }, "events.history": { events: [{ seq: 1, text: "🛠️".repeat(adaptiveHistory && request.params.limit > 25 ? 90_000 : 30_000) }] }, "events.subscribe": { subscription: "s", last_seq: 1 }, "chat.send": { id: "c" } };
+    const results: Record<string, unknown> = { hello: { protocol_version: 1 }, "workspace.list": { workspaces: [{ id: "w", title: "Private workspace" }] }, "events.history": { events: [{ seq: 1, text: "🛠️".repeat(adaptiveHistory && request.params.limit > 25 ? 90_000 : 30_000) }] }, "events.subscribe": { subscription: "s", last_seq: 1 }, "chat.send": { id: "c" },
+      "repos.cached": { repos: [{ name: "web", key: "web", full_name: "acme/web", clone_path: "/Users/me/src/web", is_default: true }, { name: "api", key: "api", full_name: "acme/api", clone_path: null, is_default: false }] },
+      "workspace.create": { workspace: { id: "n", state: "creating" }, chat: null } };
     const event = (subscription: string, event: unknown) => ws.send(JSON.stringify({ jsonrpc: "2.0", method: "event", params: { subscription, envelope: { seq: null, event } } }));
     if (request.method === "events.subscribe" && request.params.workspaces.length) {
       event("t", { scope: "workspace", workspace_id: "w", event: { type: "terminal_output", terminal_id: "x", data: "secret" } });
@@ -32,6 +34,13 @@ async function fixture(adaptiveHistory = false) {
         event("t", { scope: "chat", workspace_id: "w", chat_id: "other", event: { type: "text_delta", message_id: "b", text: "Other chat" } });
         event("t", { scope: "workspace", workspace_id: "w", event: { type: "process_output", process_id: "p", line: "secret" } });
         event("t", { scope: "workspace", workspace_id: "w", event: { type: "transfer", transfer: { id: "tr", phase: "running", log: ["Stopping on this Mac"] } } });
+        event("t", { scope: "workspace", workspace_id: "w", event: { type: "process_started", process_id: "run", kind: "run", repo: "web", name: "dev", command: "bun dev" } });
+        event("t", { scope: "workspace", workspace_id: "w", event: { type: "process_output", process_id: "run", stream: "stdout", line: "secret" } });
+        event("t", { scope: "workspace", workspace_id: "w", event: { type: "progress", message: "Fetching web" } });
+        event("t", { scope: "workspace", workspace_id: "w", event: { type: "process_started", process_id: "setup", kind: "setup", repo: "web", name: "setup", command: "bun install" } });
+        event("t", { scope: "workspace", workspace_id: "w", event: { type: "process_output", process_id: "setup", stream: "stdout", line: "Resolving dependencies" } });
+        event("t", { scope: "workspace", workspace_id: "w", event: { type: "process_exited", process_id: "setup", exit_code: 0 } });
+        event("t", { scope: "workspace", workspace_id: "w", event: { type: "state_changed", state: "ready", error: null } });
       }, 20);
       return;
     }
@@ -89,7 +98,7 @@ test("oversized history pages return a retryable error without closing the encry
   expect((await f.request("workspace.list", { include_archived: false })).result.workspaces).toHaveLength(1);
 });
 
-test("a transfer is started or cancelled between this Mac and a declared machine by name, and its workspace sends only transfer events", async () => {
+test("a transfer is started or cancelled between this Mac and a declared machine by name, and its workspace sends no terminal, script or other chat output", async () => {
   const f = await fixture(); await f.bridge.approve();
   const here = { kind: "here" }, vm = { kind: "machine", name: "vm" };
   for (const [method, params] of [
@@ -203,4 +212,28 @@ test("phone Canvas manifests carry availability without the Mac filesystem capab
   expect(JSON.stringify(result)).not.toContain("daemon-secret");
   expect(JSON.stringify(result)).not.toContain("127.0.0.1");
   expect(screen.url).toContain("daemon-secret");
+});
+
+test("a phone creates a workspace in the background from repos cloned on this Mac, and follows its setup but no other script", async () => {
+  const f = await fixture(); await f.bridge.approve();
+  const repos = (await f.request("repos.cached", { refresh: false })).result.repos;
+  expect(repos).toEqual([{ name: "web", key: "web", full_name: "acme/web", clone_path: null, is_default: true }]);
+  const create = { repos: ["web"], tickets: ["DIA-1"], prompt: "Fix the export", agent: "claude", model: "opus", effort: "high", fast: false, background: true };
+  expect((await f.request("workspace.create", create)).result.workspace.id).toBe("n");
+  expect((await f.request("workspace.create", { ...create, repos: ["api"] })).error).toBe("Not cloned on this Mac: api");
+  expect(f.calls.filter(method => method === "workspace.create")).toHaveLength(1);
+  for (const params of [
+    { ...create, background: false }, { ...create, repos: [] }, { ...create, prompt: " " }, { ...create, prompt: "x".repeat(16_001) },
+    { ...create, parent: "w" }, { ...create, workspace_share: "s" }, { ...create, explore: true }, { ...create, design: {} },
+    { ...create, permission_mode: "bypass_permissions" }, { ...create, images: [] }, { ...create, no_repos: true }, { ...create, agent: "other" },
+  ]) expect((await f.request("workspace.create", params)).error).toBe("Method not available from mobile");
+  expect((await f.request("repos.cached", { refresh: true })).error).toBe("Method not available from mobile");
+  expect((await f.request("linear.search", { query: "export", limit: 20 })).error).toBeUndefined();
+  for (const params of [{ query: "x", milestones: true }, { query: "x", limit: 500 }, { query: 1 }])
+    expect((await f.request("linear.search", params)).error).toBe("Method not available from mobile");
+  await f.request("events.subscribe", { all: false, registry: false, chats: [], workspaces: ["w"], ephemeral: true });
+  await f.waitFor((m) => m.type === "event" && m.event.params.envelope.event.event.type === "state_changed");
+  const types = f.messages.filter((m) => m.type === "event").map((m) => m.event.params.envelope.event.event.type);
+  expect(types).toEqual(["transfer", "progress", "process_started", "process_output", "process_exited", "state_changed"]);
+  expect(JSON.stringify(f.messages.filter((m) => m.type === "event"))).not.toMatch(/secret/);
 });

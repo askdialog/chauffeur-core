@@ -1037,6 +1037,8 @@ export const PHONE_METHODS = [
   "cloud.transfer.interrupt",
   "cloud.transfer.machines",
   "previews.list",
+  "repos.cached",
+  "workspace.create",
   "workspace.list",
   "workspace.get",
   "chat.list",
@@ -1050,6 +1052,7 @@ export const PHONE_METHODS = [
   "events.subscribe",
   "events.unsubscribe",
   "events.history",
+  "linear.search",
   "models.list",
   "workspace.seen",
 ] as const;

@@ -411,6 +411,15 @@ preview documents retain their own colors, and the hosted review service owns it
 website theme. Native configuration changes require a new build and physical-device
 release validation. See [mobile appearance](adr/mobile-appearance.md).
 
+An approved phone creates a workspace on its Mac (validated by Justin, 2026-11-14):
+repos already cloned there, optional Linear tickets, a required first prompt with its
+model, and optionally a name and branch. The daemon creates it in the background as the
+app does; the phone follows its steps and setup output, then opens the first chat. The
+mobile host forwards `workspace.create` with these fields only, `repos.cached` without
+clone paths and `linear.search` for issues; it never creates a share, a parent, an
+exploration or a design, and clones nothing. See
+[mobile workspace creation](adr/mobile-workspace-creation.md).
+
 Durable pairing and reconnect (approved by Justin, 2026-10-18): chauffeurd keeps a
 stable Ed25519 identity seed and up to 16 approved devices in its private SQLite
 state. Device-trust RPCs are available only over the private Unix socket, including

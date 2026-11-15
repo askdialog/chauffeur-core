@@ -338,7 +338,7 @@ methods! {
         #[relay(Local)]
         ReposList(ReposListParams) -> ReposListResult,
         #[serde(rename = "repos.cached")]
-        #[access(Any)]
+        #[access(Any, phone)]
         #[relay(Local)]
         ReposCached(ReposListParams) -> ReposListResult,
         #[serde(rename = "repos.page")]
@@ -346,7 +346,7 @@ methods! {
         #[relay(Local)]
         ReposPage(ReposPageParams) -> ReposPageResult,
         #[serde(rename = "workspace.create")]
-        #[access(Any)]
+        #[access(Any, phone)]
         #[relay(Local)]
         WorkspaceCreate(CreateWorkspaceParams) -> CreateWorkspaceResult,
         #[serde(rename = "workspace.list")]
@@ -1042,7 +1042,7 @@ methods! {
         #[relay(Local)]
         PrShipped(ShippedParams) -> ShippedResult,
         #[serde(rename = "linear.search")]
-        #[access(Any, office)]
+        #[access(Any, phone, office)]
         #[relay(Local)]
         LinearSearch(LinearSearchParams) -> LinearSearchResult,
         #[serde(rename = "linear.issue")]
