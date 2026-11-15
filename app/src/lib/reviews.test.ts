@@ -13,6 +13,10 @@ import {
   FollowUpDrafts,
   SnapshotGate,
   autoRefreshKey,
+  cleanExcerpt,
+  confidenceParts,
+  fixNote,
+  fixPrompt,
   coverageSummary,
   distinctObservations,
   draftStatus,
@@ -336,5 +340,36 @@ describe("reviews", () => {
     const x = experiment({ evidence: [evidence({ source_seq: 7 })] });
     const p = pattern([evidence({ source_seq: 7 }), evidence({ source_seq: 8, chat_id: "c2" }), evidence({ source_seq: 9, from_review: true, chat_id: "c3" })]);
     expect(sourceChoices(x, p).map((e) => e.source_seq)).toEqual([7, 8]);
+  });
+});
+
+describe("fixing from a review", () => {
+  test("the prompt names the problem, its sessions, the experiment and its success measure", () => {
+    const p = pattern([evidence({ source_seq: 7, quote: "reprend", human: true }), evidence({ source_seq: 8, chat_id: "c2", quote: "# Run stopped **now**", human: false })]);
+    const text = fixPrompt(p, [experiment({ success_measure: "no manual resume over 3 days" })]);
+    expect(text).toContain(`## Problem: ${p.title}`);
+    expect(text).toContain("my message: reprend");
+    expect(text).toContain("not typed by me: Run stopped now");
+    expect(text).toContain("Success will be measured as: no manual resume over 3 days");
+    expect(fixPrompt(null, [])).not.toContain("## Problem");
+  });
+
+  test("the note names the workspace and the agent", () => {
+    expect(fixNote("reprise-auto", "Codex")).toBe("Started a fix with Codex in reprise-auto.");
+    // The daemon refuses a follow-up note under 10 characters.
+    expect(fixNote("a", "Claude").length).toBeGreaterThanOrEqual(10);
+  });
+
+  test("an excerpt loses its markdown and is cut at a word", () => {
+    expect(cleanExcerpt("# Revue du **6 novembre**\n\nVoir [DAT-2188](https://linear.app/x) ici")).toBe("Revue du 6 novembre Voir DAT-2188 ici");
+    const cut = cleanExcerpt("mot ".repeat(100), 30);
+    expect(cut.endsWith("…")).toBe(true);
+    expect(cut.length).toBeLessThanOrEqual(31);
+  });
+
+  test("a confidence splits into its level and its reason", () => {
+    expect(confidenceParts("moyenne : plusieurs extraits sur plusieurs jours")).toEqual({ level: "Moyenne", reason: "plusieurs extraits sur plusieurs jours" });
+    expect(confidenceParts("High — five sessions")).toEqual({ level: "High", reason: "five sessions" });
+    expect(confidenceParts("Plusieurs extraits")).toEqual({ level: null, reason: "Plusieurs extraits" });
   });
 });

@@ -124,6 +124,8 @@ export type AppState = {
   createOpen: boolean;
   createWorkspaceShare: string;
   createPrefill: string;
+  /** The experiment whose fix the create dialog starts: a decision is recorded once the workspace exists. */
+  createReview: { experimentId: string | null; title: string } | null;
   /** The create dialog opens on an exploration rather than a workspace. */
   createExplore: boolean;
   /** The create dialog makes a child workspace of this one. */
@@ -247,6 +249,7 @@ export const useApp = create<AppState>(() => ({
   createOpen: false,
   createWorkspaceShare: "",
   createPrefill: "",
+  createReview: null,
   createExplore: false,
   createParent: null,
   switcherOpen: false,
@@ -751,7 +754,7 @@ export async function revealFile(workspaceId: string, path: string) {
 /** Opens the create dialog, for an exploration, or for a child workspace of `parent`. */
 export function openCreate(open = true, explore = false, parent: string | null = null, workspaceShare = "") {
   if (open && inBrowserOffice) return toast(IN_THE_APP);
-  set({ createWorkspaceShare: workspaceShare, createOpen: open, createExplore: explore, createParent: parent, switcherOpen: false, createPrefill: "" });
+  set({ createWorkspaceShare: workspaceShare, createOpen: open, createExplore: explore, createParent: parent, switcherOpen: false, createPrefill: "", createReview: null });
 }
 
 /** Prefills a new workspace, appending context when the user already has a form open. */
@@ -768,6 +771,23 @@ export function prefillCreate(prompt: string) {
     sharingShown: false,
     officeShown: false,
   }));
+}
+
+/** Opens a new workspace for the fix of a review's problem; `experimentId` is the experiment to record a decision on. */
+export function startReviewFix(prompt: string, experimentId: string | null, title: string) {
+  if (inBrowserOffice) return toast(IN_THE_APP);
+  set({
+    createOpen: true,
+    createWorkspaceShare: "",
+    createPrefill: prompt,
+    createReview: { experimentId, title },
+    createExplore: false,
+    createParent: null,
+    switcherOpen: false,
+    settingsOpen: false,
+    sharingShown: false,
+    officeShown: false,
+  });
 }
 
 /** What the create dialog was filled with. */

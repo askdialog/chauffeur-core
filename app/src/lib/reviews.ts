@@ -460,3 +460,62 @@ export function experimentsByAttention(experiments: ReviewExperiment[], followup
   const rank = (e: ReviewExperiment) => (effectiveStatus(e, followups) === "observed_effect" ? 1 : 0);
   return [...experiments].sort((a, b) => rank(a) - rank(b) || localDay(b.origin_date).localeCompare(localDay(a.origin_date)));
 }
+
+
+/** What the "Fix with…" action hands the agent: the problem, its evidence, the experiment and how success is measured. */
+export function fixPrompt(pattern: ReviewPattern | null, experiments: ReviewExperiment[]): string {
+  const lines: string[] = [
+    "This request comes from Chauffeur's Reviews: a problem that came back across my sessions. Find its cause in the code and fix it, then check the fix.",
+    "",
+  ];
+  if (pattern) {
+    lines.push(`## Problem: ${pattern.title}`, "", pattern.summary || "", "");
+    const seen = distinctObservations(pattern.observations).slice(-8);
+    if (seen.length) {
+      lines.push("Observed in these sessions (newest last):");
+      for (const e of seen) {
+        const who = e.human ? "my message" : "not typed by me";
+        lines.push(`- ${shortDay(e.at)} · ${e.workspace}${e.branch ? ` (${e.branch})` : ""} · ${who}: ${cleanExcerpt(e.quote, 220)}`);
+      }
+      lines.push("");
+    }
+  }
+  for (const e of experiments) {
+    lines.push(`## Experiment: ${e.title}`, "", e.experiment, "");
+    if (e.expected_benefit) lines.push(`Expected benefit: ${e.expected_benefit}`);
+    if (e.success_measure) lines.push(`Success will be measured as: ${e.success_measure}`);
+    if (e.effort) lines.push(`Effort: ${e.effort}`);
+    lines.push("");
+  }
+  lines.push("Say what you found and changed, so the next review can check the success measure.");
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** The follow-up note saved when a fix is started, naming where and with which agent. */
+export function fixNote(workspaceName: string, agentLabel: string): string {
+  return `Started a fix with ${agentLabel} in ${workspaceName}.`;
+}
+
+/**
+ * A report's or a quote's opening, readable as plain text: markdown headings, emphasis and
+ * links reduced to their words, blanks collapsed, cut at a word with an ellipsis.
+ */
+export function cleanExcerpt(text: string, max = 200): string {
+  const plain = text
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+    .replace(/(\*\*|__|`)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (plain.length <= max) return plain;
+  const cut = plain.slice(0, max);
+  return `${cut.slice(0, Math.max(cut.lastIndexOf(" "), max / 2))}…`;
+}
+
+/** An analysis' confidence: its level (the first word) apart from the reason that follows. */
+export function confidenceParts(text: string): { level: string | null; reason: string } {
+  const match = /^\s*(faible|moyenne|forte|élevée|low|medium|moderate|high)\b[\s:.,;—–-]*/i.exec(text);
+  if (!match) return { level: null, reason: text.trim() };
+  const level = match[1]!;
+  return { level: level[0]!.toUpperCase() + level.slice(1).toLowerCase(), reason: text.slice(match[0].length).trim() };
+}

@@ -2,7 +2,7 @@
 // they propose, the user's dated follow-ups, and the reports themselves. The source
 // conversations stay the evidence: every claim links back to one through `onOpenSource`.
 import type { ReviewEvidence, ReviewExperiment, ReviewPattern, ReviewReport, ReviewsInfo } from "@chauffeur/protocol";
-import { ChevronLeft, ChevronRight, ClipboardList, ExternalLink, RefreshCw, Settings } from "lucide-react";
+import { ChevronLeft, ChevronRight, ClipboardList, RefreshCw, Settings, Wrench } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorMessage } from "@/lib/rpc";
 import {
@@ -39,8 +39,11 @@ import {
   trendLabel,
   trendTone,
   weeksWithoutReports,
+  cleanExcerpt,
+  confidenceParts,
+  fixPrompt,
 } from "@/lib/reviews";
-import { client, openSettings, toast, useApp } from "@/state/app";
+import { client, openSettings, startReviewFix, toast, useApp } from "@/state/app";
 import { ShowSidebarButton } from "./ShowSidebarButton";
 import { Badge, Button, EmptyState, IconButton, Select, type SelectOption, Spinner, cx, inputClass } from "./ui";
 
@@ -337,7 +340,7 @@ function SourceLink({
       data-testid="reviews-source-link"
     >
       {label}
-      <ExternalLink size={11} className="shrink-0" />
+      <ChevronRight size={11} className="shrink-0" />
     </button>
   );
 }
@@ -356,7 +359,7 @@ function ReportLink({ report, label, open }: { report: ReviewReport; label?: str
       data-testid="reviews-report-link"
     >
       {text}
-      <ExternalLink size={11} className="shrink-0" />
+      <ChevronRight size={11} className="shrink-0" />
     </button>
   );
 }
@@ -419,7 +422,7 @@ function Overview({
     ...workspaces.map((w) => ({ value: w.id, label: w.name })),
   ];
   const title = (
-    <PageTitle title="Reviews" subtitle="What repeats, what to try, and what actually changed.">
+    <PageTitle title="Overview" subtitle="What repeats, what to try, and what actually changed.">
       {workspaces.length > 1 && (
         <Select
           value={scope ?? ""}
@@ -622,6 +625,7 @@ function PatternView({
         <h2 className="min-w-0 text-[17px] font-semibold">{pattern.title}</h2>
         <Badge tone={trendTone(pattern.trend)}>{trendLabel(pattern.trend)}</Badge>
       </div>
+      {related.length === 0 && <div className="mt-3"><FixButton pattern={pattern} experiments={[]} /></div>}
       <p className="mt-1 text-[12.5px] text-muted">
         {stats.firstSeen && `First seen ${shortDay(stats.firstSeen)}`}
         {stats.lastSeen && ` · Last seen ${shortDay(stats.lastSeen)}`}
@@ -632,16 +636,45 @@ function PatternView({
         {[
           `${plural(stats.observations, "distinct observation")}${coverage.complete ? "" : " found"}`,
           plural(stats.days, "separate day"),
-          ...(stats.branches ? [plural(stats.branches, "branch", "branches")] : []),
+          ...(stats.branches && stats.branches !== stats.workspaces ? [plural(stats.branches, "branch", "branches")] : []),
           plural(stats.workspaces, "workspace"),
         ].map((chip) => <Badge key={chip}>{chip}</Badge>)}
       </div>
 
+      {related.length > 0 && (
+        <div className="mt-5 flex flex-col gap-3" data-testid="reviews-related-experiments">
+          <h3 className="text-[13px] font-semibold">What to try</h3>
+          {related.map((e) => {
+            const status = effectiveStatus(e, info.followups);
+            return (
+              <div key={e.id} className="rounded-lg border border-line bg-panel p-4" data-testid="reviews-related-experiment">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="text-[13px] font-medium">{e.title}</div>
+                  <Badge tone={statusTone(status)}>{statusLabel(status)}</Badge>
+                </div>
+                <p className="mt-1 text-[12px] leading-relaxed text-muted">{e.experiment}</p>
+                {(e.expected_benefit || e.success_measure) && (
+                  <p className="mt-2 text-[12px] leading-relaxed text-muted">
+                    {e.success_measure && `Success: ${e.success_measure}`}
+                    {e.effort && ` Effort: ${e.effort}`}
+                  </p>
+                )}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <FixButton pattern={pattern} experiments={[e]} />
+                  <Button size="sm" variant="ghost" onClick={() => onExperiment(e.id)}>
+                    Record a decision <ChevronRight size={12} />
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div className="mt-2 grid gap-x-7 lg:grid-cols-[minmax(0,1fr)_280px]">
         <div className="min-w-0">
           <SectionHead title="Original observations" />
           <p className="-mt-1 mb-2 text-[12px] text-muted">One row per session and day; a report that repeats an earlier failure is not a new row.</p>
-          <SourceCoverageNote coverage={coverage} />
+          <SourceCoverageNote coverage={coverage} folded />
           {observations.length ? (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[520px] text-[12.5px]" data-testid="reviews-observations">
@@ -665,8 +698,8 @@ function PatternView({
                       </td>
                       <td className="py-2.5">
                         <SourceLink evidence={e} label={`Open session · ${shortDay(e.at)}`} open={open} />
-                        {e.human && <span className="ml-2 text-[11px] text-faint" title="A message you typed in that session">Your message</span>}
-                        {e.quote && <div className="mt-0.5 line-clamp-4 max-w-[520px] break-words text-[12px] text-muted">{e.quote}</div>}
+                        <span className="ml-2 text-[11px] text-faint" title={e.human ? "A message you typed in that session" : "Written by an agent or the system, not typed by you"}>{e.human ? "Your message" : "Not typed by you"}</span>
+                        {e.quote && <div className="mt-0.5 line-clamp-4 max-w-[520px] break-words text-[12px] text-muted">{cleanExcerpt(e.quote, 400)}</div>}
                       </td>
                     </tr>
                   ))}
@@ -733,35 +766,14 @@ function PatternView({
         <aside className="mt-7 flex flex-col gap-3">
           <div className="rounded-lg border border-line bg-panel p-4">
             <div className="text-[11px] font-medium uppercase tracking-wide text-muted">Confidence</div>
-            <p className="mt-2 text-[12.5px] leading-relaxed">{pattern.confidence || "Not stated by the analysis."}</p>
+            <ConfidenceText text={pattern.confidence} />
           </div>
-          {related.map((e) => {
-            const status = effectiveStatus(e, info.followups);
-            return (
-              <div key={e.id} className="rounded-lg border border-line bg-panel p-4" data-testid="reviews-related-experiment">
-                <div className="text-[11px] font-medium uppercase tracking-wide text-muted">Related experiment · {shortDay(e.origin_date)}</div>
-                <div className="mt-2 text-[13px] font-medium">{e.title}</div>
-                <p className="mt-1 text-[12px] leading-relaxed text-muted">{e.experiment}</p>
-                <div className="mt-2"><Badge tone={statusTone(status)}>{statusLabel(status)}</Badge></div>
-                {(e.expected_benefit || e.effort) && (
-                  <p className="mt-2 text-[12px] leading-relaxed text-muted">
-                    {e.expected_benefit && `Expected benefit: ${e.expected_benefit}`}
-                    {e.effort && ` Effort: ${e.effort}`}
-                  </p>
-                )}
-                <Button size="sm" className="mt-3" onClick={() => onExperiment(e.id)}>
-                  Review experiment <ChevronRight size={12} />
-                </Button>
-              </div>
-            );
-          })}
           {reports.length > 0 && (
             <div className="px-1 text-[12px] text-muted">
               <div>Summarized in</div>
               <div className="mt-1 flex flex-col items-start gap-1">
                 {reports.map((r) => <ReportLink key={r.id} report={r} label={`${r.kind === "weekly" ? "Weekly" : "Daily"} review · ${shortDay(r.date)}`} open={open} />)}
               </div>
-              <p className="mt-2">Original sessions remain the evidence.</p>
             </div>
           )}
         </aside>
@@ -904,6 +916,11 @@ function ExperimentDetail({
           ))}
       </dl>
 
+      <div className="mt-4 flex flex-wrap items-center gap-3" data-testid="reviews-fix">
+        <FixButton pattern={pattern} experiments={[experiment]} primary />
+        <span className="text-[12px] text-muted">Opens a new workspace with the problem and this experiment. A decision is recorded when it is created.</span>
+      </div>
+
       <SectionHead title="Decisions & results" />
       <ol className="ml-1 border-l border-line" data-testid="reviews-timeline">
         <TimelineItem title={`${shortDay(experiment.origin_date)} · Agent proposal`}>
@@ -945,6 +962,32 @@ function ExperimentDetail({
       )}
 
       <FollowUpForm experiment={experiment} status={status} sources={sourceChoices(experiment, pattern)} gate={gate} drafts={drafts} onSaved={onSaved} />
+    </div>
+  );
+}
+
+function FixButton({ pattern, experiments, primary }: { pattern: ReviewPattern | null; experiments: ReviewExperiment[]; primary?: boolean }) {
+  const experiment = experiments.length === 1 ? experiments[0]! : null;
+  return (
+    <Button
+      size="sm"
+      variant={primary ? "primary" : undefined}
+      onClick={() => startReviewFix(fixPrompt(pattern, experiments), experiment?.id ?? null, experiment?.title ?? pattern?.title ?? "this problem")}
+      title="Open a new workspace with this problem; choose Claude or Codex there"
+      data-testid="reviews-fix-button"
+    >
+      <Wrench size={12} /> Fix with Claude or Codex…
+    </Button>
+  );
+}
+
+function ConfidenceText({ text }: { text: string }) {
+  if (!text) return <p className="mt-2 text-[12.5px] leading-relaxed">Not stated by the analysis.</p>;
+  const { level, reason } = confidenceParts(text);
+  return (
+    <div className="mt-2">
+      {level && <Badge tone={/^(forte|élevée|high)$/i.test(level) ? "success" : /^(faible|low)$/i.test(level) ? "attention" : "neutral"}>{level}</Badge>}
+      {reason && <p className="mt-2 text-[12px] leading-relaxed text-muted">{reason}</p>}
     </div>
   );
 }
@@ -1139,12 +1182,12 @@ function History({ info, open }: { info: ReviewsInfo; open: OpenSource }) {
               <div className="w-16 shrink-0 text-[12.5px]">{shortDay(r.date)}</div>
               <div className="min-w-0 flex-1 basis-56">
                 <div className="text-[13px] font-medium">{r.title}</div>
-                {r.summary && <div className="mt-0.5 text-[12px] text-muted">{r.summary}</div>}
+                {r.summary && <div className="mt-0.5 text-[12px] text-muted">{cleanExcerpt(r.summary, 220)}</div>}
               </div>
               <div className="flex shrink-0 flex-wrap gap-1">
-                <Badge tone={reportStatusTone(r.status)}>{reportStatusLabel(r.status)}</Badge>
+                {r.status !== "complete" && <Badge tone={reportStatusTone(r.status)}>{reportStatusLabel(r.status)}</Badge>}
                 {r.archived && <Badge>Archived</Badge>}
-                {r.shortened && <Badge tone="attention" title="The conversation was too long and its earlier messages were left out">Shortened</Badge>}
+                {r.shortened && <Badge tone="attention" title="The conversation was too long and its earlier messages were left out: some evidence may be missing">Shortened</Badge>}
               </div>
               <div className="w-40 shrink-0 text-[12.5px]">
                 <ReportLink report={r} open={open} />
@@ -1163,7 +1206,15 @@ function History({ info, open }: { info: ReviewsInfo; open: OpenSource }) {
 }
 
 /** How much of the original sessions the analysis read, so a count or a trend never implies all of them. */
-function SourceCoverageNote({ coverage, className }: { coverage: CoverageSummary; className?: string }) {
+function SourceCoverageNote({ coverage, className, folded }: { coverage: CoverageSummary; className?: string; folded?: boolean }) {
+  if (folded && coverage.available && !coverage.complete) {
+    return (
+      <details className={cx("mb-2 text-[12px] text-muted", className)} data-testid="reviews-source-coverage">
+        <summary className="cursor-pointer">Partial sample of the sessions: counts are minimums</summary>
+        <SourceCoverageNote coverage={coverage} className="mt-1" />
+      </details>
+    );
+  }
   if (!coverage.available) {
     return <p className={cx("text-[12px] text-muted", className)} data-testid="reviews-source-coverage">Original event coverage is unavailable; these observations cannot establish complete counts or an improvement.</p>;
   }

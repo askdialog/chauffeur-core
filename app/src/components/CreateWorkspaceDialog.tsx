@@ -40,6 +40,7 @@ import {
 } from "@/state/app";
 import { designChoice, effectiveLoadout, initialChoice, type ModelChoice } from "@/lib/models";
 import { toImageInputs } from "@/lib/images";
+import { fixNote } from "@/lib/reviews";
 import {
   branchErrorOf,
   branchPrefix,
@@ -69,6 +70,24 @@ import { kbd } from "../lib/keys";
 
 // The Office's, loaded with it: offered only from the 3D view.
 const DesignPicker = lazy(() => import("./DesignPicker").then((m) => ({ default: m.DesignPicker })));
+
+/** A fix started from Reviews becomes a recorded decision, once its workspace exists; it never blocks the creation. */
+async function recordReviewFix(workspace: string, agent: string) {
+  const review = useApp.getState().createReview;
+  if (!review?.experimentId) return;
+  try {
+    await client.call("reviews.follow_up", {
+      experiment_id: review.experimentId,
+      status: "decided",
+      note: fixNote(workspace, agent),
+      source_seq: null,
+      idempotency_key: crypto.randomUUID(),
+    });
+    toast(`Decision recorded for ${review.title}`);
+  } catch (error) {
+    toast(`The fix started, but its decision was not recorded: ${errorMessage(error)}`, "error");
+  }
+}
 
 export function CreateWorkspaceDialog() {
   const open = useApp((s) => s.createOpen);
@@ -256,6 +275,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
       }
       // A creation that fails later reopens this form, filled in, with the error.
       rememberCreation(id, draft);
+      void recordReviewFix(workspaceName(result.workspace), choice.agent === "codex" ? "Codex" : "Claude");
       if (useApp.getState().officeShown && !designChat) {
         // From the Office, the user stays there: the workspace's island appears with its first
         // robot, its chat beside the scene. Without a first prompt, that chat waits for one.

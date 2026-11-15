@@ -135,6 +135,10 @@ effect requires a dated source and a measurement note.
 The sidebar lists no review conversation: Report history is their one list, and the Reviews entry shows a
 spinner or an amber dot while one works or needs the user (decided with Justin 2026-11-15, see
 [reviews-without-sidebar-conversations](adr/reviews-without-sidebar-conversations.md)).
+A pattern or an experiment offers "Fix with Claude or Codex…": it opens the New workspace dialog with the
+problem, its sessions and the experiment's success measure as the prompt, and records a "Decided" follow-up
+naming the workspace once it is created (decided with Justin 2026-11-15, see
+[reviews-fix-with-an-agent](adr/reviews-fix-with-an-agent.md)).
 Settings explain the shared daily/weekly enablement, model, cadence and windows, without adding
 new controls (approved by Justin 2026-11-14, see [reviews-interface](adr/reviews-interface.md)).
 
