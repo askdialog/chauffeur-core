@@ -26,8 +26,17 @@ try {
   const initialGap = await scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
   assert(initialGap <= 2, `Opening a long chat must reach the bottom: ${initialGap}px remaining`);
 
-  // Leave live following through a native user scroll before placing the reader in history.
+  // A slow, short upward scroll (a trackpad moving a pixel or two at a time) leaves the end and stays.
   await scroller.hover();
+  for (let i = 0; i < 6; i++) {
+    await page.mouse.wheel(0, -1);
+    await page.waitForTimeout(60);
+  }
+  await page.waitForTimeout(600);
+  const nudged = await scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+  assert(nudged >= 5, `A small upward scroll must not be pulled back to the end: ${nudged}px from it`);
+
+  // Leave live following through a native user scroll before placing the reader in history.
   await page.mouse.wheel(0, -600);
   await page.waitForFunction(() => {
     const el = document.querySelector("[data-virtuoso-scroller]");

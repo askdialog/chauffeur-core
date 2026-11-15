@@ -4,6 +4,9 @@ import type { ListLocation } from "@/lib/chatList";
 import { scrollToChatRow } from "@/lib/chatRowScroll";
 import { afterChatScroll, atChatEnd, type ChatScrollIntent, type ChatScrollPosition } from "@/lib/chatScroll";
 
+/** How long an upward input keeps the end released after its last scroll event. */
+const USER_SCROLL_SETTLE_MS = 150;
+
 function position(scroller: HTMLElement): ChatScrollPosition {
   return { top: scroller.scrollTop, height: scroller.scrollHeight, viewport: scroller.clientHeight };
 }
@@ -103,20 +106,24 @@ export function useChatScroll(
     cancelNavigation();
   }, [cancelNavigation, intent]);
 
-  const wheelFrame = useRef(0);
+  // An upward input is a request to leave the end. WebKit animates a wheel notch over several
+  // frames and a slow trackpad moves a pixel at a time: until its scroll has settled, the
+  // movement must not count as being back at the end, or following pulls the reader down again.
+  const settleTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const settleUserScroll = useCallback(() => {
+    clearTimeout(settleTimer.current);
+    settleTimer.current = setTimeout(() => {
+      intent.current.awaitingUserScroll = false;
+      refresh();
+    }, USER_SCROLL_SETTLE_MS);
+  }, [intent, refresh]);
   const userScroll = useCallback((deltaY = -1) => {
     cancelNavigation();
     if (deltaY >= 0) { refresh(); return; }
     if (scroller) before.current = position(scroller);
-    intent.current.awaitingUserScroll = true;
-    cancelAnimationFrame(wheelFrame.current);
-    wheelFrame.current = requestAnimationFrame(() => {
-      wheelFrame.current = requestAnimationFrame(() => {
-        intent.current.awaitingUserScroll = false;
-        refresh();
-      });
-    });
-  }, [cancelNavigation, intent, scroller, refresh]);
+    intent.current = { following: false, awaitingUserScroll: true };
+    settleUserScroll();
+  }, [cancelNavigation, intent, scroller, refresh, settleUserScroll]);
   useEffect(() => () => navigation.current?.(), [navigation]);
 
   useEffect(() => {
@@ -153,6 +160,7 @@ export function useChatScroll(
       const after = position(scroller);
       intent.current = afterChatScroll(intent.current, before.current ?? after, after, jumping.current, measuring.current);
       before.current = after;
+      if (intent.current.awaitingUserScroll) settleUserScroll();
       refresh();
     };
     scroller.addEventListener("wheel", wheel, { passive: true });
@@ -168,13 +176,13 @@ export function useChatScroll(
       scroller.removeEventListener("touchstart", touch);
       scroller.removeEventListener("scroll", scroll);
       scroller.removeEventListener("keydown", key);
-      cancelAnimationFrame(wheelFrame.current);
+      clearTimeout(settleTimer.current);
       cancelAnimationFrame(measureFrame.current);
       resize.disconnect();
       cancelAnimationFrame(frame.current);
       frame.current = 0;
     };
-  }, [scroller, cancelNavigation, jumping, refresh, measured, userScroll, intent]);
+  }, [scroller, cancelNavigation, jumping, refresh, measured, userScroll, settleUserScroll, intent]);
 
   const toBottom = useCallback(() => {
     cancelNavigation();
