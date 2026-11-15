@@ -56,6 +56,20 @@ export function orderedWorkspaces(
   return out;
 }
 
+/** A daily or weekly review's conversation: shown by Reviews, never as a sidebar row. */
+export function isReviewConversation(workspace: WorkspaceInfo): boolean {
+  return !!workspace.daily_review_date;
+}
+
+/** Whether a review conversation works or needs the user: its Reviews entry says so, as a folded section would. */
+export function reviewIndicator(workspaces: Record<string, WorkspaceInfo>): { working: boolean; needsInput: boolean } {
+  return foldedIndicator(
+    Object.values(workspaces)
+      .filter((w) => isReviewConversation(w) && w.state !== "archived" && w.state !== "archiving")
+      .map((workspace) => ({ workspace, depth: 0 })),
+  );
+}
+
 /** The key of the group a top-level workspace shows in. */
 function groupKey(workspace: WorkspaceInfo, known: Set<string>): string {
   if (workspace.pinned) return "pinned";
@@ -68,7 +82,8 @@ function groupKey(workspace: WorkspaceInfo, known: Set<string>): string {
  */
 export function sidebarGroups(workspaces: Record<string, WorkspaceInfo>, sections: SectionInfo[]): SidebarGroup[] {
   const known = new Set(sections.map((s) => s.id));
-  const rows = orderedWorkspaces(workspaces, false, sections);
+  // The automatic reviews are read from Reviews, not listed here (docs/adr/reviews-without-sidebar-conversations.md).
+  const rows = orderedWorkspaces(workspaces, false, sections).filter((r) => !isReviewConversation(r.workspace));
   const byKey = new Map<string, SidebarRow[]>();
   let key = "workspaces";
   for (const row of rows) {

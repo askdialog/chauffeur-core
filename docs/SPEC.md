@@ -132,6 +132,9 @@ future reviews' history. A note-only update records no status and never adopts o
 status. Source coverage is sampled across local days and chats, with incomplete periods shown as
 unknown or lower bounds. Streaming reports do not trigger repeated projection calls. An observed
 effect requires a dated source and a measurement note.
+The sidebar lists no review conversation: Report history is their one list, and the Reviews entry shows a
+spinner or an amber dot while one works or needs the user (decided with Justin 2026-11-15, see
+[reviews-without-sidebar-conversations](adr/reviews-without-sidebar-conversations.md)).
 Settings explain the shared daily/weekly enablement, model, cadence and windows, without adding
 new controls (approved by Justin 2026-11-14, see [reviews-interface](adr/reviews-interface.md)).
 

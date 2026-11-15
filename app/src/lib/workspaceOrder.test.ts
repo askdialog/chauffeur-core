@@ -3,6 +3,7 @@ import type { SectionInfo, WorkspaceInfo } from "@chauffeur/protocol";
 import {
   dropPlace,
   foldedIndicator,
+  reviewIndicator,
   headingDropPlace,
   neighbourOf,
   orderedWorkspaces,
@@ -109,6 +110,23 @@ describe("sections", () => {
     ]);
     // Nothing pinned: no Pinned group; Workspaces is always there.
     expect(sidebarGroups(byId(ws("c", "10:00")), []).map((g) => g.key)).toEqual(["workspaces"]);
+  });
+
+  test("review conversations are not sidebar rows; Reviews tells when one works or needs input", () => {
+    const withReviews = byId(
+      ws("a", "10:00"),
+      ws("r1", "11:00", { daily_review_date: "2026-11-14", section_id: "api", activity: "working" }),
+      ws("r2", "12:00", { daily_review_date: "2026-11-13", state: "archived" }),
+    );
+    expect(sidebarGroups(withReviews, sections()).map((g) => [g.key, ids(g.rows)])).toEqual([
+      ["api", []],
+      ["web", []],
+      ["empty", []],
+      ["workspaces", ["a"]],
+    ]);
+    expect(ids(visibleRows(sidebarGroups(withReviews, sections())))).toEqual(["a"]);
+    expect(reviewIndicator(withReviews)).toEqual({ working: true, needsInput: false });
+    expect(reviewIndicator(byId(ws("a", "10:00", { activity: "working" })))).toEqual({ working: false, needsInput: false });
   });
 
   test("⌘1–9 follow the rows shown: a folded section is skipped", () => {
