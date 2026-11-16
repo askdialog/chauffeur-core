@@ -28,7 +28,7 @@ domTest("process configuration guides creation when missing and opens existing T
   const { ProcessesPanel } = await import("./ProcessesPanel");
   const workspace: WorkspaceInfo = {
     id: "test", slug: "test", title: null, path: "/tmp/test", branch: "test", parent_id: null,
-    state: "ready", activity: "idle", explore: false, tickets: [], port_base: 0, port_count: 0,
+    state: "ready", activity: "idle", explore: false, weekly_review: false, tickets: [], port_base: 0, port_count: 0,
     created_at: "2026-11-16T00:00:00Z", archived_at: null, last_error: null, unread: false,
     pinned: false, position: 0, running_tasks: 0, section_id: null, section: null,
     worktrees: [{ id: "tree", repo: "owner/shop", path: "/tmp/test/shop", branch: "test", base_commit: null, base_branch: "main", origin: "workspace", group: null, removed: false }],
