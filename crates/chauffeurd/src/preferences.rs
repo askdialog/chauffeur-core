@@ -42,7 +42,6 @@ pub async fn get(d: &Arc<Daemon>) -> Result<AppSettings> {
             clone_roots: settings.clone_roots.clone(),
             github_org: settings.github_org.clone(),
             github_sources: settings.github_sources,
-            max_children: settings.max_children as u32,
             port_range_start: settings.port_range_start,
             port_block_size: settings.port_block_size,
             archive_script_timeout_secs: settings.archive_script_timeout_secs.min(u32::MAX.into())
@@ -367,9 +366,6 @@ const TEMPLATE: &str = r#"# Chauffeur's settings. The app's Settings (⌘,) chan
 # default_agent = "claude"
 # default_model = "claude-opus-5-5"
 
-# Child workspaces one workspace may have at once.
-# max_children = 5
-
 # First port handed out to workspaces, and ports per workspace.
 # port_range_start = 41000
 # port_block_size = 10
@@ -486,12 +482,6 @@ fn in_range<T: PartialOrd + std::fmt::Display + Copy>(
 /// The organization, the limits, the ports, the delays and the `[repos.*]` tables.
 fn set_workspace_limits(d: &Daemon, update: &WorkspaceDefaultsUpdate) -> Result<()> {
     let mut numbers: Vec<(&str, i64)> = Vec::new();
-    if let Some(v) = update.max_children {
-        numbers.push((
-            "max_children",
-            in_range("Child workspaces", v, 0, 50)?.into(),
-        ));
-    }
     if let Some(v) = update.port_range_start {
         numbers.push((
             "port_range_start",
@@ -920,7 +910,6 @@ mod tests {
         assert!(settings.default_repos.is_empty());
         assert!(settings.clone_roots.is_empty());
         assert!(settings.workers.project.is_empty());
-        assert_eq!(settings.max_children, 5);
         assert!(settings.prompt_suggestions);
     }
 

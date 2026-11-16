@@ -529,7 +529,7 @@ async fn a_multi_repo_workspace_is_created_archived_and_restored() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn children_are_limited_to_one_level_and_archived_with_their_parent() {
+async fn children_have_no_count_limit_stay_one_level_deep_and_archive_with_their_parent() {
     let f = fixture(46300);
     let d = &f.daemon;
     let parent = d
@@ -572,32 +572,31 @@ async fn children_are_limited_to_one_level_and_archived_with_their_parent() {
         .await;
     assert!(grandchild.is_err(), "children cannot have children");
 
-    d.workspaces
-        .create(CreateWorkspaceParams {
-            repos: vec!["repo-b".into()],
-            parent: Some(parent.id.clone()),
-            name: Some("second".into()),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    let third = d
-        .workspaces
-        .create(CreateWorkspaceParams {
-            repos: vec!["repo-b".into()],
-            parent: Some(parent.id.clone()),
-            name: Some("third".into()),
-            ..Default::default()
-        })
-        .await;
-    assert!(third.is_err(), "max_children = 2");
+    let mut children = vec![child.clone()];
+    for index in 2..=7 {
+        let workspace = d
+            .workspaces
+            .create(CreateWorkspaceParams {
+                repos: vec!["repo-b".into()],
+                parent: Some(parent.id.clone()),
+                name: Some(format!("child-{index}")),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .workspace;
+        assert_eq!(workspace.parent_id.as_deref(), Some(parent.id.as_str()));
+        children.push(workspace);
+    }
 
     d.workspaces.archive(&parent.id, false).await.unwrap();
-    assert_eq!(
-        d.workspaces.get(&child.id).unwrap().state,
-        WorkspaceState::Archived
-    );
-    assert!(!PathBuf::from(&child.path).exists());
+    for child in children {
+        assert_eq!(
+            d.workspaces.get(&child.id).unwrap().state,
+            WorkspaceState::Archived
+        );
+        assert!(!PathBuf::from(&child.path).exists());
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1888,10 +1887,6 @@ async fn every_key_of_settings_toml_is_in_the_settings_window() {
     let before = chauffeurd::preferences::get(d).await.unwrap();
     // What settings.toml holds, defaults included.
     assert_eq!(
-        before.workspaces.max_children as usize,
-        d.settings.get().max_children
-    );
-    assert_eq!(
         u64::from(before.workspaces.idle_session_minutes),
         d.settings.get().idle_session_minutes
     );
@@ -1908,7 +1903,6 @@ async fn every_key_of_settings_toml_is_in_the_settings_window() {
         SettingsUpdate {
             workspaces: Some(WorkspaceDefaultsUpdate {
                 github_org: Some("acme".into()),
-                max_children: Some(3),
                 port_range_start: Some(43000),
                 port_block_size: Some(20),
                 archive_script_timeout_secs: Some(120),
@@ -1927,13 +1921,8 @@ async fn every_key_of_settings_toml_is_in_the_settings_window() {
     .unwrap();
     let w = &settings.workspaces;
     assert_eq!(
-        (
-            w.github_org.as_str(),
-            w.max_children,
-            w.port_range_start,
-            w.port_block_size
-        ),
-        ("acme", 3, 43000, 20)
+        (w.github_org.as_str(), w.port_range_start, w.port_block_size),
+        ("acme", 43000, 20)
     );
     assert_eq!(
         (
@@ -1946,7 +1935,6 @@ async fn every_key_of_settings_toml_is_in_the_settings_window() {
     assert_eq!(settings.default_agent.as_deref(), Some("codex"));
     assert_eq!(settings.daemon_port, 48000);
     // In force at once (the port at the daemon's next start), the file's other tables kept.
-    assert_eq!(d.settings.get().max_children, 3);
     assert_eq!(
         d.settings.get().repos["repo-c"].default_branch.as_deref(),
         Some("staging")

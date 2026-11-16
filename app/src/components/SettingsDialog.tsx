@@ -388,9 +388,6 @@ function Workspaces({ settings, update, busy }: SectionProps) {
           <NumberField value={w.port_block_size} min={1} max={100} busy={busy} onSave={(v) => update({ workspaces: { port_block_size: v } })} testId="port-block-size" />
         </div>
       </Field>
-      <Field label="Child workspaces" hint="at most, at once, per workspace">
-        <NumberField value={w.max_children} min={0} max={50} busy={busy} onSave={(v) => update({ workspaces: { max_children: v } })} testId="max-children" />
-      </Field>
       <Field label="Archiving" hint="archive scripts' time limit; snapshots kept">
         <div className="flex items-center gap-2 text-[12.5px] text-muted">
           <NumberField value={w.archive_script_timeout_secs} min={10} max={3600} busy={busy} onSave={(v) => update({ workspaces: { archive_script_timeout_secs: v } })} testId="archive-timeout" />

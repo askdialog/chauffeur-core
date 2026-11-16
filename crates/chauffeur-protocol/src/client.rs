@@ -3808,8 +3808,6 @@ pub struct WorkspaceDefaults {
     /// The repos of every other owner the GitHub account reaches are listed too.
     #[serde(default)]
     pub github_sources: bool,
-    /// Child workspaces one workspace may have at once.
-    pub max_children: u32,
     /// First port handed out to workspaces, and ports per workspace.
     pub port_range_start: u16,
     pub port_block_size: u16,
@@ -4212,8 +4210,6 @@ pub struct WorkspaceDefaultsUpdate {
     pub github_org: Option<String>,
     #[serde(default)]
     pub github_sources: Option<bool>,
-    #[serde(default)]
-    pub max_children: Option<u32>,
     #[serde(default)]
     pub port_range_start: Option<u16>,
     #[serde(default)]

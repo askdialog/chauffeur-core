@@ -86,6 +86,14 @@ c archive standalone --force
 echo "== repos. the saved display order is used by the CLI"
 c --json repos | python3 -c 'import sys,json; r=json.load(sys.stdin); assert [repo["name"] for repo in r["repos"]] == ["beta", "alpha"], r'
 c new --ticket E2E-1 --name e2e-one
+echo "== children. a parent accepts more than five active child workspaces"
+for index in 1 2 3 4 5 6 7; do
+  c new --parent e2e-one --repo alpha --name "e2e-child-$index"
+done
+c --json ls | python3 -c 'import sys,json; r=json.load(sys.stdin); parent=next(w for w in r["workspaces"] if w["slug"] == "e2e-one"); children=[w for w in r["workspaces"] if w["parent_id"] == parent["id"]]; assert len(children) == 7 and all(w["state"] == "ready" for w in children), children'
+for index in 1 2 3 4 5 6 7; do
+  c archive "e2e-child-$index" --force
+done
 c ls
 # Sections: one created, a workspace filed in it and listed under its header; deleted, the
 # workspace goes back to no section.

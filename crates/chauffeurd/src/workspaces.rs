@@ -1305,7 +1305,6 @@ impl WorkspaceManager {
     }
 
     fn check_parent(&self, key: &str) -> Result<WorkspaceRow> {
-        let d = self.d();
         let parent = self.row(key)?;
         read_only(&parent, "it starts no child workspace")?;
         if parent.state != WorkspaceState::Ready {
@@ -1319,21 +1318,6 @@ impl WorkspaceManager {
             return Err(Error::Conflict(format!(
                 "{} is itself a child workspace: children cannot have children",
                 parent.slug
-            )));
-        }
-        let active_children = d
-            .store
-            .list_workspaces()?
-            .iter()
-            .filter(|w| {
-                w.parent_id.as_deref() == Some(&parent.id) && w.state != WorkspaceState::Archived
-            })
-            .count();
-        if active_children >= d.settings.get().max_children {
-            return Err(Error::Conflict(format!(
-                "{} already has {active_children} active child workspaces (max {}); archive one first",
-                parent.slug,
-                d.settings.get().max_children
             )));
         }
         Ok(parent)

@@ -34,8 +34,6 @@ pub struct UserSettings {
     /// First port handed out to workspaces.
     pub port_range_start: u16,
     pub port_block_size: u16,
-    /// Active child workspaces one workspace may have.
-    pub max_children: usize,
     /// The agent and model a chat started without one gets (the CLI's `chauffeur new`). Unset:
     /// the first favorite of the app's model picker (the loadout), else Claude.
     pub default_agent: Option<String>,
@@ -428,7 +426,6 @@ impl Default for UserSettings {
             clone_roots: Vec::new(),
             port_range_start: 41000,
             port_block_size: 10,
-            max_children: 5,
             default_agent: None,
             default_model: None,
             daemon_port: 47833,
@@ -894,14 +891,14 @@ mod tests {
 
         // A change by hand applies; one that does not parse leaves the settings in force.
         std::thread::sleep(RECHECK + Duration::from_millis(50));
-        std::fs::write(&paths.settings, "max_children = 2\n").unwrap();
+        std::fs::write(&paths.settings, "port_block_size = 2\n").unwrap();
         bump_modified(&paths.settings);
         std::thread::sleep(RECHECK + Duration::from_millis(50));
-        assert_eq!(live.get().max_children, 2);
-        std::fs::write(&paths.settings, "max_children = [").unwrap();
+        assert_eq!(live.get().port_block_size, 2);
+        std::fs::write(&paths.settings, "port_block_size = [").unwrap();
         bump_modified(&paths.settings);
         std::thread::sleep(RECHECK + Duration::from_millis(50));
-        assert_eq!(live.get().max_children, 2);
+        assert_eq!(live.get().port_block_size, 2);
         assert!(live.error().is_some());
         assert!(live.update(|_| {}).is_err());
     }
@@ -916,11 +913,11 @@ mod tests {
     #[test]
     fn a_binding_the_app_cannot_use_is_left_out_with_its_reason_and_the_file_still_applies() {
         let settings: UserSettings = toml::from_str(
-            "max_children = 2\n[keyboard.bindings]\n\"chat.new\" = \"⇧⌘T\"\n\"tab.next\" = \"⌃Tab\"\n\
+            "port_block_size = 2\n[keyboard.bindings]\n\"chat.new\" = \"⇧⌘T\"\n\"tab.next\" = \"⌃Tab\"\n\
              \"chat.nwe\" = \"⌘J\"\n\"chat.close\" = \"⌘Foo\"\n\"chat.reopen\" = \"⇧T\"\n",
         )
         .unwrap();
-        assert_eq!(settings.max_children, 2);
+        assert_eq!(settings.port_block_size, 2);
         let (overrides, errors) = settings.keyboard.overrides();
         assert_eq!(
             overrides.into_iter().collect::<Vec<_>>(),
@@ -948,11 +945,11 @@ mod tests {
     fn one_binding_that_is_not_keys_in_quotes_is_left_out_and_the_rest_kept() {
         // `chat.new` without quotes is a dotted key: a table `chat` holding `new`.
         let settings: UserSettings = toml::from_str(
-            "max_children = 2\n[keyboard.bindings]\nchat.new = \"⇧⌘J\"\n\"chat.close\" = 5\n\
+            "port_block_size = 2\n[keyboard.bindings]\nchat.new = \"⇧⌘J\"\n\"chat.close\" = 5\n\
              \"tab.next\" = \"⌃Tab\"\n",
         )
         .unwrap();
-        assert_eq!(settings.max_children, 2);
+        assert_eq!(settings.port_block_size, 2);
         let (overrides, errors) = settings.keyboard.overrides();
         assert_eq!(
             overrides.into_iter().collect::<Vec<_>>(),
@@ -1055,13 +1052,17 @@ mod tests {
         assert_eq!(shipped.design_share.url, "https://share.example");
         assert_eq!(shipped.design_share.link_urls, ["https://old.example"]);
         // A key the user set wins, even empty; the section's other keys keep the distribution's.
-        let user = parse_with(Some(&defaults), "max_children = 3\n[office]\nurl = \"\"\n").unwrap();
+        let user = parse_with(
+            Some(&defaults),
+            "port_block_size = 3\n[office]\nurl = \"\"\n",
+        )
+        .unwrap();
         assert!(!user.office.enabled());
         assert_eq!(user.office.google_client_id, "id");
         assert_eq!(user.office.google_hosted_domain, "example.com");
-        assert_eq!(user.max_children, 3);
+        assert_eq!(user.port_block_size, 3);
         // The user's own mistakes keep their position.
-        let error = parse_with(Some(&defaults), "max_children = \"three\"\n").unwrap_err();
+        let error = parse_with(Some(&defaults), "port_block_size = \"three\"\n").unwrap_err();
         assert!(format!("{error:#}").contains("line 1"), "{error:#}");
     }
 
@@ -1099,10 +1100,11 @@ mod tests {
 
     #[test]
     fn settings_of_older_versions_still_load() {
-        // auto_archive_on_merge was removed on 2026-10-14; users may still have it.
+        // Removed settings may still be present in existing files.
         let settings: UserSettings =
-            toml::from_str("auto_archive_on_merge = true\nmax_children = 3\n").unwrap();
-        assert_eq!(settings.max_children, 3);
+            toml::from_str("auto_archive_on_merge = true\nmax_children = 3\nport_block_size = 3\n")
+                .unwrap();
+        assert_eq!(settings.port_block_size, 3);
     }
 
     #[test]

@@ -31,10 +31,6 @@ github_org: string,
  */
 github_sources: boolean, 
 /**
- * Child workspaces one workspace may have at once.
- */
-max_children: number, 
-/**
  * First port handed out to workspaces, and ports per workspace.
  */
 port_range_start: number, port_block_size: number, 

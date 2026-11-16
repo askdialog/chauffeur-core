@@ -9,7 +9,7 @@ repo_order?: Array<string>,
 /**
  * Empty: the GitHub login.
  */
-branch_prefix?: string, clone_roots?: Array<string>, github_org?: string, github_sources?: boolean, max_children?: number, port_range_start?: number, port_block_size?: number, archive_script_timeout_secs?: number, snapshot_retention_days?: number, idle_session_minutes?: number, 
+branch_prefix?: string, clone_roots?: Array<string>, github_org?: string, github_sources?: boolean, port_range_start?: number, port_block_size?: number, archive_script_timeout_secs?: number, snapshot_retention_days?: number, idle_session_minutes?: number, 
 /**
  * Replaces every `[repos.*]` table.
  */
