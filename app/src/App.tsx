@@ -1,5 +1,6 @@
+import { createPortal } from "react-dom";
 import { Plus, Telescope, X } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CreateWorkspaceDialog } from "./components/CreateWorkspaceDialog";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { GithubSetup } from "./components/GithubSetup";
@@ -46,6 +47,7 @@ export function App() {
   useShortcuts();
 
   const workspace = useApp((s) => (s.selectedId ? s.workspaces[s.selectedId] : undefined));
+  const connected = useApp((s) => s.connection.status === "open");
   const loaded = useApp((s) => s.workspacesLoaded);
   const firstRun = useApp((s) => s.workspacesLoaded && Object.keys(s.workspaces).length === 0);
   const sidebarHidden = useApp((s) => s.sidebarHidden);
@@ -76,7 +78,7 @@ export function App() {
         ) : (
           <>
           <ShowSidebarButton className="absolute top-2.5 left-2.5" />
-          <EmptyState title={!loaded ? "Loading…" : firstRun ? "Welcome to Chauffeur" : "No workspace selected"}>
+          <EmptyState title={!loaded ? (connected ? "Loading workspaces…" : "Workspaces unavailable while disconnected") : firstRun ? "Welcome to Chauffeur" : "No workspace selected"}>
             {loaded && (
               <div className="flex flex-col items-center gap-3">
                 <GithubSetup />
@@ -196,28 +198,65 @@ function useShortcuts() {
   }, [selectedMissing]);
 }
 
-function ConnectionBanner() {
+export function ConnectionBanner() {
   const connection = useApp((s) => s.connection);
   if (connection.status === "open") return null;
-  const message =
-    connection.status === "closed"
-      ? "Disconnected from chauffeurd."
-      : connection.error
-        ? `chauffeurd is not reachable (${connection.error}); retrying…`
-        : "Connecting to chauffeurd…";
-  return (
-    <div
-      className={cx(
-        "shrink-0 border-b px-4 py-1.5 text-[12px]",
-        connection.status === "connecting" && !connection.error
-          ? "border-line text-muted"
-          : "border-attention/30 bg-attention/10 text-attention",
-      )}
-      data-testid="connection-banner"
-    >
-      {message}
-    </div>
-  );
+  return <ConnectionStatus />;
+}
+
+function ConnectionStatus() {
+  const connection = useApp((s) => s.connection);
+  const loaded = useApp((s) => s.workspacesLoaded);
+  const placeholder = useRef<HTMLDivElement>(null);
+  const banner = useRef<HTMLDivElement>(null);
+  const [bounds, setBounds] = useState({ top: 0, left: 0, width: 0, height: 0 });
+  useLayoutEffect(() => {
+    const slot = placeholder.current;
+    const content = banner.current;
+    if (!slot || !content) return;
+    const measure = () => {
+      const { top, left, width } = slot.getBoundingClientRect();
+      const height = content.getBoundingClientRect().height;
+      document.documentElement.style.setProperty("--global-feedback-height", `${top + height}px`);
+      setBounds((previous) => previous.top === top && previous.left === left && previous.width === width && previous.height === height
+        ? previous : { top, left, width, height });
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(slot);
+    observer.observe(content);
+    if (slot.parentElement) observer.observe(slot.parentElement);
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    measure();
+    return () => {
+      observer.disconnect();
+      document.documentElement.style.removeProperty("--global-feedback-height");
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, []);
+  const [unavailable, setUnavailable] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setUnavailable(true), 10000);
+    return () => clearTimeout(timer);
+  }, []);
+  const message = unavailable || connection.status === "closed"
+    ? "Chauffeur is unavailable. Live updates and actions are paused."
+    : loaded ? "Reconnecting to Chauffeur… Your drafts stay here." : "Connecting to Chauffeur…";
+  return <>
+    <div ref={placeholder} className="shrink-0" style={{ height: bounds.height }} data-testid="connection-placeholder" />
+    {createPortal(<div ref={banner} data-global-feedback className="fixed z-[60] border-b border-attention/30 bg-panel px-4 py-2 text-[12px] text-fg" style={{ top: bounds.top, left: bounds.left, width: bounds.width, visibility: bounds.width ? "visible" : "hidden" }} data-testid="connection-banner">
+      <div className="flex flex-wrap items-center gap-3">
+        <span role="status">{message}</span>
+        <Button size="sm" onClick={() => client.retry()}>Retry connection</Button>
+      </div>
+      <details className="mt-1 text-muted">
+        <summary className="cursor-pointer">Connection help and details</summary>
+        <p>Keep this window open to preserve your drafts. Chauffeur retries automatically. If it stays unavailable, run <code className="selectable">chauffeur daemon start</code> in a terminal, then retry.</p>
+        {connection.status === "connecting" && connection.error && <p className="mt-1 break-words selectable">{connection.error}</p>}
+      </details>
+    </div>, document.body)}
+  </>;
 }
 
 /** Under an error toast: its report offered (Send report, Always send), on its way, or done. */
@@ -253,8 +292,8 @@ function ToastReport({ toast: t }: { toast: Toast }) {
 
 export function Toasts() {
   const toasts = useToasts((s) => s.toasts);
-  return (
-    <div className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-[380px] flex-col gap-2">
+  return createPortal(
+    <div data-global-feedback aria-live="polite" aria-relevant="additions text" className="pointer-events-none fixed bottom-4 right-4 z-[60] flex w-[380px] max-w-[calc(100vw-2rem)] flex-col gap-2">
       {toasts.map((t) => (
         <div
           key={t.id}
@@ -266,6 +305,7 @@ export function Toasts() {
         >
           <div className="min-w-0 flex-1">
             <span className="break-words selectable">{t.message}</span>
+            {t.action && <button className="ml-2 underline underline-offset-2" onClick={() => { t.action?.run(); dismissToast(t.id); }}>{t.action.label}</button>}
             {t.report && <ToastReport toast={t} />}
           </div>
           <button onClick={() => dismissToast(t.id)} className="text-faint hover:text-fg" aria-label="Dismiss">
@@ -273,6 +313,6 @@ export function Toasts() {
           </button>
         </div>
       ))}
-    </div>
+    </div>, document.body,
   );
 }

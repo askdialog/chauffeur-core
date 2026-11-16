@@ -1,7 +1,8 @@
 import type { Activity, AgentKind, WorkspaceInfo } from "@chauffeur/protocol";
 import { Check, ChevronDown, Loader2, Lock, PenTool, X } from "lucide-react";
-import { type ButtonHTMLAttributes, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ButtonHTMLAttributes, type ReactNode, useEffect, useLayoutEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { dialogControls } from "@/lib/dialogFocus";
 
 export function cx(...classes: Array<string | false | null | undefined>): string {
   return classes.filter(Boolean).join(" ");
@@ -188,29 +189,69 @@ export function Modal({
   dismissable?: boolean;
 }) {
   const panel = useRef<HTMLDivElement>(null);
+  const overlay = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const wasOpen = useRef(false);
+  const trigger = useRef<HTMLElement | null>(null);
+  // Child autoFocus runs before this dialog's layout effect, so remember the trigger before commit.
+  if (open && !wasOpen.current) {
+    trigger.current = document.activeElement instanceof window.HTMLElement ? document.activeElement : null;
+  }
+  wasOpen.current = open;
   // Read at the key press: a new `onClose` each render must not move this modal up the stack.
   const close = useRef({ onClose, dismissable });
   close.current = { onClose, dismissable };
-  useEffect(() => {
-    if (!open) return;
+  useLayoutEffect(() => {
+    if (!open || !panel.current || !overlay.current) return;
     const self = {};
+    const dialog = panel.current;
+    const previous = trigger.current;
+    const background = [...document.body.children].filter((element): element is HTMLElement =>
+      element instanceof window.HTMLElement && element !== overlay.current && !element.matches("[data-popover], [data-global-feedback]"),
+    ).map((element) => ({ element, inert: element.inert }));
+    background.forEach(({ element }) => { element.inert = true; });
     openModals.push(self);
+    const focusFirst = () => (dialogControls(dialog)[0] ?? dialog).focus();
+    if (!dialog.contains(document.activeElement)) focusFirst();
+    const onFocus = (event: FocusEvent) => {
+      if (openModals.at(-1) !== self) return;
+      const target = event.target;
+      if (target instanceof window.HTMLElement && !dialog.contains(target) && !target.closest("[data-popover], [data-global-feedback]")) focusFirst();
+    };
     const onKey = (event: KeyboardEvent) => {
-      // An open popover (the model picker) closes first.
-      if (event.key !== "Escape" || openModals.at(-1) !== self || document.querySelector("[data-popover]")) return;
-      event.stopPropagation();
-      if (close.current.dismissable) close.current.onClose();
+      if (openModals.at(-1) !== self) return;
+      if (event.key === "Escape") {
+        // A portalled picker owns Escape before its dialog.
+        if (document.querySelector("[data-popover]")) return;
+        event.stopPropagation();
+        event.preventDefault();
+        if (close.current.dismissable) close.current.onClose();
+      } else if (event.key === "Tab") {
+        const controls = dialogControls(dialog);
+        // Portals do not follow the dialog in DOM order: walk the complete focus scope explicitly.
+        event.preventDefault();
+        const index = controls.findIndex((control) => control === document.activeElement);
+        const next = index < 0 ? (event.shiftKey ? controls.length - 1 : 0)
+          : (index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+        (controls[next] ?? dialog).focus();
+      }
     };
     window.addEventListener("keydown", onKey, true);
+    window.addEventListener("focusin", onFocus, true);
     return () => {
       openModals.splice(openModals.indexOf(self), 1);
       window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("focusin", onFocus, true);
+      background.forEach(({ element, inert }) => { element.inert = inert; });
+      if (previous?.isConnected && !previous.closest("[inert]")) previous.focus();
     };
   }, [open]);
   if (!open) return null;
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 pt-[10vh]"
+      ref={overlay}
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55"
+      style={{ paddingTop: "max(10vh, calc(var(--global-feedback-height, 0px) + 12px))" }}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && dismissable) onClose();
       }}
@@ -218,12 +259,14 @@ export function Modal({
       <div
         ref={panel}
         role="dialog"
-        aria-label={typeof title === "string" ? title : undefined}
-        className="flex max-h-[80vh] flex-col overflow-hidden rounded-lg border border-line-strong bg-panel shadow-2xl shadow-black/60"
-        style={{ width, height, maxWidth: "calc(100vw - 32px)" }}
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
+        className="flex flex-col overflow-hidden rounded-lg border border-line-strong bg-panel shadow-2xl shadow-black/60"
+        style={{ width, height, maxWidth: "calc(100vw - 32px)", maxHeight: "min(80vh, calc(100dvh - max(10vh, calc(var(--global-feedback-height, 0px) + 12px)) - 16px))" }}
       >
         <div className="flex h-10 shrink-0 items-center justify-between border-b border-line px-4">
-          <div className="font-semibold text-fg">{title}</div>
+          <div id={titleId} className="font-semibold text-fg">{title}</div>
           {dismissable && (
             <IconButton title="Close" onClick={onClose}>
               <X size={14} />
@@ -233,16 +276,37 @@ export function Modal({
         <div className="min-h-0 flex-1 overflow-y-auto p-4">{children}</div>
         {footer && <div className="flex shrink-0 items-center justify-end gap-2 border-t border-line px-4 py-2.5">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
 export function Field({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+  const id = useId();
+  const group = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = group.current;
+    if (!element) return;
+    const labelControls = () => {
+      for (const control of element.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input:not([type=hidden]), select, textarea")) {
+        if (!control.getAttribute("aria-label") && !control.getAttribute("aria-labelledby") && !control.labels?.length) {
+          control.setAttribute("aria-labelledby", `${id}-label`);
+        }
+        if (hint && !control.getAttribute("aria-describedby")) control.setAttribute("aria-describedby", `${id}-hint`);
+        if (!hint && control.getAttribute("aria-describedby") === `${id}-hint`) control.removeAttribute("aria-describedby");
+      }
+    };
+    labelControls();
+    // Custom field children can mount their inputs after an asynchronous load.
+    const observer = new window.MutationObserver(labelControls);
+    observer.observe(element, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [id, hint, children]);
   return (
-    <div className="block" role="group" aria-label={label}>
-      <div className="mb-1 flex items-baseline justify-between">
-        <span className="text-[12px] font-medium text-muted">{label}</span>
-        {hint && <span className="text-[11px] text-faint">{hint}</span>}
+    <div ref={group} className="block" role="group" aria-labelledby={`${id}-label`}>
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1">
+        <span id={`${id}-label`} className="text-[12px] font-medium text-muted">{label}</span>
+        {hint && <span id={`${id}-hint`} className="text-[11px] text-faint">{hint}</span>}
       </div>
       {children}
     </div>

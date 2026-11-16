@@ -803,3 +803,16 @@ and no Mac server capability or pairing key is given to HTML. The viewer closes 
 private resource access when hidden or disconnected. See [mobile-private-canvas](adr/mobile-private-canvas.md).
 
 **Core releases (decided with Justin 2026-11-11).** Core-only artifacts use their own `core-vX.Y.Z` tags and names in the public repository. Their source and binary versions agree. Their updater and worker downloads select only Core artifacts; Dialog keeps the legacy `vX.Y.Z` channel for existing installations. Core releases do not become GitHub’s latest release. See [separate releases](adr/separate-core-and-dialog-releases.md).
+
+### UX/UI foundations (2026-11-16)
+
+The desktop's dialogs contain keyboard focus, keep the background inert and restore the trigger;
+field labels name their controls. Secondary text reads at 4.5:1 on neutral surfaces, including
+custom dark themes. Settings search has a fixed, comfortably padded field above its scrolling
+sections and finds options, opening and highlighting the chosen one. Optional GitHub configuration
+does not crowd the prompt when a selected local repo is sufficient. Task lists fold by default
+in short chat panes or while input is pending, with manual expansion available. Empty Processes
+provides configuration guidance without running anything automatically. Connection failures expose
+recovery and optional technical details; retry preserves drafts and queued calls. Archives are
+identified explicitly, with retention guidance and a notification route back to them.
+Requested by Justin after the UX/UI audit; see [the decision](adr/ux-audit-foundations.md).

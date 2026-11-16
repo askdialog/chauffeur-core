@@ -22,7 +22,7 @@ import { errorMessage, isNotImplemented } from "@/lib/rpc";
 import { ticketsCollapsed, ticketsEditable, ticketTooltip, ticketUnread, withoutTicket, withTicket } from "@/lib/tickets";
 import type { LogEntry } from "@/lib/workspaceLive";
 import { type RemoteOpen, watchRemote } from "@/lib/workers";
-import { client, toast, upsertWorkspace } from "@/state/app";
+import { client, openSettings, toast, upsertWorkspace } from "@/state/app";
 import { useRepoCatalog } from "@/state/repos";
 import { useWorkspaceSelector, useWorkspaceSession, type WorkspaceSession } from "@/state/session";
 import { OpenButton } from "./OpenButton";
@@ -185,6 +185,12 @@ function Header({ workspace, session }: { workspace: WorkspaceInfo; session: Wor
           />
         )}
       </div>
+
+      {workspace.state === "archived" && (
+        <p className="mt-2 text-[12px] text-muted" data-testid="archive-retention">
+          Conversations and notes remain available. {!workspace.explore && <>Snapshots follow the retention period in <button className="underline underline-offset-2" onClick={() => openSettings(true, "workspaces")}>Settings → Workspaces</button>.</>}
+        </p>
+      )}
 
       {workspace.state === "cleanup_failed" && workspace.last_error && (
         <div className="mt-2 flex items-start gap-2 rounded-md border border-danger/30 bg-danger/10 px-3 py-1.5 text-[12px] text-danger selectable">

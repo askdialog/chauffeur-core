@@ -161,3 +161,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [The phone creates a workspace on the Mac](mobile-workspace-creation.md) | 2026-11-15 | accepted |
 | [Reconnect MCP servers directly from their warning](direct-mcp-reconnection.md) | 2026-11-16 | accepted |
 | [Child workspaces have no count limit](unlimited-child-workspaces.md) | 2026-11-16 | accepted |
+| [Make the interface foundations and recovery paths dependable](ux-audit-foundations.md) | 2026-11-16 | accepted |

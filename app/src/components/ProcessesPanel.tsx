@@ -1,9 +1,9 @@
 import type { WorkspaceInfo } from "@chauffeur/protocol";
 import { Cog, Play, Square, TerminalSquare } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { errorMessage } from "@/lib/rpc";
+import { errorMessage, RpcCallError } from "@/lib/rpc";
 import { processLines, type ProcessView } from "@/lib/workspaceLive";
-import { client, toast } from "@/state/app";
+import { client, openFile, sendToChat, toast } from "@/state/app";
 import { useWorkspaceSelector, type WorkspaceSession } from "@/state/session";
 import { Badge, Button, cx, EmptyState, Spinner } from "./ui";
 
@@ -16,6 +16,25 @@ export function ProcessesPanel({ workspace, session }: { workspace: WorkspaceInf
   const [selected, setSelected] = useState<string | null>(null);
   const [starting, setStarting] = useState<string | null>(null);
   const ready = workspace.state === "ready";
+  const repos = workspace.worktrees.filter((tree) => !tree.removed && tree.origin === "workspace");
+  const [repoId, setRepoId] = useState("");
+  const repo = repos.find((tree) => tree.id === repoId) ?? repos[0];
+  const configPath = repo ? `${repo.path.split("/").pop()}/.chauffeur/settings.toml` : "";
+  const [configHelp, setConfigHelp] = useState<string | null>(null);
+  async function openConfig() {
+    setConfigHelp(null);
+    try {
+      await client.call("files.read", { workspace: workspace.id, path: configPath });
+      openFile(workspace.id, configPath);
+    } catch (error) {
+      if (error instanceof RpcCallError && error.code === 404) {
+        setConfigHelp(`Create ${configPath} in your editor, then add a run script using the example below.`);
+      } else toast(`Could not open ${configPath}: ${errorMessage(error)}`, "error");
+    }
+  }
+  function prepareHelp() {
+    void sendToChat(workspace.id, null, `Help me configure run scripts for ${repo?.repo} in ${configPath}. Inspect the repository and propose the right command in [scripts.run]. Do not start any process. Explain how to refresh Processes and run it manually.`);
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -83,8 +102,26 @@ export function ProcessesPanel({ workspace, session }: { workspace: WorkspaceInf
           {scripts == null ? (
             <Spinner />
           ) : scripts.length === 0 ? (
-            <div className="text-[12px] text-faint">
-              {error ?? "No run script: declare them in each repo's .chauffeur/settings.toml ([scripts.run])."}
+            <div className="space-y-2 text-[12px] text-muted" data-testid="no-run-scripts">
+              {error ? <p role="alert">Could not load scripts: {error}</p> : <p>No run scripts configured.</p>}
+              {!error && repo && <>
+                <label className="block">Repository
+                  <select aria-label="Repository for run scripts" className="mt-1 w-full rounded border border-line bg-panel p-1 text-fg" value={repo.id} onChange={(event) => { setRepoId(event.target.value); setConfigHelp(null); }}>
+                    {repos.map((tree) => <option key={tree.id} value={tree.id}>{tree.repo}</option>)}
+                  </select>
+                </label>
+                <Button size="sm" onClick={() => void openConfig()}>Open configuration</Button>
+                <p className="break-words selectable">{configPath}</p>
+                {configHelp && <p role="status">{configHelp}</p>}
+                <details>
+                  <summary className="cursor-pointer">Minimal example</summary>
+                  <pre className="mt-1 whitespace-pre-wrap rounded bg-raised p-2 selectable">{'[scripts.run.dev]\ncommand = "npm run dev"'}</pre>
+                  <p>Replace the command with your repo’s development command. Save the file, refresh scripts, then choose Run.</p>
+                </details>
+                <Button size="sm" disabled={!ready} onClick={prepareHelp}>Prepare a request for the agent</Button>
+                <p>Opens a draft for you to review and send.</p>
+              </>}
+              <Button size="sm" onClick={() => void refresh()}>Refresh scripts</Button>
             </div>
           ) : (
             <div className="space-y-1" data-testid="run-scripts">

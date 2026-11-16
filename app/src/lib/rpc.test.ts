@@ -363,3 +363,38 @@ describe("extension view leases", () => {
     client.stop();
   });
 });
+
+
+test("manual retry preserves queued calls and never duplicates an active connection", async () => {
+  const sockets: FakeSocket[] = [];
+  let available = false;
+  let resolves = 0;
+  const client = new DaemonClient({
+    resolve: async () => {
+      resolves++;
+      if (!available) throw new Error("offline");
+      return { url: "ws://localhost/ws", token: "test" };
+    },
+    createSocket: (url) => { const socket = new FakeSocket(url); sockets.push(socket); return socket; },
+    initialBackoffMs: 60000,
+  });
+  try {
+    client.start();
+    const queued = client.call("workspace.list", { include_archived: false });
+    await tick();
+    available = true;
+    client.retry();
+    client.retry();
+    await tick();
+    expect(resolves).toBe(2);
+    expect(sockets).toHaveLength(1);
+    const socket = sockets[0];
+    socket.open();
+    socket.reply(socket.last("hello").id, { protocol_version: PROTOCOL_VERSION, daemon_version: "test", home: "/tmp", workspaces_dir: "/tmp" });
+    await tick();
+    socket.reply(socket.last("workspace.list").id, { workspaces: [], sections: [] });
+    expect(await queued).toEqual({ workspaces: [], sections: [] });
+    client.retry();
+    expect(sockets).toHaveLength(1);
+  } finally { client.stop(); }
+});

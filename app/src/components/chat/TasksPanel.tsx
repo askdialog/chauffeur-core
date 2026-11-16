@@ -3,11 +3,11 @@
 // subagent's own tasks sit under it, indented, with a guide line.
 
 import { ChevronDown, ChevronRight, Square, Terminal, Users, Workflow } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { type TaskView, taskStep } from "@/lib/chat";
 import { formatElapsed } from "@/lib/format";
 import { errorMessage } from "@/lib/rpc";
-import { foldedSummary, MAX_TASK_INDENT, nestTasks, taskLines, tasksHeader } from "@/lib/tasks";
+import { compactTasks, foldedSummary, MAX_TASK_INDENT, nestTasks, taskLines, tasksHeader } from "@/lib/tasks";
 import { client, toast } from "@/state/app";
 import { Button, cx } from "../ui";
 
@@ -16,14 +16,30 @@ export function TasksPanel({
   tasks,
   readOnly,
   onOpen,
+  awaitingInput = false,
 }: {
   chatId: string;
   tasks: TaskView[];
   readOnly: boolean;
+  awaitingInput?: boolean;
   /** Opens a subagent's conversation (Claude chats). */
   onOpen?: (task: TaskView) => void;
 }) {
-  const [open, setOpen] = useState(true);
+  const container = useRef<HTMLDivElement>(null);
+  const [height, setHeight] = useState<number | null>(null);
+  const [expanded, setExpanded] = useState<boolean | null>(null);
+  const hasTasks = tasks.length > 0;
+  useLayoutEffect(() => {
+    const parent = container.current?.parentElement;
+    if (!parent) return;
+    const measure = () => setHeight(parent.getBoundingClientRect().height);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, [hasTasks]);
+  const compact = compactTasks(height, awaitingInput);
+  const open = expanded ?? !compact;
   const [stopping, setStopping] = useState<ReadonlySet<string>>(() => new Set());
   const now = useNow(tasks.length > 0);
   const trees = useMemo(() => nestTasks(tasks), [tasks]);
@@ -46,11 +62,11 @@ export function TasksPanel({
   };
 
   return (
-    <div className="mx-auto w-full max-w-[860px] px-5 pb-1.5" data-testid="tasks">
+    <div ref={container} className="mx-auto w-full max-w-[860px] shrink-0 px-5 pb-1.5" data-testid="tasks" data-compact={compact || undefined}>
       <div className="rounded-lg border border-line bg-raised">
         <button
           type="button"
-          onClick={() => setOpen(!open)}
+          onClick={() => setExpanded(!open)}
           aria-expanded={open}
           className={cx("flex h-7 w-full items-center gap-1.5 px-2.5 text-left text-[11.5px] text-faint hover:text-muted", open && "border-b border-line")}
         >
@@ -62,7 +78,7 @@ export function TasksPanel({
           {!open && <span className="min-w-0 flex-1 truncate">· {foldedSummary(trees)}</span>}
         </button>
         {open && (
-          <div className="max-h-44 overflow-y-auto py-0.5">
+          <div className={cx("overflow-y-auto py-0.5", compact ? "max-h-24" : "max-h-44")}>
             {taskLines(trees).map(({ task, depth }) => (
               <TaskRow
                 key={task.taskId}

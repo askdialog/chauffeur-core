@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TaskView } from "./chat";
-import { foldedSummary, nestedCount, nestTasks, type TaskTree, taskLines, tasksHeader } from "./tasks";
+import { compactTasks, foldedSummary, nestedCount, nestTasks, type TaskTree, taskLines, tasksHeader } from "./tasks";
 
 function task(taskId: string, parentTaskId: string | null = null, kind: TaskView["kind"] = "subagent"): TaskView {
   return {
@@ -79,4 +79,11 @@ describe("counts", () => {
     });
     expect(tasksHeader(nestTasks([task("a")]))).toEqual({ label: "1 task running", title: null });
   });
+});
+
+test("tasks leave room for a pending answer or a short pane", () => {
+  expect(compactTasks(900, true)).toBe(true);
+  expect(compactTasks(560, false)).toBe(true);
+  expect(compactTasks(800, false)).toBe(false);
+  expect(compactTasks(null, false)).toBe(false);
 });

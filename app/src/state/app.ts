@@ -1442,7 +1442,7 @@ function onRegistry(envelope: EventEnvelope) {
     set((s) => ({ workspaces: { ...s.workspaces, [workspace.id]: workspace } }));
     leaveWhenArchiving(all, workspace);
     // Archiving runs in the background: say how it ended.
-    if (before?.state === "archiving" && workspace.state === "archived") toast(`${workspaceName(workspace)} archived`);
+    if (before?.state === "archiving" && workspace.state === "archived") toast(`${workspaceName(workspace)} archived`, "info", { label: "View archive", run: () => selectWorkspace(workspace.id) });
     if (before?.state === "archiving" && workspace.state === "cleanup_failed") {
       toast(`Could not archive ${workspaceName(workspace)}: ${workspace.last_error ?? "a cleanup step failed"}`, "error");
     }

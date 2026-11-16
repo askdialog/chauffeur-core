@@ -398,7 +398,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        {!parentId && <GithubSetup compact />}
+        {!parentId && <GithubSetup compact localReposSelected={selection.length > 0 && selection.every((key) => repos?.some((repo) => repo.key === key && !!repo.clone_path))} />}
 
         <fieldset disabled={creating} className="min-w-0 space-y-3 disabled:opacity-60">
           {shareLink !== "" || (importing && kind !== "design") ? (

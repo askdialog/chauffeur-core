@@ -211,6 +211,18 @@ export class DaemonClient {
     void this.connect();
   }
 
+  /** Skips a reconnect backoff without interrupting an attempt or discarding queued calls. */
+  retry() {
+    if (this.stopped) {
+      this.start();
+      return;
+    }
+    if (!this.retryTimer) return;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    void this.connect();
+  }
+
   /** Closes the connection for good. */
   stop() {
     this.stopped = true;

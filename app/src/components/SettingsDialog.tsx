@@ -4,7 +4,7 @@
 
 import type { AppSettings, ErrorReports, KeepAwake, OllamaPull, Palette, RepoSetting, SearchStatus, SettingsUpdate, ShortcutId, UpdateStatus } from "@chauffeur/protocol";
 import { ArrowRightLeft, Bell, CircleUser, Bot, Coffee, Cpu, ExternalLink, FileText, FolderGit2, GitBranch, Info, Keyboard, KeyRound, Layers, Palette as PaletteIcon, Play, Plus, Power, Package, Search, Settings2, Smartphone, Type, X } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { effectiveLoadout, type ModelChoice } from "@/lib/models";
 import { GithubSetup } from "./GithubSetup";
 import { LocalModelsSettings } from "./LocalModelsSettings";
@@ -15,6 +15,7 @@ import { ExtensionMarketplace } from "./ExtensionMarketplace";
 import { MobileSettings } from "./MobileSettings";
 import { AccountSettings } from "./AccountSettings";
 import { BrandsSettings } from "./BrandsSettings";
+import { searchSettings, type SettingsSection } from "@/lib/settingsSearch";
 import { MEMBERS_ONLY_SECTIONS } from "@/lib/members";
 import { errorMessage } from "@/lib/rpc";
 import { setErrorReports } from "@/state/errorReports";
@@ -49,7 +50,7 @@ import { DEFAULT_CODE_SIZE, DEFAULT_MONO, DEFAULT_SANS, DEFAULT_TERMINAL_SIZE, f
 import { interfaceHint } from "@/lib/palette";
 import { Button, cx, Field, IconButton, inputClass, Modal, Spinner, Toggle } from "./ui";
 
-type Section = "brands" | "account" | "extensions" | "slack" | "transfer" | "mobile" | "general" | "github" | "daily-review" | "appearance" | "keyboard" | "notifications" | "workspaces" | "llms" | "agents" | "local-models" | "search" | "sleep" | "linear" | "compaction" | "about";
+type Section = SettingsSection;
 
 const SECTIONS: Array<{ id: Section; label: string; icon: ReactNode }> = [
   { id: "account", label: "Account", icon: <CircleUser size={13} /> },
@@ -92,6 +93,8 @@ export function SettingsDialog() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState("");
+  const [target, setTarget] = useState<string | null>(null);
+  const content = useRef<HTMLDivElement>(null);
   const member = useApp((s) => s.identity?.member ?? false);
   const offered = (id: Section) => member || !MEMBERS_ONLY_SECTIONS.includes(id);
 
@@ -111,6 +114,35 @@ export function SettingsDialog() {
       .then(setSettings)
       .catch((err) => setError(errorMessage(err)));
   }, [open]);
+
+  useEffect(() => {
+    if (!open) { setSearch(""); setTarget(null); }
+  }, [open]);
+
+  const settingsLoaded = settings !== null;
+  useEffect(() => {
+    if (!open || !target || search.trim() || !settingsLoaded) return;
+    const control = content.current?.querySelector<HTMLElement>(`[data-testid="${target}"]`);
+    if (!control) return;
+    control.scrollIntoView({ block: "center" });
+    const focusable = control.matches("input, select, button, textarea") ? control : control.querySelector<HTMLElement>("input, select, button, textarea");
+    const destination = focusable && !focusable.matches(":disabled") ? focusable : control.closest<HTMLElement>("[role=group]") ?? control.parentElement;
+    const previousTabIndex = destination?.getAttribute("tabindex");
+    if (destination && destination !== focusable) destination.tabIndex = -1;
+    destination?.focus({ preventScroll: true });
+    control.setAttribute("data-search-match", "");
+    return () => {
+      control.removeAttribute("data-search-match");
+      if (destination && destination !== focusable) {
+        if (previousTabIndex == null) destination.removeAttribute("tabindex");
+        else destination.setAttribute("tabindex", previousTabIndex);
+      }
+    };
+  }, [target, section, search, settingsLoaded, open]);
+
+  const results = searchSettings(search, member);
+  const matchingSections = SECTIONS.filter((s) => offered(s.id) &&
+    `${s.label} ${s.id} ${SECTION_GROUPS.find((g) => g.sections.includes(s.id))?.label ?? ""}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
 
   const update: Update = async (change) => {
     setBusy(true);
@@ -135,83 +167,109 @@ export function SettingsDialog() {
 
   return (
     <Modal open={open} onClose={() => openSettings(false)} title="Settings" width={720} height={600}>
-      <div className="flex h-full min-h-0 gap-5">
-        <nav className="flex w-36 shrink-0 flex-col gap-0.5 overflow-y-auto" aria-label="Settings sections">
-          <input type="search" aria-label="Search settings" placeholder="Search settings…" value={search} onChange={(event) => setSearch(event.target.value)} className={cx(inputClass, "mb-2 text-[12px]")} />
-          {SECTION_GROUPS.map((group) => {
-            const items = group.sections.filter(offered).map((id) => SECTIONS.find((s) => s.id === id)!)
-              .filter((s) => `${s.label} ${s.id} ${group.label}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
-            if (!items.length) return null;
-            return <div key={group.label} className="mb-2">
-              <p className="mb-1 px-2 text-[11px] font-medium text-muted">{group.label}</p>
-              {items.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => {
-                setSection(s.id);
-                setError(null);
-              }}
-              aria-current={section === s.id ? "page" : undefined}
-              className={cx(
-                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px]",
-                section === s.id ? "bg-hover text-fg" : "text-muted hover:bg-hover/60 hover:text-fg",
-              )}
-              data-testid={`settings-${s.id}`}
-            >
-              {s.icon}
-              {s.label}
-            </button>
-          ))}
-            </div>;
-          })}
-          {search.trim() && !SECTIONS.some((s) => offered(s.id) && `${s.label} ${s.id}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) && !SECTION_GROUPS.some((g) => g.label.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) && <p className="px-2 text-[12px] text-muted">No matching settings.</p>}
-        </nav>
-        <div key={section} className="min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
-          {!settings ? (
-            <div className="flex items-center gap-2 text-[12.5px] text-muted">
-              {error ? <span className="text-danger">{error}</span> : <Spinner />}
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {settings.file_error && (
-                <p className="rounded-md border border-attention/30 bg-attention/10 px-3 py-2 text-[12px] text-attention selectable">
-                  settings.toml does not parse, so its last valid version is in force: {settings.file_error}
-                </p>
-              )}
-              {section === "transfer" && (
-                <div className="space-y-8">
-                  <TransferSettings settings={settings} update={update} busy={busy} />
-                  <WorkerSettings key={`${settings.workers?.project}:${settings.workers?.zone}`} />
-                </div>
-              )}
-              {section === "account" && <AccountSettings />}
-              {section === "extensions" && <ExtensionMarketplace />}
-              {section === "slack" && member && <SlackSettings />}
-              {section === "mobile" && <MobileSettings />}
-              {section === "general" && <General settings={settings} update={update} busy={busy} onError={setError} />}
-              {section === "github" && (
-                <>
-                  <Heading title="GitHub">Chauffeur creates workspaces from your GitHub repositories and opens their pull requests with your account. Git pushes through it too: no SSH key needed.</Heading>
-                  <GithubSetup manage />
-                </>
-              )}
-              {section === "appearance" && <AppearanceSection settings={settings} update={update} busy={busy} />}
-              {section === "keyboard" && <KeyboardSection settings={settings} update={update} busy={busy} />}
-              {section === "notifications" && <Notifications settings={settings} update={update} busy={busy} />}
-              {section === "workspaces" && <Workspaces settings={settings} update={update} busy={busy} />}
-              {section === "llms" && <Llms settings={settings} update={update} busy={busy} />}
-              {section === "daily-review" && <DailyReview settings={settings} update={update} busy={busy} />}
-              {section === "agents" && <Agents settings={settings} update={update} busy={busy} />}
-              {section === "local-models" && <LocalModelsSettings />}
-              {section === "search" && <SearchSection settings={settings} update={update} busy={busy} />}
-              {section === "sleep" && <Sleep settings={settings} update={update} busy={busy} />}
-              {section === "linear" && <Linear settings={settings} update={update} busy={busy} />}
-              {section === "compaction" && <Compaction settings={settings} update={update} busy={busy} />}
-              {section === "brands" && <BrandsSettings />}
-              {section === "about" && <About />}
-              {error && <p className="text-[12px] text-danger selectable">{error}</p>}
-            </div>
-          )}
+      <div className="flex h-full min-h-0 flex-col gap-4">
+        <div className="shrink-0">
+          <input type="search" aria-label="Search settings" placeholder="Search settings…" value={search}
+            onChange={(event) => { setSearch(event.target.value); setTarget(null); }}
+            className="h-8 min-h-8 w-full rounded-md border border-line bg-bg px-3 text-[12.5px] text-fg placeholder:text-muted focus:border-accent/60 focus:outline-none" />
+        </div>
+        <div className="flex min-h-0 flex-1 gap-5">
+
+          <nav className="flex w-36 shrink-0 flex-col gap-0.5 overflow-y-auto" aria-label="Settings sections">
+            {SECTION_GROUPS.map((group) => {
+              const items = group.sections.filter(offered).map((id) => SECTIONS.find((s) => s.id === id)!);
+              if (!items.length) return null;
+              return <div key={group.label} className="mb-2">
+                <p className="mb-1 px-2 text-[11px] font-medium text-muted">{group.label}</p>
+                {items.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => {
+                  setSection(s.id);
+                  setSearch("");
+                  setTarget(null);
+                  setError(null);
+                }}
+                aria-current={section === s.id ? "page" : undefined}
+                className={cx(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px]",
+                  section === s.id ? "bg-hover text-fg" : "text-muted hover:bg-hover/60 hover:text-fg",
+                )}
+                data-testid={`settings-${s.id}`}
+              >
+                {s.icon}
+                {s.label}
+              </button>
+            ))}
+              </div>;
+            })}
+
+          </nav>
+          <div ref={content} key={section} className="min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable] [&_[data-search-match]]:rounded-md [&_[data-search-match]]:outline-2 [&_[data-search-match]]:outline-accent [&_[data-search-match]]:outline-offset-2" data-testid="settings-content">
+            {search.trim() ? (
+              <div className="space-y-2" aria-label="Settings search results">
+                <p role="status" className="text-[12px] text-muted">{results.length + matchingSections.length ? `${results.length + matchingSections.length} matching settings` : "No matching settings. Try font, terminal, sound or startup."}</p>
+                {results.map((result) => (
+                  <button key={result.target} type="button" className="block w-full rounded-md border border-line px-3 py-2 text-left hover:bg-hover"
+                    onClick={() => { setSection(result.section); setTarget(result.target); setSearch(""); setError(null); }}
+                    data-testid={`settings-result-${result.target}`}>
+                    <span className="block text-[11px] text-muted">{SECTION_GROUPS.find((g) => g.sections.includes(result.section))?.label} › {SECTIONS.find((s) => s.id === result.section)?.label}</span>
+                    <span className="text-[12.5px] text-fg">{result.label}</span>
+                  </button>
+                ))}
+                {matchingSections.map((s) => (
+                  <button key={s.id} type="button" className="block w-full rounded-md border border-line px-3 py-2 text-left text-[12.5px] text-fg hover:bg-hover"
+                    onClick={() => { setSection(s.id); setTarget(null); setSearch(""); setError(null); }}>
+                    {SECTION_GROUPS.find((g) => g.sections.includes(s.id))?.label} › {s.label}
+                  </button>
+                ))}
+              </div>
+            ) : !settings ? (
+              <div className="flex items-center gap-2 text-[12.5px] text-muted">
+                {error ? <span className="text-danger">{error}</span> : <Spinner />}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {settings.file_error && (
+                  <p className="rounded-md border border-attention/30 bg-attention/10 px-3 py-2 text-[12px] text-attention selectable">
+                    settings.toml does not parse, so its last valid version is in force: {settings.file_error}
+                  </p>
+                )}
+                {section === "transfer" && (
+                  <div className="space-y-8">
+                    <TransferSettings settings={settings} update={update} busy={busy} />
+                    <WorkerSettings key={`${settings.workers?.project}:${settings.workers?.zone}`} />
+                  </div>
+                )}
+                {section === "account" && <AccountSettings />}
+                {section === "extensions" && <ExtensionMarketplace />}
+                {section === "slack" && member && <SlackSettings />}
+                {section === "mobile" && <MobileSettings />}
+                {section === "general" && <General settings={settings} update={update} busy={busy} onError={setError} />}
+                {section === "github" && (
+                  <>
+                    <Heading title="GitHub">Chauffeur creates workspaces from your GitHub repositories and opens their pull requests with your account. Git pushes through it too: no SSH key needed.</Heading>
+                    <GithubSetup manage />
+                  </>
+                )}
+                {section === "appearance" && <AppearanceSection settings={settings} update={update} busy={busy} />}
+                {section === "keyboard" && <KeyboardSection settings={settings} update={update} busy={busy} />}
+                {section === "notifications" && <Notifications settings={settings} update={update} busy={busy} />}
+                {section === "workspaces" && <Workspaces settings={settings} update={update} busy={busy} />}
+                {section === "llms" && <Llms settings={settings} update={update} busy={busy} />}
+                {section === "daily-review" && <DailyReview settings={settings} update={update} busy={busy} />}
+                {section === "agents" && <Agents settings={settings} update={update} busy={busy} />}
+                {section === "local-models" && <LocalModelsSettings />}
+                {section === "search" && <SearchSection settings={settings} update={update} busy={busy} />}
+                {section === "sleep" && <Sleep settings={settings} update={update} busy={busy} />}
+                {section === "linear" && <Linear settings={settings} update={update} busy={busy} />}
+                {section === "compaction" && <Compaction settings={settings} update={update} busy={busy} />}
+                {section === "brands" && <BrandsSettings />}
+                {section === "about" && <About />}
+                {error && <p className="text-[12px] text-danger selectable">{error}</p>}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </Modal>
@@ -383,16 +441,16 @@ function Workspaces({ settings, update, busy }: SectionProps) {
       <Field label="Ports" hint="a block per new workspace (CHAUFFEUR_PORT)">
         <div className="flex items-center gap-2 text-[12.5px] text-muted">
           <span>from</span>
-          <NumberField value={w.port_range_start} min={1024} max={64000} busy={busy} onSave={(v) => update({ workspaces: { port_range_start: v } })} testId="port-range-start" />
+          <NumberField value={w.port_range_start} min={1024} max={64000} busy={busy} onSave={(v) => update({ workspaces: { port_range_start: v } })} testId="port-range-start" label="First port" />
           <span>by blocks of</span>
-          <NumberField value={w.port_block_size} min={1} max={100} busy={busy} onSave={(v) => update({ workspaces: { port_block_size: v } })} testId="port-block-size" />
+          <NumberField value={w.port_block_size} min={1} max={100} busy={busy} onSave={(v) => update({ workspaces: { port_block_size: v } })} testId="port-block-size" label="Ports per workspace" />
         </div>
       </Field>
       <Field label="Archiving" hint="archive scripts' time limit; snapshots kept">
         <div className="flex items-center gap-2 text-[12.5px] text-muted">
-          <NumberField value={w.archive_script_timeout_secs} min={10} max={3600} busy={busy} onSave={(v) => update({ workspaces: { archive_script_timeout_secs: v } })} testId="archive-timeout" />
+          <NumberField value={w.archive_script_timeout_secs} min={10} max={3600} busy={busy} onSave={(v) => update({ workspaces: { archive_script_timeout_secs: v } })} testId="archive-timeout" label="Archive script timeout in seconds" />
           <span>seconds,</span>
-          <NumberField value={w.snapshot_retention_days} min={1} max={365} busy={busy} onSave={(v) => update({ workspaces: { snapshot_retention_days: v } })} testId="snapshot-days" />
+          <NumberField value={w.snapshot_retention_days} min={1} max={365} busy={busy} onSave={(v) => update({ workspaces: { snapshot_retention_days: v } })} testId="snapshot-days" label="Snapshot retention in days" />
           <span>days</span>
         </div>
       </Field>
@@ -408,6 +466,7 @@ function NumberField({
   busy,
   onSave,
   testId,
+  label,
 }: {
   value: number;
   min: number;
@@ -415,6 +474,7 @@ function NumberField({
   busy: boolean;
   onSave: (value: number) => Promise<boolean>;
   testId: string;
+  label?: string;
 }) {
   const [text, setText] = useState(String(value));
   useEffect(() => setText(String(value)), [value]);
@@ -428,6 +488,7 @@ function NumberField({
     <span className="inline-block w-24 shrink-0">
       <input
         type="number"
+        aria-label={label}
         min={min}
         max={max}
         value={text}
@@ -1085,7 +1146,7 @@ function KeyboardSection({ settings, update, busy }: SectionProps) {
           {error}
         </p>
       ))}
-      <div className="divide-y divide-line rounded-md border border-line bg-raised">
+      <div className="divide-y divide-line rounded-md border border-line bg-raised" data-testid="shortcuts-list">
         {SHORTCUT_IDS.filter((id) => keysOf(id, isMac, {}).length > 0 && (member || id !== "office.show")).map((id) => {
           const shortcut = SHORTCUTS[id];
           const own = shortcut.fixed ? undefined : bindings[id as ShortcutId];
@@ -1405,7 +1466,7 @@ function KeyField({
   };
   if (saved && !editing) {
     return (
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2" data-testid={testId}>
         <span className={cx(inputClass, "flex items-center text-faint")}>•••••••••••• saved</span>
         <Button size="sm" onClick={() => setEditing(true)} disabled={busy}>
           Replace
