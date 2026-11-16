@@ -429,6 +429,7 @@ export class CodexSession implements AgentSession {
     } finally {
       await this.mcp.refresh();
     }
+    if (this.mcp.find(name)?.status === "pending") this.mcp.watchLogin(name);
     return { auth_url: null };
   }
 

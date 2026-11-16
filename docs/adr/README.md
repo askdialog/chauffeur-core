@@ -159,3 +159,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Reviews learn across days and follow their recommendations](reviews-learn-across-days.md) | 2026-11-14 | accepted |
 | [Slide decks are chat deliverables with a reader, presenting and text editing](slide-decks.md) | 2026-11-14 | accepted |
 | [The phone creates a workspace on the Mac](mobile-workspace-creation.md) | 2026-11-15 | accepted |
+| [Reconnect MCP servers directly from their warning](direct-mcp-reconnection.md) | 2026-11-16 | accepted |

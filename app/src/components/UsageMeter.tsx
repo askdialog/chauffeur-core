@@ -27,6 +27,7 @@ import {
 import { loadUsage, selectChat, selectWorkspace, setTab, signIn, useApp } from "@/state/app";
 import { AgentIcon } from "./AgentIcon";
 import { MissingEnvHelp } from "./MissingEnvHelp";
+import { McpConnectButton } from "./McpConnectButton";
 import { Button, cx } from "./ui";
 
 const POLL_MS = 120_000;
@@ -40,12 +41,13 @@ const PANEL_WIDTH = 360;
 export function UsageMeter() {
   const connected = useApp((s) => s.connection.status === "open");
   const agents = useApp((s) => s.usage);
-  // Only the chats with a broken server: the meter stays still while other chats change.
-  const broken = useApp(useShallow((s) => Object.values(s.chats).filter((c) => !c.closed && c.mcp_servers.some(isBroken))));
+  // Recovery attempts stay visible while pending; unrelated chats do not move the meter.
+  const broken = useApp(useShallow((s) => Object.values(s.chats).filter((c) => !c.closed && (c.mcp_servers.some(isBroken) || (s.connectingMcp[c.id]?.length ?? 0) > 0))));
   const signingIn = useApp((s) => s.signingIn);
+  const connectingMcp = useApp((s) => s.connectingMcp);
   const [now, setNow] = useState(Date.now());
   const [reading, setReading] = useState(false);
-  const connectors = useMemo(() => ({ claude: brokenConnectors(broken, "claude"), codex: brokenConnectors(broken, "codex") }), [broken]);
+  const connectors = useMemo(() => ({ claude: brokenConnectors(broken, "claude", connectingMcp), codex: brokenConnectors(broken, "codex", connectingMcp) }), [broken, connectingMcp]);
   useEffect(() => setNow(Date.now()), [agents]);
 
   const load = useCallback((refresh = false) => {
@@ -179,7 +181,7 @@ export function UsageMeterView({
         data-testid="usage-meter"
       >
         {shown.map((usage) => (
-          <AgentRow key={usage.agent} usage={usage} now={now} broken={connectors[usage.agent].length} />
+          <AgentRow key={usage.agent} usage={usage} now={now} broken={connectors[usage.agent].filter(({ server }) => isBroken(server)).length} />
         ))}
       </button>
       )}
@@ -351,6 +353,7 @@ function AgentSection({
   onOpenChat: (chat: ChatInfo) => void;
 }) {
   const signedOut = usage.account === "signed_out";
+  const disconnected = connectors.filter(({ server }) => isBroken(server)).length;
   const labels = usage.windows.map((w) => w.label);
   const failure = failureText(usage, now);
   const readAt = usage.error ? null : readAtText(usage.read_at, now);
@@ -401,25 +404,26 @@ function AgentSection({
         <div className="flex flex-col gap-1 rounded-md bg-attention/10 px-2 py-1.5" data-testid="usage-mcp">
           <span className="flex items-center gap-1.5 text-[11.5px] text-attention">
             <Plug size={12} className="shrink-0" />
-            {connectors.length === 1 ? "An MCP server is disconnected" : `${connectors.length} MCP servers are disconnected`}
+            {disconnected === 0 ? "Reconnecting MCP servers…" : disconnected === 1 ? "An MCP server is disconnected" : `${disconnected} MCP servers are disconnected`}
           </span>
           {connectors.map(({ server, chat }) => (
             <Fragment key={server.name}>
-              <span className="flex min-w-0 items-baseline gap-1.5 pl-[18px] text-[11px]">
-                <span className="shrink-0 font-medium text-fg">{server.name}</span>
-                <span className="min-w-0 flex-1 truncate text-faint" title={mcpStatusText(server)}>
-                  {mcpStatusText(server)}
+              <div className="flex min-w-0 items-center gap-2 pl-[18px] text-[11px]">
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate font-medium text-fg" title={server.name}>{server.name}</span>
+                  <span className="truncate text-faint" title={mcpStatusText(server)}>{mcpStatusText(server)}</span>
+                  {/* A chat title can be a whole sentence: it is cut so the row stays inside the panel. */}
+                  <button
+                    type="button"
+                    className="min-w-0 truncate text-left text-accent hover:underline"
+                    title={chat.title ? `Open “${chat.title}” to connect it again` : "Open the chat to connect it again"}
+                    onClick={() => onOpenChat(chat)}
+                  >
+                    {chat.title ? `In ${chat.title}` : "Open the chat"}
+                  </button>
                 </span>
-                {/* A chat title can be a whole sentence: it is cut so the row stays inside the panel. */}
-                <button
-                  type="button"
-                  className="min-w-0 max-w-[60%] truncate text-accent hover:underline"
-                  title={chat.title ? `Open “${chat.title}” to connect it again` : "Open the chat to connect it again"}
-                  onClick={() => onOpenChat(chat)}
-                >
-                  {chat.title ? `In ${chat.title}` : "Open the chat"}
-                </button>
-              </span>
+                <McpConnectButton chat={chat} server={server} />
+              </div>
               {lacksEnv(server) && (
                 <div className="pb-1 pl-[18px]">
                   <MissingEnvHelp server={server} />

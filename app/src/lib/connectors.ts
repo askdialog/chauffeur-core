@@ -44,13 +44,13 @@ export function newlyNeeded(before: McpServer[] | undefined, after: McpServer[])
 
 export type BrokenConnector = { server: McpServer; chat: ChatInfo };
 
-/** An agent's broken servers across its chats running now, each once (the chat that needs it first). */
-export function brokenConnectors(chats: ChatInfo[], agent: AgentKind): BrokenConnector[] {
+/** Broken servers and pending recovery attempts, each once (the chat that needs it first). */
+export function brokenConnectors(chats: ChatInfo[], agent: AgentKind, connecting: Record<string, string[]> = {}): BrokenConnector[] {
   const found = new Map<string, BrokenConnector>();
   for (const chat of chats) {
     if (chat.agent !== agent || chat.closed) continue;
     for (const server of chat.mcp_servers) {
-      if (!isBroken(server)) continue;
+      if (!isBroken(server) && !connecting[chat.id]?.includes(server.name)) continue;
       const known = found.get(server.name);
       if (!known || (server.failed_call && !known.server.failed_call)) found.set(server.name, { server, chat });
     }

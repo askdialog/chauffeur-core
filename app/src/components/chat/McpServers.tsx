@@ -7,9 +7,9 @@ import { Plug } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { isBroken, lacksEnv, mcpStatusText, sortedServers } from "@/lib/connectors";
-import { connectMcp } from "@/state/app";
+import { McpConnectButton } from "../McpConnectButton";
 import { MissingEnvHelp } from "../MissingEnvHelp";
-import { Button, cx, usePopoverPosition } from "../ui";
+import { cx, usePopoverPosition } from "../ui";
 
 const PANEL_WIDTH = 340;
 
@@ -40,8 +40,8 @@ export function McpServers({ chat }: { chat: ChatInfo }) {
     };
   }, [open]);
 
-  if (broken.length === 0) return null;
-  const label = broken.length === 1 ? broken[0]!.name : `${broken.length} MCP servers`;
+  if (broken.length === 0 && !open) return null;
+  const label = broken.length === 0 ? "MCP servers" : broken.length === 1 ? broken[0]!.name : `${broken.length} MCP servers`;
   return (
     <>
       <button
@@ -50,7 +50,7 @@ export function McpServers({ chat }: { chat: ChatInfo }) {
         onClick={() => setOpen(!open)}
         aria-expanded={open}
         aria-haspopup="dialog"
-        title={broken.length === 1 ? `${broken[0]!.name}: ${mcpStatusText(broken[0]!)}` : `${broken.length} MCP servers are disconnected`}
+        title={broken.length === 0 ? "MCP servers of this chat" : broken.length === 1 ? `${broken[0]!.name}: ${mcpStatusText(broken[0]!)}` : `${broken.length} MCP servers are disconnected`}
         className={cx(
           "inline-flex h-6 max-w-[180px] items-center gap-1 rounded-md px-1.5 text-[11px] text-attention transition-colors",
           open ? "bg-hover" : "hover:bg-hover",
@@ -105,18 +105,9 @@ const DOT: Record<McpServer["status"], string> = {
 };
 
 function ServerRow({ chat, server }: { chat: ChatInfo; server: McpServer }) {
-  const [busy, setBusy] = useState(false);
   const broken = isBroken(server);
   // Reconnecting cannot give it a variable: the guide below does.
   const needsEnv = lacksEnv(server);
-  const connect = async () => {
-    setBusy(true);
-    try {
-      await connectMcp(chat, server.name);
-    } finally {
-      setBusy(false);
-    }
-  };
   return (
     <div className="flex flex-col gap-1.5 px-2.5 py-1.5" data-server={server.name} data-status={server.status}>
       <div className="flex items-center gap-2">
@@ -128,11 +119,7 @@ function ServerRow({ chat, server }: { chat: ChatInfo; server: McpServer }) {
             {server.failed_call && " · the agent needed it"}
           </span>
         </span>
-        {broken && !needsEnv && (
-          <Button size="xs" variant={server.status === "needs_auth" ? "primary" : "secondary"} busy={busy} onClick={() => void connect()}>
-            {server.status === "needs_auth" ? "Log in" : "Reconnect"}
-          </Button>
-        )}
+        <McpConnectButton chat={chat} server={server} />
       </div>
       {needsEnv && (
         <div className="pl-3.5">

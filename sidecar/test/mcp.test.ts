@@ -72,6 +72,57 @@ describe("MCP servers", () => {
     expect(statuses()).toHaveLength(2);
   });
 
+  test("detects a lost connection and recovery without a turn or tool call", async () => {
+    let servers = [server("linear", "connected")];
+    const { mcp, statuses, advance, timers } = tracker(() => servers);
+    mcp.start();
+    await flush();
+    servers = [server("linear", "needs_auth")];
+    await advance(30_000);
+    expect(statuses().at(-1)).toEqual(servers);
+    servers = [server("linear", "connected")];
+    await advance(30_000);
+    expect(statuses().at(-1)).toEqual(servers);
+    mcp.stop();
+    expect(timers).toHaveLength(0);
+  });
+
+  test("a failed status read keeps the last state and retries", async () => {
+    let failed = false;
+    let reads = 0;
+    const { mcp, statuses, advance, timers } = tracker(() => {
+      reads++;
+      if (failed) throw new Error("transport timeout");
+      return [server("linear", "connected")];
+    });
+    mcp.start();
+    await flush();
+    failed = true;
+    await advance(30_000);
+    expect(statuses()).toEqual([[server("linear", "connected")]]);
+    expect(timers).toHaveLength(1);
+    failed = false;
+    await advance(30_000);
+    expect(mcp.current()[0]?.status).toBe("connected");
+    expect(reads).toBe(3);
+    mcp.stop();
+    expect(timers).toHaveLength(0);
+  });
+
+  test("a connection lost later is followed quickly while it reconnects", async () => {
+    let servers = [server("linear", "connected")];
+    const { mcp, statuses, advance } = tracker(() => servers);
+    mcp.start();
+    await flush();
+    await advance(120_000);
+    servers = [server("linear", "pending")];
+    await mcp.refresh();
+    servers = [server("linear", "failed")];
+    await advance(3_000);
+    expect(statuses().at(-1)).toEqual(servers);
+    mcp.stop();
+  });
+
   test("a tool call that fails on a broken server marks it needed until it connects again", async () => {
     let servers = [server("claude.ai Linear", "connected")];
     const { mcp, statuses } = tracker(() => servers);
@@ -110,6 +161,8 @@ describe("MCP servers", () => {
     servers = [server("linear", "connected")];
     await advance(3_000);
     expect(statuses().at(-1)).toEqual([server("linear", "connected")]);
+    expect(timers).toHaveLength(1);
+    mcp.stop();
     expect(timers).toHaveLength(0);
   });
 

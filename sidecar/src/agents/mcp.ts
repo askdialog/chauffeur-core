@@ -11,6 +11,7 @@ const BROKEN: ReadonlySet<McpStatus> = new Set(["needs_auth", "failed"]);
 /** How often servers still connecting are read again, and for how long after the session starts. */
 const PENDING_POLL_MS = 3_000;
 const PENDING_POLL_FOR_MS = 60_000;
+const STATUS_POLL_MS = 30_000;
 /** How often a server whose login was started is read again, and for how long. */
 const LOGIN_POLL_MS = 3_000;
 const LOGIN_POLL_FOR_MS = 5 * 60_000;
@@ -43,10 +44,11 @@ export class McpTracker {
   /** MCP tool calls in flight: tool_use_id → server name as in the tool's name. */
   private calls = new Map<string, string>();
   private reading: Promise<void> | undefined;
-  private pendingPoll: unknown;
+  private pollTimer: unknown;
   private pendingUntil = 0;
   private logins = new Map<string, { until: number; timer: unknown; tick?: () => Promise<void> }>();
   private stopped = false;
+  private started = false;
 
   constructor(private readonly deps: McpTrackerDeps) {}
 
@@ -59,8 +61,10 @@ export class McpTracker {
     return this.servers.find((server) => server.name === name);
   }
 
-  /** Starts following the session's servers: read now, and again while some are still connecting. */
+  /** Follows the running session even while idle, more often while its servers connect. */
   start(): void {
+    if (this.started || this.stopped) return;
+    this.started = true;
     this.pendingUntil = this.now() + PENDING_POLL_FOR_MS;
     void this.refresh();
   }
@@ -74,6 +78,7 @@ export class McpTracker {
       .catch((error: unknown) => this.deps.log?.(`could not read the MCP servers: ${String(error)}`))
       .finally(() => {
         this.reading = undefined;
+        this.schedulePoll();
       });
     return this.reading;
   }
@@ -81,6 +86,9 @@ export class McpTracker {
   /** Takes the servers as read, tells the daemon if anything changed. */
   update(servers: McpServer[]): void {
     if (this.stopped) return;
+    if (servers.some((server) => server.status === "pending" && this.find(server.name)?.status !== "pending")) {
+      this.pendingUntil = this.now() + PENDING_POLL_FOR_MS;
+    }
     for (const server of servers) {
       // Needed while it stays broken; a server that connects again is fine again.
       if (!BROKEN.has(server.status)) this.needed.delete(server.name);
@@ -92,7 +100,7 @@ export class McpTracker {
     for (const name of this.logins.keys()) {
       if (this.find(name)?.status === "connected") this.endLogin(name);
     }
-    this.schedulePendingPoll();
+    this.schedulePoll();
   }
 
   /**
@@ -120,7 +128,7 @@ export class McpTracker {
   }
 
   /**
-   * The user was sent to log a server in: read it again every few seconds until it connects (or
+   * A login or reconnection was started: read again every few seconds until it connects (or
    * after a few minutes). `tick` runs before each read (Claude asks claude.ai connectors to
    * reconnect, which has no callback of its own).
    */
@@ -142,7 +150,7 @@ export class McpTracker {
 
   stop(): void {
     this.stopped = true;
-    if (this.pendingPoll !== undefined) this.unschedule(this.pendingPoll);
+    if (this.pollTimer !== undefined) this.unschedule(this.pollTimer);
     for (const name of [...this.logins.keys()]) this.endLogin(name);
   }
 
@@ -157,13 +165,14 @@ export class McpTracker {
     return this.servers.find((server) => normalizeServerName(server.name) === tool);
   }
 
-  private schedulePendingPoll(): void {
-    if (this.pendingPoll !== undefined || this.stopped) return;
-    if (!this.servers.some((server) => server.status === "pending") || this.now() >= this.pendingUntil) return;
-    this.pendingPoll = this.schedule(() => {
-      this.pendingPoll = undefined;
+  private schedulePoll(): void {
+    if (!this.started || this.stopped) return;
+    if (this.pollTimer !== undefined) this.unschedule(this.pollTimer);
+    const pending = this.servers.some((server) => server.status === "pending") && this.now() < this.pendingUntil;
+    this.pollTimer = this.schedule(() => {
+      this.pollTimer = undefined;
       void this.refresh();
-    }, PENDING_POLL_MS);
+    }, pending ? PENDING_POLL_MS : STATUS_POLL_MS);
   }
 
   private schedule(fn: () => void | Promise<void>, ms: number): unknown {

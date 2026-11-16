@@ -34,7 +34,6 @@ import { attentionText, chatAttention, needingYou } from "@/lib/attention";
 import {
   type AwaitedServer,
   awaitedAfterReload,
-  isBroken,
   loginCommand,
   mcpLoginCommand,
   mcpStatusText,
@@ -192,6 +191,8 @@ export type AppState = {
   usage: AgentUsage[] | null;
   /** Agents whose login Chauffeur started and that have not come back yet. */
   signingIn: AgentKind[];
+  /** MCP reconnections in progress, by chat; shared by the usage panel and composer. */
+  connectingMcp: Record<string, string[]>;
   /** The screens selected on a design chat's canvas, by chat (their files; story 47). */
   canvasSelection: Record<string, string[]>;
   /** The screens of the canvas page a design chat shows, by chat: Open › Browser opens one. */
@@ -283,6 +284,7 @@ export const useApp = create<AppState>(() => ({
   terminalRequest: {},
   usage: null,
   signingIn: [],
+  connectingMcp: {},
   canvasSelection: {},
   canvasPage: {},
   designShares: {},
@@ -640,21 +642,59 @@ export async function signIn(agent: AgentKind): Promise<void> {
  * cannot do either.
  */
 export async function connectMcp(chat: ChatInfo, server: string): Promise<void> {
+  if (get().connectingMcp[chat.id]?.includes(server)) return;
+  set((s) => ({ connectingMcp: { ...s.connectingMcp, [chat.id]: [...(s.connectingMcp[chat.id] ?? []), server] } }));
   try {
-    const { auth_url } = await client.call("chat.mcp_connect", { chat: chat.id, server });
+    let auth_url: string | null;
+    try {
+      ({ auth_url } = await client.call("chat.mcp_connect", { chat: chat.id, server }));
+    } catch (error) {
+      requestTerminal(chat.workspace_id, mcpLoginCommand(chat.agent, server));
+      toast(`Could not connect ${server} (${errorMessage(error)}): finish it in the terminal`, "error");
+      return;
+    }
     if (auth_url) {
       await openExternal(auth_url);
       toast(`Finish logging in to ${server} in your browser`);
-      return;
     }
-    // Reconnected: the session reported the server again before answering.
-    const now = get().chats[chat.id]?.mcp_servers.find((s) => s.name === server);
-    if (now && isBroken(now)) toast(`${server} still does not connect: ${mcpStatusText(now)}`, "error");
-    else toast(`${server} is connected again`);
+    const authenticating = auth_url !== null || chat.mcp_servers.some((s) => s.name === server && s.status === "needs_auth");
+    const result = await waitForMcp(chat.id, server, authenticating);
+    if (result === null) toast(`${server} is connected again`);
+    else toast(result, "error");
   } catch (error) {
-    requestTerminal(chat.workspace_id, mcpLoginCommand(chat.agent, server));
-    toast(`Could not connect ${server} (${errorMessage(error)}): finish it in the terminal`, "error");
+    toast(`Could not connect ${server}: ${errorMessage(error)}`, "error");
+  } finally {
+    set((s) => {
+      const connectingMcp = { ...s.connectingMcp };
+      const rest = (connectingMcp[chat.id] ?? []).filter((name) => name !== server);
+      if (rest.length) connectingMcp[chat.id] = rest;
+      else delete connectingMcp[chat.id];
+      return { connectingMcp };
+    });
   }
+}
+
+/** Only the session's explicit connected state confirms success; an OAuth page is not enough. */
+function waitForMcp(chatId: string, name: string, authenticating: boolean): Promise<string | null> {
+  return new Promise((resolve) => {
+    const finish = (error: string | null) => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(error);
+    };
+    const check = () => {
+      const chat = get().chats[chatId];
+      const server = chat?.mcp_servers.find((s) => s.name === name);
+      if (!chat || chat.closed) finish(`${name}: the chat is closed; reopen it to reconnect`);
+      else if (server?.status === "connected") finish(null);
+      else if (server && (server.status === "failed" || server.status === "disabled" || (server.status === "needs_auth" && !authenticating))) {
+        finish(`${name} still does not connect: ${mcpStatusText(server)}`);
+      }
+    };
+    const timer = setTimeout(() => finish(`${name}: connection was not confirmed; try reconnecting again`), 5 * 60_000);
+    const unsubscribe = useApp.subscribe(check);
+    check();
+  });
 }
 
 /** Servers whose chat a reload restarted, until each comes up or fails again (said once). */
