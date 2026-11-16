@@ -257,6 +257,9 @@ impl Mentions {
                     };
                     match message {
                         ToMentionsDaemon::Mentions { mentions } => self.receive(mentions),
+                        ToMentionsDaemon::Digest { digests } => {
+                            self.d().events.registry(RegistryEvent::CommentsDigest { digests });
+                        }
                         ToMentionsDaemon::Refused { reason } => return Err(reason),
                     }
                 }

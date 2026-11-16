@@ -2,6 +2,7 @@
 import type { AccountStatus } from "./AccountStatus";
 import type { AgentKind } from "./AgentKind";
 import type { ChatInfo } from "./ChatInfo";
+import type { CommentsDigest } from "./CommentsDigest";
 import type { ExtensionInfo } from "./ExtensionInfo";
 import type { IdentityState } from "./IdentityState";
 import type { LoadoutEntry } from "./LoadoutEntry";
@@ -20,7 +21,7 @@ error: string | null, } | { "type": "identity_changed", identity: IdentityState,
 /**
  * The ids of those that just came: clients tell the user of each, once.
  */
-new?: Array<string>, } | { "type": "login_ended", agent: AgentKind, 
+new?: Array<string>, } | { "type": "comments_digest", digests: Array<CommentsDigest>, } | { "type": "login_ended", agent: AgentKind, 
 /**
  * The worker it ran on (`worker.login`); none for this machine's own.
  */

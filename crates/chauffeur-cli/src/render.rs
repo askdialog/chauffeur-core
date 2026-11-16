@@ -758,6 +758,7 @@ fn raw_event(envelope: &EventEnvelope, chat_hint: &str) -> Option<String> {
             | RegistryEvent::AccountChanged { .. }
             | RegistryEvent::IdentityChanged { .. }
             | RegistryEvent::MentionsChanged { .. }
+            | RegistryEvent::CommentsDigest { .. }
             | RegistryEvent::LoginEnded { .. }
             | RegistryEvent::IdleReminder { .. }
             | RegistryEvent::TransferEnded { .. }

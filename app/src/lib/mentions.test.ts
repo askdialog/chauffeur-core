@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import type { DesignComment, Mentioned } from "@chauffeur/protocol";
-import { commentParam, excerpt, firstName, insertMention, mentionOptions, mentionQuery, mentions, mentionsIn, textParts, newMentions, threadParam, unreadCount, unreadThreads } from "./mentions";
+import type { CommentsDigest, DesignComment, Mentioned } from "@chauffeur/protocol";
+import { commentParam, digestText, excerpt, firstName, insertMention, mentionOptions, mentionQuery, mentions, mentionsIn, textParts, newMentions, threadParam, unreadCount, unreadThreads } from "./mentions";
 
 const alice = { name: "Alice Martin", email: "alice@example.com" };
 const bob = { name: "Bob", email: "bob@example.com" };
@@ -114,4 +114,19 @@ test("only a comment by someone else that names the reader for the first time is
   const before = [comment("k1", bob, ["alice@example.com"])];
   const after = [...before, comment("k2", bob, ["alice@example.com"]), comment("k3", me, ["alice@example.com"]), comment("k4", bob, [])];
   expect(newMentions(before, after, me.email).map((c) => c.id)).toEqual(["k2"]);
+});
+
+const digest = (authors: string[], count: number): CommentsDigest => ({
+  place: "design",
+  share_id: "s1",
+  share_title: "CTA",
+  url: "https://x/s/s1",
+  count,
+  authors,
+});
+
+test("a digest names one, two, or two and the others, and counts the comments", () => {
+  expect(digestText(digest(["Alice"], 1))).toBe("Alice left a comment on CTA");
+  expect(digestText(digest(["Alice", "Bob"], 3))).toBe("Alice and Bob left 3 comments on CTA");
+  expect(digestText(digest(["Alice", "Bob", "Eve", "Max"], 5))).toBe("Alice, Bob and 2 more left 5 comments on CTA");
 });

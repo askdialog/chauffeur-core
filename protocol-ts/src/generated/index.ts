@@ -108,6 +108,7 @@ export type { CommentPin } from "./CommentPin";
 export type { CommentResolveParams } from "./CommentResolveParams";
 export type { CommentResolved } from "./CommentResolved";
 export type { CommentSent } from "./CommentSent";
+export type { CommentsDigest } from "./CommentsDigest";
 export type { CommentsResult } from "./CommentsResult";
 export type { CommentsSendParams } from "./CommentsSendParams";
 export type { CommentsSendResult } from "./CommentsSendResult";

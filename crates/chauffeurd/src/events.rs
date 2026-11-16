@@ -135,7 +135,8 @@ pub fn is_ephemeral(event: &Event) -> bool {
             event:
                 RegistryEvent::ExtensionsChanged { .. }
                 | RegistryEvent::IdentityChanged { .. }
-                | RegistryEvent::MentionsChanged { .. },
+                | RegistryEvent::MentionsChanged { .. }
+                | RegistryEvent::CommentsDigest { .. },
         } => true,
         Event::Chat { event, .. } => event.is_ephemeral(),
         Event::Workspace {
@@ -166,6 +167,7 @@ pub fn for_registry(event: &Event) -> bool {
             event: RegistryEvent::ExtensionsChanged { .. }
                 | RegistryEvent::IdentityChanged { .. }
                 | RegistryEvent::MentionsChanged { .. }
+                | RegistryEvent::CommentsDigest { .. }
         } | Event::Workspace {
             event: WorkspaceEvent::Share { .. },
             ..

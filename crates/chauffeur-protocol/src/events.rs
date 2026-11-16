@@ -59,6 +59,7 @@ impl Event {
                 | RegistryEvent::AccountChanged { .. }
                 | RegistryEvent::IdentityChanged { .. }
                 | RegistryEvent::MentionsChanged { .. }
+                | RegistryEvent::CommentsDigest { .. }
                 | RegistryEvent::LoginEnded { .. }
                 | RegistryEvent::IdleReminder { .. }
                 | RegistryEvent::RoutineUpserted { .. }
@@ -163,6 +164,11 @@ pub enum RegistryEvent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         #[ts(as = "Option<Vec<String>>", optional)]
         new: Vec<String>,
+    },
+    /// Comments on the user's shares that do not mention them have waited for a quiet moment:
+    /// clients tell the user once. Ephemeral.
+    CommentsDigest {
+        digests: Vec<crate::design_share::CommentsDigest>,
     },
     /// A login `agent.login` or `worker.login` started ended: completed, failed, cancelled or
     /// given up after its timeout. One replaced by a newer login of the same agent is not told.

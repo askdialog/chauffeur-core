@@ -353,6 +353,22 @@ pub struct Mentioned {
     pub seen: bool,
 }
 
+/// Comments on a share of the user's that do not mention them, told once the share has been quiet
+/// for a while (docs/adr/untagged-comments-digest.md).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[ts(export)]
+pub struct CommentsDigest {
+    pub place: MentionPlace,
+    pub share_id: String,
+    pub share_title: String,
+    /// The share's page.
+    pub url: String,
+    /// The comments waiting.
+    pub count: u32,
+    /// Their authors, each once, in the order of their first comment.
+    pub authors: Vec<String>,
+}
+
 /// What a signed-in daemon says on its user's WebSocket (`/v1/mentions/daemon`).
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -373,6 +389,10 @@ pub enum ToMentionsDaemon {
     /// most): at connection and after each change.
     Mentions {
         mentions: Vec<Mentioned>,
+    },
+    /// Shares whose untagged comments have waited for a quiet moment: told once each.
+    Digest {
+        digests: Vec<CommentsDigest>,
     },
     Refused {
         reason: String,

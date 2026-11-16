@@ -162,6 +162,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("listening on {}", args.listen))?;
     tracing::info!(address = %listener.local_addr()?, data = %args.data.display(), "design share service listening");
+    service.watch_digests();
     axum::serve(listener, service.router()).await?;
     Ok(())
 }

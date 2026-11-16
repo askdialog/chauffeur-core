@@ -11,10 +11,12 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::Identity;
 
+mod digest;
 mod mail;
 mod mentions;
 mod workspace;
 
+pub use digest::{DueDigest, WantedDigest};
 pub use mail::EmailKind;
 pub use mentions::{MentionRow, WantedMention};
 
@@ -110,6 +112,7 @@ impl Store {
         conn.execute_batch(workspace::SCHEMA)?;
         conn.execute_batch(mail::SCHEMA)?;
         conn.execute_batch(mentions::SCHEMA)?;
+        conn.execute_batch(digest::SCHEMA)?;
         let has = |table: &str, column: &str| -> rusqlite::Result<bool> {
             conn.prepare(&format!(
                 "SELECT 1 FROM pragma_table_info('{table}') WHERE name = '{column}'"

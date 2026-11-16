@@ -10,13 +10,13 @@ use std::time::Duration;
 use axum::extract::ws::{Message, WebSocket};
 use chauffeur_protocol::client::{CommentAuthor, DesignComment, Mention};
 use chauffeur_protocol::design_share::{
-    FromMentionsDaemon, MentionPlace, Mentioned, SHARE_PROTOCOL_VERSION, ToMentionsDaemon,
-    ToReviewer,
+    CommentsDigest, FromMentionsDaemon, MentionPlace, Mentioned, SHARE_PROTOCOL_VERSION,
+    ToMentionsDaemon, ToReviewer,
 };
 use chauffeur_protocol::workspace_share::{ShareComment, ToGuest};
 use tokio::sync::mpsc;
 
-use crate::store::{ShareRow, WantedMention, WorkspaceShareRow};
+use crate::store::{ShareRow, WantedDigest, WantedMention, WorkspaceShareRow};
 use crate::{Identity, Service, first_name, now_ms};
 
 /// Mentions one comment names, at most.
@@ -25,6 +25,13 @@ const MAX_MENTIONS: usize = 20;
 const MAX_LISTED: usize = 50;
 /// A mention's text, in characters, before it is cut.
 const EXCERPT: usize = 280;
+/// How long a share stays quiet before its owner is told of the comments that do not mention them.
+const DIGEST_QUIET: Duration = Duration::from_secs(30 * 60);
+/// A comment older than this when the service first sees it is not told: a share synced after a
+/// long absence does not announce its history.
+const DIGEST_MAX_AGE_MS: u64 = 24 * 60 * 60 * 1000;
+/// How often the service looks for shares that have been quiet long enough.
+const DIGEST_EVERY: Duration = Duration::from_secs(60);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const PING_EVERY: Duration = Duration::from_secs(20);
 const MAX_MESSAGE: usize = 64 * 1024;
@@ -145,6 +152,33 @@ impl Audience {
             })
             .collect()
     }
+
+    /// The comments the share's owner is to hear of once the share is quiet: those by someone
+    /// else, recent, that do not mention the owner and that the owner has not answered in their
+    /// thread since. A mention is told at once, by `wanted`.
+    pub fn untagged<C: Mentioning>(&self, comments: &[C], now: u64) -> Vec<WantedDigest> {
+        let owner = &self.people[0].email;
+        let answered = |comment: &C| {
+            comments.iter().any(|c| {
+                c.author() == owner && c.thread() == comment.thread() && c.at() > comment.at()
+            })
+        };
+        comments
+            .iter()
+            .filter(|c| c.author() != owner)
+            .filter(|c| c.at() + DIGEST_MAX_AGE_MS >= now)
+            .filter(|c| {
+                !c.mentions()
+                    .iter()
+                    .any(|m| m.email.eq_ignore_ascii_case(owner))
+            })
+            .filter(|c| !answered(c))
+            .map(|c| WantedDigest {
+                comment_id: c.id().to_string(),
+                author: c.author_name().to_string(),
+            })
+            .collect()
+    }
 }
 
 /// A comment as far as its mentions go: a design's or a workspace's.
@@ -153,6 +187,9 @@ pub trait Mentioning {
     /// Its thread's first comment: itself when it opens one.
     fn thread(&self) -> &str;
     fn author(&self) -> &str;
+    fn author_name(&self) -> &str;
+    /// Milliseconds since the epoch.
+    fn at(&self) -> u64;
     fn mentions(&self) -> &[Mention];
 }
 
@@ -165,6 +202,12 @@ impl Mentioning for DesignComment {
     }
     fn author(&self) -> &str {
         &self.author.email
+    }
+    fn author_name(&self) -> &str {
+        &self.author.name
+    }
+    fn at(&self) -> u64 {
+        self.at
     }
     fn mentions(&self) -> &[Mention] {
         &self.mentions
@@ -180,6 +223,12 @@ impl Mentioning for ShareComment {
     }
     fn author(&self) -> &str {
         &self.author.email
+    }
+    fn author_name(&self) -> &str {
+        &self.author.name
+    }
+    fn at(&self) -> u64 {
+        self.at
     }
     fn mentions(&self) -> &[Mention] {
         &self.mentions
@@ -308,11 +357,20 @@ impl Service {
         };
         let place = MentionPlace::Design;
         let changed = if share.stopped() {
+            self.store.drop_digests(place, share_id).ok();
             self.store.drop_mentions(place, share_id)
         } else {
             let comments = self.store.comments(share_id).unwrap_or_default();
-            let wanted = self.audience(&share).wanted(&comments);
-            self.store.sync_mentions(place, share_id, &wanted, now_ms())
+            let audience = self.audience(&share);
+            let now = now_ms();
+            if let Err(error) =
+                self.store
+                    .sync_digests(place, share_id, &audience.untagged(&comments, now), now)
+            {
+                tracing::warn!(share = share_id, %error, "comments to tell not synced");
+            }
+            self.store
+                .sync_mentions(place, share_id, &audience.wanted(&comments), now)
         };
         match changed {
             Ok(emails) => self.tell_users(&emails),
@@ -328,11 +386,20 @@ impl Service {
         };
         let place = MentionPlace::Workspace;
         let changed = if share.stopped() {
+            self.store.drop_digests(place, share_id).ok();
             self.store.drop_mentions(place, share_id)
         } else {
             let comments = self.store.workspace_comments(share_id).unwrap_or_default();
-            let wanted = self.workspace_audience(&share).wanted(&comments);
-            self.store.sync_mentions(place, share_id, &wanted, now_ms())
+            let audience = self.workspace_audience(&share);
+            let now = now_ms();
+            if let Err(error) =
+                self.store
+                    .sync_digests(place, share_id, &audience.untagged(&comments, now), now)
+            {
+                tracing::warn!(share = share_id, %error, "comments to tell not synced");
+            }
+            self.store
+                .sync_mentions(place, share_id, &audience.wanted(&comments), now)
         };
         match changed {
             Ok(emails) => self.tell_users(&emails),
@@ -448,6 +515,81 @@ impl Service {
         mentions
     }
 
+    /// Tells each owner whose share has been quiet for `DIGEST_QUIET` of the comments waiting for
+    /// them, once, if a daemon of theirs is connected; else they wait for the next connection.
+    pub(crate) fn tell_digests(&self) {
+        let now = now_ms();
+        let due = match self.store.due_digests(now, DIGEST_QUIET.as_millis() as u64) {
+            Ok(due) => due,
+            Err(error) => {
+                tracing::warn!(%error, "comments to tell not read");
+                return;
+            }
+        };
+        for digest in due {
+            let (owner, title, url) = match digest.place {
+                MentionPlace::Design => {
+                    let Ok(Some(share)) = self.store.share(&digest.share_id) else {
+                        continue;
+                    };
+                    (
+                        share.owner.email.clone(),
+                        share.title.clone(),
+                        self.share_url(&share),
+                    )
+                }
+                MentionPlace::Workspace => {
+                    let Ok(Some(share)) = self.store.workspace_share(&digest.share_id) else {
+                        continue;
+                    };
+                    (
+                        share.owner.email.clone(),
+                        share.title.clone(),
+                        format!("{}/w/{}", self.workspace_url(), share.id),
+                    )
+                }
+            };
+            let connections: Vec<mpsc::UnboundedSender<ToMentionsDaemon>> = self
+                .users
+                .lock()
+                .unwrap()
+                .get(&owner)
+                .map(|c| c.iter().map(|c| c.tx.clone()).collect())
+                .unwrap_or_default();
+            if connections.is_empty() {
+                continue;
+            }
+            let message = ToMentionsDaemon::Digest {
+                digests: vec![CommentsDigest {
+                    place: digest.place,
+                    share_id: digest.share_id.clone(),
+                    share_title: title,
+                    url,
+                    count: digest.count,
+                    authors: digest.authors,
+                }],
+            };
+            for tx in connections {
+                let _ = tx.send(message.clone());
+            }
+            if let Err(error) = self.store.digested(digest.place, &digest.share_id, now) {
+                tracing::warn!(share = digest.share_id, %error, "comments told not marked");
+            }
+        }
+    }
+
+    /// Looks every minute for shares quiet for long enough; for the service's whole life.
+    pub fn watch_digests(self: &Arc<Self>) {
+        let service = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut every = tokio::time::interval(DIGEST_EVERY);
+            loop {
+                every.tick().await;
+                service.tell_digests();
+            }
+        });
+    }
+
     /// Each connected daemon of these users hears of their mentions, whole.
     pub(crate) fn tell_users(&self, emails: &HashSet<String>) {
         let connections: Vec<(Identity, mpsc::UnboundedSender<ToMentionsDaemon>)> = {
@@ -526,7 +668,9 @@ pub async fn user_socket(service: Arc<Service>, mut socket: WebSocket) {
     let first = ToMentionsDaemon::Mentions {
         mentions: service.mentions_for(&identity),
     };
-    if socket.send(text(&first)).await.is_ok() {
+    let connected = socket.send(text(&first)).await.is_ok();
+    if connected {
+        service.tell_digests();
         let mut ping = tokio::time::interval(PING_EVERY);
         ping.tick().await;
         loop {
@@ -707,6 +851,52 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn the_owner_hears_later_only_of_recent_comments_that_do_not_name_them_or_that_they_have_not_answered()
+     {
+        let audience = Audience::of(&share(None), &HashMap::new());
+        let now = 10 * DIGEST_MAX_AGE_MS;
+        let at = |mut c: DesignComment, at: u64| {
+            c.at = at;
+            c
+        };
+        let comments = [
+            // Untagged, by someone else: told.
+            at(comment("c1", "Alice", None, vec![]), now - 1_000),
+            // Names the owner: told at once, not later.
+            at(
+                comment(
+                    "c2",
+                    "Alice",
+                    None,
+                    vec![mention("carol@example.com", "Carol")],
+                ),
+                now - 1_000,
+            ),
+            // The owner's own.
+            at(comment("c3", "Carol", None, vec![]), now - 1_000),
+            // Too old to announce.
+            at(
+                comment("c4", "Alice", None, vec![]),
+                now - DIGEST_MAX_AGE_MS - 1,
+            ),
+            // Answered by the owner in its thread.
+            at(comment("c5", "Alice", None, vec![]), now - 3_000),
+            at(comment("c6", "Carol", Some("c5"), vec![]), now - 2_000),
+            // Names someone else: still untagged for the owner.
+            at(
+                comment("c7", "Alice", None, vec![mention("bob.l@other.com", "Bob")]),
+                now - 500,
+            ),
+        ];
+        let ids: Vec<String> = audience
+            .untagged(&comments, now)
+            .into_iter()
+            .map(|w| w.comment_id)
+            .collect();
+        assert_eq!(ids, ["c1", "c7"]);
     }
 
     #[test]

@@ -24,6 +24,7 @@ import type {
   TransferInfo,
   WorkspaceInfo,
   DesignShareState,
+  CommentsDigest,
   Mentioned,
   ShareConnection,
 } from "@chauffeur/protocol";
@@ -57,7 +58,7 @@ import { setOverrides } from "@/lib/shortcuts";
 import { applyPalette } from "@/lib/palette";
 import { forgetSoundFile, playSound, unlockAudio } from "@/lib/sounds";
 import { endedNotification, stillIdle, transferCopy } from "@/lib/transfer";
-import { excerpt as mentionExcerpt } from "@/lib/mentions";
+import { digestText, excerpt as mentionExcerpt } from "@/lib/mentions";
 import { canStep, EMPTY_NAV, step, visit, type NavHistory } from "@/lib/navHistory";
 import { neighbourOf, orderedWorkspaces } from "@/lib/workspaceOrder";
 import type { DesignOption } from "@/lib/designs";
@@ -1026,6 +1027,18 @@ function mentionsChanged(mentions: Mentioned[], fresh: readonly string[]) {
   }
 }
 
+/**
+ * Comments that did not mention the user waited for their share to be quiet: told once, as a
+ * toast, or a notification when the window is not in front (docs/adr/untagged-comments-digest.md).
+ */
+function commentsWaited(digests: CommentsDigest[]) {
+  for (const digest of digests) {
+    const what = digestText(digest);
+    if (windowFocused()) toast(what);
+    else void notify("Chauffeur", what);
+  }
+}
+
 /** A mention's thread was opened: it is read, here and on the share service. */
 export async function markMentionSeen(id: string) {
   const mention = get().mentions.find((m) => m.id === id);
@@ -1500,6 +1513,8 @@ function onRegistry(envelope: EventEnvelope) {
     void loadMentions();
   } else if (event.event.type === "mentions_changed") {
     mentionsChanged(event.event.mentions, event.event.new ?? []);
+  } else if (event.event.type === "comments_digest") {
+    commentsWaited(event.event.digests);
   } else if (event.event.type === "account_changed") {
     // The reading says whether it is news (a replay after a reconnection is not).
     void loadUsage().catch(() => {});

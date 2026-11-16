@@ -3,7 +3,7 @@
 // the `@query` being typed, the people it offers, inserting one, which mentions a text still holds,
 // the text cut into its highlighted parts, and what is unread.
 
-import type { CommentAuthor, Mention, Mentioned } from "@chauffeur/protocol";
+import type { CommentAuthor, CommentsDigest, Mention, Mentioned } from "@chauffeur/protocol";
 
 /** A comment as far as its thread and mentions go: a design's or a workspace's. */
 type Threaded = { id: string; reply_to?: string; mentions?: Mention[] };
@@ -168,4 +168,21 @@ export function commentParam(search: string): { chat: string; comment: string | 
 export function newMentions<C extends Threaded & { author: CommentAuthor }>(before: readonly C[], after: readonly C[], me: string): C[] {
   const known = new Set(before.filter((c) => mentions(c, me)).map((c) => c.id));
   return after.filter((c) => c.author.email !== me && mentions(c, me) && !known.has(c.id));
+}
+
+/**
+ * What the notification says of comments that did not mention the user, told once their share
+ * was quiet (docs/adr/untagged-comments-digest.md): "Alice and Bob left 3 comments on CTA".
+ */
+export function digestText(digest: CommentsDigest): string {
+  const [first, second, ...others] = digest.authors;
+  const who = !first
+    ? "Someone"
+    : !second
+      ? first
+      : others.length === 0
+        ? `${first} and ${second}`
+        : `${first}, ${second} and ${others.length} more`;
+  const what = digest.count === 1 ? "a comment" : `${digest.count} comments`;
+  return `${who} left ${what} on ${digest.share_title}`;
 }
