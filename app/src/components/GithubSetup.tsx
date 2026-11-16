@@ -12,8 +12,9 @@ import { Button, cx, Spinner } from "./ui";
  * signed in in the browser, then the organization repos come from. Shows nothing once all is
  * done, unless `manage` (Settings › GitHub), which also offers to disconnect or change.
  */
-export function GithubSetup({ manage = false, compact = false }: { manage?: boolean; compact?: boolean }) {
+export function GithubSetup({ manage = false, compact = false, localReposSelected = false }: { manage?: boolean; compact?: boolean; localReposSelected?: boolean }) {
   const { status, error: loadError } = useGithubStatus();
+  const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [gitAsked, setGitAsked] = useState(false);
@@ -43,6 +44,13 @@ export function GithubSetup({ manage = false, compact = false }: { manage?: bool
   if (!status) return loadError ? <p className="text-[12px] text-danger selectable">Could not read GitHub's state: {loadError}</p> : null;
   if (step === "ready" && !manage) return null;
 
+  if (!manage && localReposSelected && status.git && !expanded) return (
+    <div className="flex flex-wrap items-center gap-2 text-[12px] text-muted" data-testid="github-optional">
+      <span>{status.account ? `GitHub connected as ${status.account}.` : "Your local repositories are ready."} GitHub setup is optional for this selection.</span>
+      <Button size="sm" variant="ghost" onClick={() => setExpanded(true)}>Manage GitHub</Button>
+    </div>
+  );
+
   const connecting = status.connecting;
   const choosing = step === "organization" || changingOrg;
   const choices = organizationChoices(status);
@@ -55,7 +63,7 @@ export function GithubSetup({ manage = false, compact = false }: { manage?: bool
       {!manage && (
         <div>
           <div className="mb-1 flex items-center gap-1.5 font-medium text-fg">
-            <GitBranch size={14} /> Connect GitHub
+            <GitBranch size={14} /> {status.account ? "GitHub connected" : "Connect GitHub"}
           </div>
           {!compact && (
             <p className="text-[12px] leading-relaxed text-muted">

@@ -63,8 +63,8 @@ describe("interface colours from the theme", () => {
     }
     for (const on of [vars["--color-bg"], vars["--color-hover"]]) {
       expect(contrast(vars["--color-fg"], on)).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(vars["--color-muted"], on)).toBeGreaterThanOrEqual(3);
-      expect(contrast(vars["--color-faint"], on)).toBeGreaterThanOrEqual(3);
+      expect(contrast(vars["--color-muted"], on)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(vars["--color-faint"], on)).toBeGreaterThanOrEqual(4.5);
       expect(contrast(vars["--color-accent"], on)).toBeGreaterThanOrEqual(3);
     }
     // Its pale color4 is darkened so that a button's white label reads on it.
@@ -84,7 +84,7 @@ describe("interface colours from the theme", () => {
     if (!vars) throw new Error("a dark theme colours the interface");
     expect(contrast("#505050", "#202020")).toBeLessThan(4.5);
     expect(contrast(vars["--color-fg"], vars["--color-hover"])).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(vars["--color-muted"], vars["--color-hover"])).toBeGreaterThanOrEqual(3);
+    expect(contrast(vars["--color-muted"], vars["--color-hover"])).toBeGreaterThanOrEqual(4.5);
   });
 
   test("the switch's hint says what it needs first: a theme file, a dark one", () => {
@@ -119,4 +119,18 @@ describe("interface colours from the theme", () => {
     applyPalette(null, false, root);
     expect(style.size).toBe(0);
   });
+});
+
+ test("default secondary text remains readable on every neutral surface", async () => {
+  const css = await Bun.file(new URL("../../sdk/theme.css", import.meta.url)).text();
+  const token = (name: string) => {
+    const value = css.match(new RegExp(`--color-${name}: (#[a-f0-9]{6})`))?.[1];
+    if (!value) throw new Error(`Missing colour ${name}`);
+    return value;
+  };
+  for (const foreground of ["fg", "muted", "faint"]) {
+    for (const surface of ["bg", "sidebar", "panel", "raised", "hover"]) {
+      expect(contrast(token(foreground), token(surface))).toBeGreaterThanOrEqual(4.5);
+    }
+  }
 });

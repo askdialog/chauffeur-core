@@ -123,7 +123,7 @@ function until(colour: string, target: string, fine: (colour: string) => boolean
 /** The interface's colours a dark theme sets (index.css's `@theme` holds the app's own); null for a
  * light theme, since the interface is dark only. Surfaces step up from the theme's background toward
  * white as the app's own greys do. Text is lightened until it reads on the lightest surface it sits
- * on (4.5:1, muted and faint text 3:1). The accent is the theme's blue (color4): terminal themes give
+ * on (4.5:1, including muted and faint text). The accent is the theme's blue (color4): terminal themes give
  * it to prompts, links and directories, as the app gives its own blue-violet accent; red, green and
  * yellow already mean danger, success and attention. It is darkened until a button's white label
  * reads on it, then lightened until it reads on the background. */
@@ -134,7 +134,7 @@ export function interfaceVariables(palette: Palette): Record<string, string> | n
   const hover = surface(0.079);
   const reads = (ratio: number, on = hover) => (colour: string) => contrast(colour, on) >= ratio;
   const fg = until(palette.foreground, "#ffffff", reads(4.5));
-  const dimmed = (t: number) => until(mix(fg, bg, t), fg, reads(3));
+  const dimmed = (t: number) => until(mix(fg, bg, t), fg, reads(4.5));
   const onWhite = until(palette.ansi[4] ?? fg, "#000000", reads(3, "#ffffff"));
   const accent = until(onWhite, "#ffffff", reads(4.5, bg));
   return {

@@ -549,6 +549,7 @@ function WorkspaceChats({ workspace, session, setup = null, onCloseShortcut, inU
         </DesignOrPlain>
       ) : (
         <NoChat
+          archived={workspace.state === "archived"}
           workspaceId={workspace.id}
           readOnly={readOnly}
           explore={workspace.explore}
@@ -777,6 +778,7 @@ function ChatStatusIcon({ chat }: { chat: ChatInfo; view: ChatView | undefined }
 }
 
 function NoChat({
+  archived,
   workspaceId,
   readOnly,
   explore,
@@ -785,6 +787,7 @@ function NoChat({
   setup,
 }: {
   workspaceId: string;
+  archived: boolean;
   readOnly: boolean;
   explore: boolean;
   onSend: (text: string, choice: ModelChoice, images: PendingImage[]) => Promise<void>;
@@ -799,8 +802,10 @@ function NoChat({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1">
-        <EmptyState icon={<MessageSquarePlus size={22} />} title="No chat yet">
-          {readOnly
+        <EmptyState icon={<MessageSquarePlus size={22} />} title={archived ? "Workspace archived" : "No chat yet"}>
+          {archived
+            ? "There are no conversations in this archive. Restore the workspace to start a chat."
+            : readOnly
             ? "This workspace is not ready."
             : explore
               ? "Ask about the code: the agent reads each repo at its base branch and explains. It changes nothing."
@@ -1358,6 +1363,7 @@ export function ChatConversation({
       <TasksPanel
         chatId={chat.id}
         tasks={view.tasks}
+        awaitingInput={!!question || !!childQuestion || permissions.length > 0}
         readOnly={readOnly}
         onOpen={openSubagent ? (task) => openSubagent({ toolUseId: task.toolUseId, agentId: task.taskId }) : undefined}
       />

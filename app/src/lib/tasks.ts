@@ -65,3 +65,8 @@ export function tasksHeader(trees: TaskTree[]): { label: string; title: string |
   if (under === 0) return { label, title: null };
   return { label, title: `${under} of them started by a subagent, shown under it` };
 }
+
+/** Keep the conversation and its pending answer visible in short chat panes. */
+export function compactTasks(height: number | null, awaitingInput: boolean): boolean {
+  return awaitingInput || (height !== null && height < 640);
+}

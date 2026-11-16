@@ -12,6 +12,7 @@ export type Toast = {
   id: number;
   level: "info" | "error";
   message: string;
+  action?: { label: string; run: () => void };
   report?: ReportState;
   /** What became of the report, said under the message. */
   reportNote?: string;
@@ -39,14 +40,14 @@ export function setReporter(next: Reporter | null) {
   reporter = next;
 }
 
-export function toast(message: string, level: "info" | "error" = "info") {
+export function toast(message: string, level: "info" | "error" = "info", action?: Toast["action"]) {
   const id = ++toastId;
   const mode = level === "error" ? reporter?.mode() ?? null : null;
   const report: ReportState | undefined = mode === "ask" ? "ask" : mode === "always" ? "sending" : undefined;
   const failure = report ? reporter?.failureOf(message) : undefined;
-  useToasts.setState((s) => ({ toasts: [...s.toasts.slice(-4), { id, level, message, report, failure }] }));
+  useToasts.setState((s) => ({ toasts: [...s.toasts.slice(-4), { id, level, message, report, failure, action }] }));
   // A toast offering its report stays until the user answers or closes it.
-  if (report !== "ask") dismissLater(id, level === "error" ? 8000 : 4000);
+  if (report !== "ask" && !action) dismissLater(id, level === "error" ? 8000 : 4000);
   if (report === "sending") void send(id);
 }
 
