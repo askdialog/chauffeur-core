@@ -230,6 +230,7 @@ function ActivityGroupView({
   const title = tools > 0 ? `${tools} ${tools === 1 ? "tool call" : "tool calls"}` : `${group.items.length} steps`;
   const shown = names.slice(0, 4);
   const current = live && !open ? group.items[group.items.length - 1] : null;
+  const pendingVisible = open || (current?.kind === "tool" && current.result == null);
   const attachments = open
     ? []
     : group.items.flatMap((item) => (item.kind === "tool" && item.result ? item.result.attachments : []));
@@ -256,7 +257,7 @@ function ActivityGroupView({
             </span>
           )}
           {pending && working ? (
-            <Spinner size={11} className="text-working" />
+            !pendingVisible && <Spinner size={11} className="text-working" />
           ) : failed === 0 && tools > 0 ? (
             <Check size={12} className="text-success/80" />
           ) : null}

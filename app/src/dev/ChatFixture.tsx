@@ -2,6 +2,7 @@
 // events, to work on its rendering without the agent sidecar. Not part of the production bundle.
 // `?stream#chat-fixture` streams an answer at the end, a token every 100 ms.
 // `?long&stream#chat-fixture` exercises measurement and scrolling across 400 exchanges.
+// `?activity#chat-fixture` keeps an agent and its nested tool call running in a folded group.
 
 import type { ChatEvent, ChatInfo, EventEnvelope } from "@chauffeur/protocol";
 import { useEffect, useMemo, useState } from "react";
@@ -184,7 +185,13 @@ const chat: ChatInfo = {
 };
 
 export function ChatFixture() {
-  const initial = useMemo(() => buildChatView(events), []);
+  const activity = new URLSearchParams(location.search).has("activity");
+  const initial = useMemo(() => buildChatView(activity ? [
+    p({ type: "user_message", text: "Review the checkout flow with a subagent.", queued: false }),
+    p({ type: "turn_started" }),
+    p({ type: "tool_call", tool_use_id: "agent", name: "Agent", input: { description: "Review the checkout flow", subagent_type: "Explore" }, parent_tool_use_id: null }),
+    p({ type: "tool_call", tool_use_id: "read", name: "Read", input: { file_path: "/ws/checkout-flow/beta/api/orders.py" }, parent_tool_use_id: "agent" }),
+  ] : events), [activity]);
   const [view, setView] = useState(initial);
   useEffect(() => {
     if (!new URLSearchParams(location.search).has("stream")) return;
@@ -200,7 +207,7 @@ export function ChatFixture() {
       <div className="flex h-9 shrink-0 items-center border-b border-line px-4 text-[12px] text-faint">
         Chat fixture: fabricated events (development only)
       </div>
-      <ChatConversation chat={chat} view={view} readOnly={false} archived={false} />
+      <ChatConversation chat={activity ? { ...chat, status: "working", running_tasks: 0 } : chat} view={view} readOnly={false} archived={false} />
     </div>
   );
 }
