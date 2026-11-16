@@ -1038,7 +1038,7 @@ impl ChatManager {
             );
         }
         crate::ollama::codex_env(&d.paths.home, chat.agent, chat.model.as_deref(), &mut env)?;
-        let brand = crate::brands::of_chat(&d, &chat);
+        let brands = crate::brands::of_chat(&d, &chat);
         let params = SessionStartParams {
             launch_id: None,
             chat_id: chat.id.clone(),
@@ -1061,14 +1061,14 @@ impl ChatManager {
                     .to_string_lossy()
                     .into_owned()
             }),
-            brand_dir: brand.as_ref().map(|b| b.path.clone()),
+            brands_dir: brands.as_ref().map(|b| b.root.clone()),
             resume_session_id: chat.agent_session_id.clone(),
             env,
             append_system_prompt: system_prompt(
                 &workspace,
                 &chat,
                 design_dir.as_deref().map(|dir| (dir, chat.agent)),
-                brand.as_ref(),
+                brands.as_ref(),
                 self.subagent_notice(&chat).as_deref(),
                 // Codex keeps its plan natively; Claude, with Chauffeur's tool.
                 (chat.agent == AgentKind::Claude && design_dir.is_none()).then_some(PLAN_NOTICE),
@@ -4449,7 +4449,7 @@ fn system_prompt(
     workspace: &WorkspaceRow,
     chat: &ChatInfo,
     design: Option<(&str, AgentKind)>,
-    brand: Option<&chauffeur_protocol::deck::BrandInfo>,
+    brands: Option<&crate::brands::ChatBrands>,
     subagent: Option<&str>,
     plan: Option<&str>,
 ) -> Option<String> {
@@ -4480,7 +4480,7 @@ fn system_prompt(
         (!workspace.explore && design.is_none()).then(|| DOCUMENT_NOTICE.to_string()),
         (!workspace.explore && design.is_none())
             .then(|| DECK_NOTICE.to_string()),
-        brand.map(crate::brands::notice),
+        brands.map(crate::brands::notice),
         subagent.map(str::to_string),
         plan.map(str::to_string),
         ticket_briefing(&workspace.path),

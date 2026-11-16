@@ -26,6 +26,7 @@ use crate::terminals::OpenSpec;
 use crate::{Daemon, Error, Result, diff, files, models, open, prs, sections};
 
 pub async fn handle(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
+    refuse_internal(daemon, &call)?;
     if let Some(extension) = crate::extensions::owner(call.method()) {
         return daemon.extensions.dispatch(daemon, extension, call).await;
     }
@@ -39,6 +40,33 @@ pub async fn handle(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
             to_value(crate::cloud_transfer_driver::cancel(daemon, p).await?)
         }
         call => handle_other(daemon, call).await,
+    }
+}
+
+/// The daemon's own workspaces (the brands' chats) are never changed as a user's workspace: a
+/// client reaching one by its id (the CLI) is refused, as if it did not exist.
+fn refuse_internal(daemon: &Daemon, call: &ClientCall) -> Result<()> {
+    let key = match call {
+        ClientCall::WorkspaceAddRepo(p) => &p.workspace,
+        ClientCall::WorkspaceArchive(p) => &p.workspace,
+        ClientCall::WorkspaceRestore(p) | ClientCall::WorkspaceMarkUnread(p) => &p.workspace,
+        ClientCall::WorkspaceRename(p) => &p.workspace,
+        ClientCall::WorkspaceRetitle(p) => &p.workspace,
+        ClientCall::WorkspacePromote(p) => &p.workspace,
+        ClientCall::WorkspaceSetTickets(p) => &p.workspace,
+        ClientCall::WorkspacePin(p) => &p.workspace,
+        ClientCall::WorkspaceMove(p) => &p.workspace,
+        ClientCall::WorkspaceSetSection(p) => &p.workspace,
+        ClientCall::WorkspaceShareStart(p) | ClientCall::WorkspaceShareUpdate(p) => &p.workspace,
+        ClientCall::CloudTransferStart(p) => &p.workspace,
+        ClientCall::ChatCreate(p) => &p.workspace,
+        _ => return Ok(()),
+    };
+    match daemon.store.find_workspace(key)? {
+        Some(row) if daemon.store.is_internal_workspace(&row.id)? => {
+            Err(Error::not_found(format!("workspace {key}")))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -596,6 +624,7 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         | ClientCall::DeliverablesRestore(_)
         | ClientCall::BrandsList(_)
         | ClientCall::BrandsCreate(_)
+        | ClientCall::BrandsEdit(_)
         | ClientCall::BrandsDelete(_)
         | ClientCall::BrandsSetDefault(_)
         | ClientCall::ChatSetBrand(_)) => handle_deliverables(daemon, call).await,
@@ -1016,6 +1045,9 @@ fn handle_deliverables(
             ClientCall::BrandsList(_) => to_value(crate::brands::list(daemon)),
             ClientCall::BrandsCreate(params) => {
                 to_value(crate::brands::create(daemon, params).await?)
+            }
+            ClientCall::BrandsEdit(params) => {
+                to_value(crate::brands::edit(daemon, &params.id).await?)
             }
             ClientCall::BrandsDelete(params) => {
                 to_value(crate::brands::delete(daemon, &params.id)?)

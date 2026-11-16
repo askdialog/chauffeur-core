@@ -20255,3 +20255,68 @@ async fn archived_designs_keep_links_while_workspace_and_file_shares_stop() {
     d.shares.stop(&chat.id).await.unwrap();
     assert!(d.shares.list().unwrap().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn brands_are_made_in_a_workspace_the_user_never_sees() {
+    let f = fixture(46100);
+    let new = |name: &str| chauffeur_protocol::deck::BrandCreateParams {
+        name: name.into(),
+        agent: None,
+        model: None,
+    };
+    let acme = chauffeurd::brands::create(&f.daemon, new("Acme"))
+        .await
+        .unwrap();
+    let globex = chauffeurd::brands::create(&f.daemon, new("Globex"))
+        .await
+        .unwrap();
+    assert_eq!(acme.brand.as_deref(), Some("acme"));
+    assert_eq!(acme.kind, chauffeur_protocol::model::ChatKind::Design);
+    // One workspace holds every brand's chat, and no list shows it.
+    assert_eq!(acme.workspace_id, globex.workspace_id);
+    let listed = f.daemon.workspaces.list(true, None).unwrap();
+    assert!(listed.iter().all(|w| w.id != acme.workspace_id));
+    // Nor can a client reaching it by id change it as a workspace of the user's.
+    let archive: chauffeur_protocol::client::ClientCall =
+        serde_json::from_value(serde_json::json!({
+            "method": "workspace.archive",
+            "params": { "workspace": acme.workspace_id },
+        }))
+        .unwrap();
+    let refused = chauffeurd::rpc::handle(&f.daemon, archive)
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("not found"), "{refused}");
+    let chat: chauffeur_protocol::client::ClientCall = serde_json::from_value(serde_json::json!({
+        "method": "chat.create",
+        "params": { "workspace": acme.workspace_id },
+    }))
+    .unwrap();
+    assert!(chauffeurd::rpc::handle(&f.daemon, chat).await.is_err());
+    // Editing a brand opens its own chat again.
+    let edited = chauffeurd::brands::edit(&f.daemon, "acme").await.unwrap();
+    assert_eq!(edited.id, acme.id);
+    // A brand made in a user's workspace, before the editor, gets a chat among the brands'.
+    let design = f
+        .daemon
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("old-brand".into()),
+            no_repos: true,
+            explore: true,
+            chat_kind: Some(chauffeur_protocol::model::ChatKind::Design),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let old = design.chat.unwrap();
+    std::fs::write(
+        chauffeurd::brands::root(&f.daemon).join("globex/brand.json"),
+        format!(r#"{{"name":"Globex","chat":"{}"}}"#, old.id),
+    )
+    .unwrap();
+    let moved = chauffeurd::brands::edit(&f.daemon, "globex").await.unwrap();
+    assert_ne!(moved.id, old.id);
+    assert_eq!(moved.workspace_id, acme.workspace_id);
+    assert_eq!(moved.brand.as_deref(), Some("globex"));
+}

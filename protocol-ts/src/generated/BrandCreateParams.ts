@@ -2,6 +2,7 @@
 import type { AgentKind } from "./AgentKind";
 
 /**
- * A new brand: its folder, and a brand chat in `workspace` that makes it.
+ * A new brand: its folder, and the brand chat that makes it, kept by the daemon outside the
+ * user's workspaces and shown in the brand editor.
  */
-export type BrandCreateParams = { name: string, workspace: string, agent?: AgentKind, model?: string, };
+export type BrandCreateParams = { name: string, agent?: AgentKind, model?: string, };

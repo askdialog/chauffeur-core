@@ -30,10 +30,10 @@ function start(extra: Partial<SessionStartParams>): SessionStartParams {
   };
 }
 
-describe("a chat's brand", () => {
-  test("is read without asking, and a chat without one gets no rule", () => {
-    const branded = buildClaudeOptions(start({ brand_dir: "/home/me/.chauffeur/brands/acme" }), deps);
-    expect((branded.settings as Settings | undefined)?.permissions?.allow).toContain("Read(//home/me/.chauffeur/brands/acme/**)");
+describe("a chat's brands", () => {
+  test("are read without asking, and a chat without one gets no rule", () => {
+    const branded = buildClaudeOptions(start({ brands_dir: "/home/me/.chauffeur/brands" }), deps);
+    expect((branded.settings as Settings | undefined)?.permissions?.allow).toContain("Read(//home/me/.chauffeur/brands/**)");
     const plain = buildClaudeOptions(start({}), deps);
     expect((plain.settings as Settings | undefined)?.permissions?.allow ?? []).not.toContainEqual(expect.stringContaining("brands"));
   });

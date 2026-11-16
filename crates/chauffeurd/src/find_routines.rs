@@ -118,6 +118,7 @@ impl Store {
                    AND c.kind = 'chat' AND c.parent_chat IS NULL AND w.parent_id IS NULL
                    AND NOT EXISTS (SELECT 1 FROM daily_reviews r WHERE r.workspace_id = w.id)
                    AND NOT EXISTS (SELECT 1 FROM weekly_reviews r WHERE r.workspace_id = w.id)
+                   AND NOT EXISTS (SELECT 1 FROM internal_workspaces r WHERE r.workspace_id = w.id)
                    AND NOT EXISTS (SELECT 1 FROM routines r WHERE r.workspace_id = w.id)
                    AND NOT EXISTS (SELECT 1 FROM routine_suggestion_messages s WHERE s.seq = e.seq)
                  ORDER BY e.seq",

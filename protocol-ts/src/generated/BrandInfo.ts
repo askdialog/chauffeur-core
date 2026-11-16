@@ -6,6 +6,6 @@ export type BrandInfo = { id: string, name: string,
  */
 path: string, 
 /**
- * The design chat that makes it, while it exists.
+ * The brand chat that makes it, while it exists.
  */
 chat?: string, };

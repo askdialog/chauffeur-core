@@ -145,6 +145,8 @@ export type AppState = {
   sidebarWidth: number;
   sharingShown: boolean;
   reviewsShown: boolean;
+  /** The brand editor (docs/adr/brands.md) fills the main area: the brand, and the chat that makes it. */
+  brandEditor: { brand: string; name: string; chat: string; workspace: string } | null;
   /** The 3D Office (docs/office.md) fills the main area instead of the selected workspace. */
   officeShown: boolean;
   /** The daemon's Office is on (`office.state` says it is configured); off, nothing shows it. */
@@ -258,6 +260,7 @@ export const useApp = create<AppState>(() => ({
   sidebarWidth: storedSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_KEY)),
   sharingShown: false,
   reviewsShown: false,
+  brandEditor: null,
   officeShown: false,
   officeEnabled: false,
   extensions: null,
@@ -323,7 +326,7 @@ function select(id: string | null) {
   if (id) localStorage.setItem(SELECTED_KEY, id);
   else localStorage.removeItem(SELECTED_KEY);
   const { selectedId, nav } = get();
-  set({ sharingShown: false, reviewsShown: false, selectedId: id, nav: id ? visit(nav, selectedId, id) : nav, switcherOpen: false });
+  set({ sharingShown: false, reviewsShown: false, brandEditor: null, selectedId: id, nav: id ? visit(nav, selectedId, id) : nav, switcherOpen: false });
   keptUnread = null;
   if (id) markSeen(id);
 }
@@ -352,7 +355,7 @@ function reachable(workspaces: Record<string, WorkspaceInfo>, id: string): boole
 /** Shows the 3D Office in the main area, or the selected workspace again. */
 export function showOffice(shown = !get().officeShown) {
   if (shown && !get().officeEnabled) return;
-  set({ sharingShown: false, reviewsShown: false, officeShown: shown });
+  set({ sharingShown: false, reviewsShown: false, brandEditor: null, officeShown: shown });
 }
 
 /** Said in the Office in the browser of what only the app does. */
@@ -1616,12 +1619,29 @@ export function chatsOf(chats: Record<string, ChatInfo>, workspaceId: string): C
 }
 
 export function showSharing() {
-  set({ sharingShown: true, reviewsShown: false, officeShown: false });
+  set({ sharingShown: true, reviewsShown: false, brandEditor: null, officeShown: false });
+}
+
+/** Shows a brand's editor in the main area: the chat that makes it beside its specimen and layouts. */
+export function openBrandEditor(brand: { id: string; name: string }, chat: ChatInfo) {
+  upsertChats([chat]);
+  set({
+    brandEditor: { brand: brand.id, name: brand.name, chat: chat.id, workspace: chat.workspace_id },
+    settingsOpen: false,
+    settingsSection: null,
+    reviewsShown: false,
+    sharingShown: false,
+    officeShown: false,
+  });
+}
+
+export function closeBrandEditor() {
+  set({ brandEditor: null });
 }
 
 /** Opens the global review overview without changing any report conversation. */
 export function showReviews() {
-  set({ reviewsShown: true, sharingShown: false, officeShown: false });
+  set({ reviewsShown: true, sharingShown: false, brandEditor: null, officeShown: false });
 }
 
 /** Opens a live or archived review source at its cited event, preserving its closed state. */

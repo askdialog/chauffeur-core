@@ -529,7 +529,8 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
             )}
             {(share?.share?.viewers.length ?? 0) > 0 && <span className="rounded-full bg-accent/15 px-1 text-[10.5px] text-accent">{share?.share?.viewers.length}</span>}
           </Button>
-          <SendToChat chat={chat} sections={sections} selection={selection} />
+          {/* A brand chat has no other chat to send to: its editor shows it alone. */}
+          {!chat.brand && <SendToChat chat={chat} sections={sections} selection={selection} />}
         </div>
       </div>
       {sharing && <ShareDialog target={{ kind: "design", chat: chat.id }} state={share} onClose={() => setSharing(false)} />}

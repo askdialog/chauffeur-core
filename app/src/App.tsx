@@ -37,6 +37,7 @@ import { sendToastReport, type Toast, useToasts } from "./state/toasts";
 import { sidebarGroups, visibleRows } from "./lib/workspaceOrder";
 
 import { GlobalExtensionView } from "./extensions";
+import { BrandEditor } from "./components/BrandEditor";
 
 export function App() {
   useEffect(() => {
@@ -51,6 +52,7 @@ export function App() {
   const reviewsShown = useApp((s) => s.reviewsShown);
   const sharingShown = useApp((s) => s.sharingShown);
   const officeShown = useApp((s) => s.officeShown);
+  const brandEditor = useApp((s) => s.brandEditor);
   // The Office is there only while it shows: closed, it lets go of its scene, models and textures,
   // so that it costs nothing to whoever does not look at it.
 
@@ -67,7 +69,7 @@ export function App() {
             </ErrorBoundary>
           </div>
         )}
-        {officeShown ? null : reviewsShown ? <ErrorBoundary><ReviewsPage onOpenSource={openReviewConversation} /></ErrorBoundary> : sharingShown ? <SharingPage /> : workspace ? (
+        {officeShown ? null : brandEditor ? <ErrorBoundary key={brandEditor.chat}><BrandEditor editor={brandEditor} /></ErrorBoundary> : reviewsShown ? <ErrorBoundary><ReviewsPage onOpenSource={openReviewConversation} /></ErrorBoundary> : sharingShown ? <SharingPage /> : workspace ? (
           <ErrorBoundary key={workspace.id}>
             <WorkspaceView workspace={workspace} />
           </ErrorBoundary>

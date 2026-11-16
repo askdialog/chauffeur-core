@@ -218,6 +218,7 @@ impl Index {
                 "SELECT seq, ts, workspace_id, chat_id, json_extract(payload, '$.event.event.text')
                  FROM store.events
                  WHERE seq > ?1 AND seq <= ?2 AND workspace_id IS NOT NULL AND chat_id IS NOT NULL
+                   AND workspace_id NOT IN (SELECT workspace_id FROM store.internal_workspaces)
                    AND CASE WHEN json_valid(payload) THEN
                        json_extract(payload, '$.event.scope') = 'chat'
                        AND json_extract(payload, '$.event.event.type') IN ('user_message', 'assistant_text')
@@ -267,7 +268,8 @@ impl Index {
     pub fn sync_workspaces(&mut self) -> rusqlite::Result<()> {
         let rows = {
             let mut stmt = self.conn.prepare(
-                "SELECT id, slug, title, branch, tickets, created_at FROM store.workspaces",
+                "SELECT id, slug, title, branch, tickets, created_at FROM store.workspaces
+                 WHERE id NOT IN (SELECT workspace_id FROM store.internal_workspaces)",
             )?;
             stmt.query_map([], |r| {
                 let slug: String = r.get(1)?;
@@ -319,7 +321,8 @@ impl Index {
         let workspaces = {
             let mut stmt = self.conn.prepare(
                 "SELECT id, path FROM store.workspaces
-                 WHERE ?1 OR state NOT IN ('archived', 'archiving')",
+                 WHERE (?1 OR state NOT IN ('archived', 'archiving'))
+                   AND id NOT IN (SELECT workspace_id FROM store.internal_workspaces)",
             )?;
             stmt.query_map([archived], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))

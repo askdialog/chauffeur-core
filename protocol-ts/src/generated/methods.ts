@@ -372,7 +372,7 @@ import type { WorktreeCreateParams } from "./WorktreeCreateParams";
 import type { WorktreeCreateResult } from "./WorktreeCreateResult";
 import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 
-export const PROTOCOL_VERSION = 18;
+export const PROTOCOL_VERSION = 19;
 export const MIN_PROTOCOL_VERSION = 1;
 export const PEER_PROTOCOL_VERSION = 3;
 
@@ -571,6 +571,7 @@ export type ClientMethods = {
   "deliverables.restore": [VersionRestoreParams, DeliverableVersion];
   "brands.list": [EmptyParams, BrandsResult];
   "brands.create": [BrandCreateParams, ChatInfo];
+  "brands.edit": [BrandParams, ChatInfo];
   "brands.delete": [BrandParams, BrandsResult];
   "brands.set_default": [BrandDefaultParams, BrandsResult];
   "chat.set_brand": [ChatBrandParams, ChatInfo];
@@ -965,6 +966,7 @@ export const METHOD_NAMES = [
   "deliverables.restore",
   "brands.list",
   "brands.create",
+  "brands.edit",
   "brands.delete",
   "brands.set_default",
   "chat.set_brand",

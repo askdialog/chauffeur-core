@@ -79,7 +79,6 @@ import { AGENT_NAMES, designChoice, effectiveLoadout, initialChoice, loadoutIn, 
 import { ExploreModePicker } from "../ExploreModePicker";
 import { ModelPicker } from "../ModelPicker";
 import { PermissionPicker } from "../PermissionPicker";
-import { BrandPicker } from "../BrandsSettings";
 import { Badge, Button, cx, DesignOnlyMode, EmptyState, IconButton, inputClass, Kbd, Modal, Spinner } from "../ui";
 import { ContextMenu, type MenuItem } from "../ContextMenu";
 import { FileLinkContext } from "../FileLinks";
@@ -1162,7 +1161,6 @@ export function ChatConversation({
             onChange={(permission_mode) => void configure({ permission_mode })}
           />
         )}
-        {!design && !explore && <BrandPicker chat={chat} />}
         {formatCost(view.costUsd) && !partial && (
           <span className="text-[11px] text-faint" title={view.costEstimated ? "Estimated token cost at API rates, including cache and Fast mode; excludes tool fees and may differ from your ChatGPT subscription charges." : undefined}>
             {formatCost(view.costUsd, view.costEstimated)}

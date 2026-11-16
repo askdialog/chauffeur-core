@@ -236,6 +236,11 @@ CREATE TABLE IF NOT EXISTS routine_suggestion_messages (
     seq INTEGER PRIMARY KEY,
     suggestion_id TEXT NOT NULL
 );
+-- Workspaces the daemon keeps for itself and never lists (the brands' chats, docs/adr/brands.md).
+CREATE TABLE IF NOT EXISTS internal_workspaces (
+    purpose TEXT PRIMARY KEY,
+    workspace_id TEXT UNIQUE NOT NULL
+);
 CREATE TABLE IF NOT EXISTS daily_reviews (
     day TEXT PRIMARY KEY,
     workspace_id TEXT UNIQUE
@@ -969,6 +974,42 @@ impl Store {
         self.insert_review_workspace(row, None)
     }
 
+    /// Inserts a workspace the daemon keeps for `purpose`, never listed to the user.
+    pub(crate) fn insert_internal_workspace(
+        &self,
+        row: &WorkspaceRow,
+        purpose: &str,
+    ) -> Result<()> {
+        self.insert_workspace(row)?;
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO internal_workspaces (purpose, workspace_id) VALUES (?1, ?2)",
+                params![purpose, row.id],
+            )
+        })?;
+        Ok(())
+    }
+
+    /// The workspace the daemon keeps for `purpose`, if it made one.
+    pub(crate) fn internal_workspace(&self, purpose: &str) -> Result<Option<String>> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT workspace_id FROM internal_workspaces WHERE purpose = ?1",
+                [purpose],
+                |r| r.get(0),
+            )
+            .optional()
+        })
+    }
+
+    /// Whether the daemon keeps this workspace for itself.
+    pub(crate) fn is_internal_workspace(&self, id: &str) -> Result<bool> {
+        self.with(|c| {
+            c.prepare("SELECT 1 FROM internal_workspaces WHERE workspace_id = ?1")?
+                .exists([id])
+        })
+    }
+
     pub(crate) fn insert_review_workspace(
         &self,
         row: &WorkspaceRow,
@@ -1381,6 +1422,7 @@ impl Store {
             c.execute("DELETE FROM chat_send_receipts WHERE chat_id IN (SELECT id FROM chats WHERE workspace_id=?1)", params![id])?;
             c.execute("DELETE FROM chats WHERE workspace_id = ?1", params![id])?;
             c.execute("DELETE FROM worktrees WHERE workspace_id = ?1", params![id])?;
+            c.execute("DELETE FROM internal_workspaces WHERE workspace_id = ?1", params![id])?;
             c.execute(
                 "DELETE FROM port_blocks WHERE workspace_id = ?1",
                 params![id],

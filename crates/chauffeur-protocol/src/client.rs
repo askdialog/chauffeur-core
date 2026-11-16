@@ -993,6 +993,12 @@ methods! {
         #[access(User)]
         #[relay(Local)]
         BrandsCreate(crate::deck::BrandCreateParams) -> ChatInfo,
+        /// The brand chat that edits a brand, in the brand editor: its own, or a new one when it
+        /// is gone or lives in a user's workspace (a brand made before the editor).
+        #[serde(rename = "brands.edit")]
+        #[access(User)]
+        #[relay(Local)]
+        BrandsEdit(crate::deck::BrandParams) -> ChatInfo,
         /// Removes a brand's folder; decks made with it keep their copy.
         #[serde(rename = "brands.delete")]
         #[access(User)]

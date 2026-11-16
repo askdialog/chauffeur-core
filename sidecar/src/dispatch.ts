@@ -256,7 +256,7 @@ export function parseStartParams(params: unknown): SessionStartParams {
     prompt_suggestions: optionalBoolean(p, "prompt_suggestions") ?? false,
   };
   if (optionalBoolean(p, "delegate")) start.delegate = true;
-  for (const key of ["model", "effort", "plans_dir", "design_dir", "notes_dir", "brand_dir", "resume_session_id", "append_system_prompt", "prompt"] as const) {
+  for (const key of ["model", "effort", "plans_dir", "design_dir", "notes_dir", "brands_dir", "resume_session_id", "append_system_prompt", "prompt"] as const) {
     const value = optionalString(p, key);
     if (value !== undefined) start[key] = value;
   }

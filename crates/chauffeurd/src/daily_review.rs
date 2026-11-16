@@ -71,6 +71,7 @@ impl Store {
                  WHERE e.ts >= ?1 AND e.ts < ?2 AND e.registry = 0
                  AND NOT EXISTS (SELECT 1 FROM daily_reviews r WHERE r.workspace_id = e.workspace_id)
                  AND NOT EXISTS (SELECT 1 FROM weekly_reviews r WHERE r.workspace_id = e.workspace_id)
+                 AND NOT EXISTS (SELECT 1 FROM internal_workspaces r WHERE r.workspace_id = e.workspace_id)
                  AND json_extract(e.payload, '$.event.event.type') IN
                      ('user_message', 'assistant_text', 'tool_call', 'turn_ended')
                  ORDER BY e.workspace_id, e.chat_id")?;

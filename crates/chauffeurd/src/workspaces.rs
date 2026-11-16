@@ -201,6 +201,8 @@ impl WorkspaceManager {
             .map(|(i, s)| (s.id, i))
             .collect();
         let mut rows = d.store.list_workspaces()?;
+        // The daemon's own (the brands' chats) are never shown as workspaces.
+        rows.retain(|row| !d.store.is_internal_workspace(&row.id).unwrap_or(false));
         rows.sort_by_key(|row| {
             let archived = row.state == WorkspaceState::Archived;
             let section = match (&row.section_id, row.pinned || archived) {
@@ -582,6 +584,9 @@ impl WorkspaceManager {
     /// Publishes the workspace's current state to registry subscribers.
     pub fn publish(&self, id: &str) {
         let d = self.d();
+        if d.store.is_internal_workspace(id).unwrap_or(false) {
+            return;
+        }
         match d
             .store
             .find_workspace(id)
@@ -626,6 +631,62 @@ impl WorkspaceManager {
 
     pub async fn create(&self, params: CreateWorkspaceParams) -> Result<CreateWorkspaceResult> {
         self.create_for_review(params, None, None).await
+    }
+
+    /// The workspace the daemon keeps for `purpose` in `path`, made the first time: an exploration
+    /// without repos, ready at once, that no list, event or search shows the user.
+    pub(crate) async fn internal(
+        &self,
+        purpose: &str,
+        path: &Path,
+        title: &str,
+    ) -> Result<WorkspaceRow> {
+        static MAKING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        let _making = MAKING.lock().await;
+        let d = self.d();
+        if let Some(id) = d.store.internal_workspace(purpose)? {
+            let row = self.row(&id)?;
+            if row.state == WorkspaceState::Ready {
+                return Ok(row);
+            }
+            // Archived or stranded by hand (the CLI reaches it by id): made again.
+            self.rollback(&row).await;
+            d.store.delete_workspace(&row.id)?;
+        }
+        let store = d.store.clone();
+        let slug = slug::unique(&format!("chauffeur-{purpose}"), |candidate| {
+            store.slug_exists(candidate).unwrap_or(true)
+        });
+        let row = WorkspaceRow {
+            id: uuid::Uuid::now_v7().to_string(),
+            slug,
+            path: path.to_string_lossy().into_owned(),
+            branch: String::new(),
+            parent_id: None,
+            state: WorkspaceState::Creating,
+            tickets: Vec::new(),
+            created_at: now(),
+            archived_at: None,
+            last_error: None,
+            attention_at: None,
+            seen_at: None,
+            explore: true,
+            auto_title: false,
+            pinned: false,
+            position: 0.0,
+            title: Some(title.to_string()),
+            title_source: Some(TitleSource::User),
+            section_id: None,
+            house_position: None,
+        };
+        d.store.insert_internal_workspace(&row, purpose)?;
+        if let Err(error) = self.populate(&row, &[]).await {
+            let _ = d.store.delete_workspace(&row.id);
+            return Err(error);
+        }
+        d.store
+            .set_workspace_state(&row.id, WorkspaceState::Ready, None)?;
+        self.row(&row.id)
     }
 
     /// Claims the daily or weekly review atomically with its workspace, filed in `section`.

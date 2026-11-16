@@ -189,7 +189,7 @@ pub struct BrandInfo {
     pub name: String,
     /// Its folder.
     pub path: String,
-    /// The design chat that makes it, while it exists.
+    /// The brand chat that makes it, while it exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub chat: Option<String>,
@@ -205,13 +205,13 @@ pub struct BrandsResult {
     pub default: Option<String>,
 }
 
-/// A new brand: its folder, and a brand chat in `workspace` that makes it.
+/// A new brand: its folder, and the brand chat that makes it, kept by the daemon outside the
+/// user's workspaces and shown in the brand editor.
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[ts(export)]
 #[ts(optional_fields)]
 pub struct BrandCreateParams {
     pub name: String,
-    pub workspace: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<crate::model::AgentKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
