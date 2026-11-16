@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PowerState, UpdateStatus } from "@chauffeur/protocol";
-import { restartWarning, updateCard, updating } from "./update";
+import { idleForRestart, plannedRestart, restartWarning, updateCard, updating, waitingForIdle } from "./update";
 
 const status = (over: Partial<UpdateStatus>): UpdateStatus => ({
   current: "0.9.0",
@@ -48,20 +48,20 @@ describe("updateCard", () => {
   });
 });
 
-describe("restartWarning", () => {
-  const power = (over: Partial<PowerState>): PowerState => ({
-    keep_awake: "while_working",
-    holding: "idle_sleep",
-    working_chats: 0,
-    running_tasks: 0,
-    creating_workspaces: 0,
-    lingering_secs: null,
-    low_battery: false,
-    battery_percent: null,
-    warning: null,
-    ...over,
-  });
+const power = (over: Partial<PowerState>): PowerState => ({
+  keep_awake: "while_working",
+  holding: "idle_sleep",
+  working_chats: 0,
+  running_tasks: 0,
+  creating_workspaces: 0,
+  lingering_secs: null,
+  low_battery: false,
+  battery_percent: null,
+  warning: null,
+  ...over,
+});
 
+describe("restartWarning", () => {
   test("restarting is free when no agent works", () => {
     expect(restartWarning(power({}))).toBeNull();
     expect(restartWarning(power({ running_tasks: 2, lingering_secs: 60 }))).toBeNull();
@@ -72,5 +72,24 @@ describe("restartWarning", () => {
       "2 agents working: restarting interrupts their turns, which resume once Chauffeur is back.",
     );
     expect(restartWarning(power({ creating_workspaces: 1 }))).toStartWith("1 workspace being created:");
+  });
+});
+
+describe("restart when idle", () => {
+  test("it restarts once no agent works and no workspace is being created", () => {
+    expect(idleForRestart(power({}))).toBe(true);
+    expect(idleForRestart(power({ running_tasks: 1, lingering_secs: 60 }))).toBe(true);
+    expect(idleForRestart(power({ working_chats: 1 }))).toBe(false);
+    expect(idleForRestart(power({ creating_workspaces: 1 }))).toBe(false);
+  });
+
+  test("while it waits, the card says what it waits for", () => {
+    expect(waitingForIdle(null)).toBe("Restarts once no agent works.");
+    expect(waitingForIdle(power({ working_chats: 2 }))).toBe("Restarts once no agent works: 2 agents working.");
+  });
+
+  test("while the update installs, the card says which restart follows", () => {
+    expect(plannedRestart("now")).toBe("Restarts once installed.");
+    expect(plannedRestart("idle")).toBe("Restarts once installed and no agent works.");
   });
 });

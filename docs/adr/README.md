@@ -165,3 +165,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Child workspaces have no count limit](unlimited-child-workspaces.md) | 2026-11-16 | accepted |
 | [Telling the owner of comments that do not mention them, after a quiet half hour](untagged-comments-digest.md) | 2026-11-16 | accepted |
 | [Make the interface foundations and recovery paths dependable](ux-audit-foundations.md) | 2026-11-16 | accepted |
+| [Update and restart in one step, at once or once no agent works](restart-when-idle.md) | 2026-11-17 | accepted |
