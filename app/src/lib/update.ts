@@ -31,6 +31,14 @@ export function updateCard(status: UpdateStatus | null, dismissed: string | null
   }
 }
 
+/** Sent to the window once the menu's Check for Updates… found a version: the card shows it again. */
+export const UPDATE_REVEAL_EVENT = "chauffeur:update-reveal";
+
+/** What Check for Updates… says when nothing newer is published (an update under way still counts as one). */
+export function upToDate(status: UpdateStatus): string | null {
+  return status.available ? null : `Chauffeur ${status.current} is up to date.`;
+}
+
 /** Whether an update is under way: the card then follows it every second. */
 export function updating(status: UpdateStatus | null): boolean {
   return status?.phase === "downloading" || status?.phase === "installing";

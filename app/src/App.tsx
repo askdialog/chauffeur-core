@@ -14,6 +14,7 @@ import { SharingPage } from "./components/SharingPage";
 import { Sidebar } from "./components/Sidebar";
 import { Button, cx, EmptyState, Kbd } from "./components/ui";
 import { WorkspaceView } from "./components/WorkspaceView";
+import { checkForUpdates } from "./lib/checkForUpdates";
 import { onMenuAction, openMobileConnection } from "./lib/native";
 import {
   client,
@@ -178,6 +179,7 @@ function useShortcuts() {
           openSettings(true, "mobile");
         }).catch(() => openSettings(true, "mobile"));
       }
+      if (action === "check-for-updates") void checkForUpdates();
       if (action === "toggle-sidebar") toggleSidebar();
       if (action === "office") showOffice();
       if (action === "zoom-in") zoomApp(1);

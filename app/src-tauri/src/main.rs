@@ -292,6 +292,7 @@ fn main() {
                 if matches!(
                     action,
                     "mobile-connection"
+                        | "check-for-updates"
                         | "new-workspace"
                         | "new-exploration"
                         | "switch-workspace"

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PowerState, UpdateStatus } from "@chauffeur/protocol";
-import { idleForRestart, plannedRestart, restartWarning, updateCard, updating, waitingForIdle } from "./update";
+import { idleForRestart, plannedRestart, restartWarning, updateCard, upToDate, updating, waitingForIdle } from "./update";
 
 const status = (over: Partial<UpdateStatus>): UpdateStatus => ({
   current: "0.9.0",
@@ -91,5 +91,12 @@ describe("restart when idle", () => {
   test("while the update installs, the card says which restart follows", () => {
     expect(plannedRestart("now")).toBe("Restarts once installed.");
     expect(plannedRestart("idle")).toBe("Restarts once installed and no agent works.");
+  });
+});
+
+describe("upToDate", () => {
+  test("says the version when nothing newer is published, and nothing when an update is offered", () => {
+    expect(upToDate(status({ current: "0.40.0", available: null }))).toBe("Chauffeur 0.40.0 is up to date.");
+    expect(upToDate(status({ available: "0.41.0" }))).toBeNull();
   });
 });

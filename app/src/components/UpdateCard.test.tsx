@@ -113,3 +113,13 @@ domTest("a failed installation drops the planned restart", import.meta.path, asy
   await until(() => text("update-restart") === "Restart");
   expect(relaunched).toBe(0);
 });
+
+domTest("the menu's Check for Updates… shows a hidden version again", import.meta.path, async ({ render, until }) => {
+  localStorage.setItem("chauffeur.update.dismissed", "0.10.0");
+  await render(<UpdateCard />);
+  await wait(100);
+  expect(document.querySelector('[data-testid="update-card"]')).toBeNull();
+  localStorage.removeItem("chauffeur.update.dismissed");
+  window.dispatchEvent(new window.Event("chauffeur:update-reveal"));
+  await until(() => text("update-restart") === "Update now");
+});

@@ -166,3 +166,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Telling the owner of comments that do not mention them, after a quiet half hour](untagged-comments-digest.md) | 2026-11-16 | accepted |
 | [Make the interface foundations and recovery paths dependable](ux-audit-foundations.md) | 2026-11-16 | accepted |
 | [Update and restart in one step, at once or once no agent works](restart-when-idle.md) | 2026-11-17 | accepted |
+| [Check for Updates… in the app menu brings the update card back](update-from-the-menu.md) | 2026-11-17 | accepted |

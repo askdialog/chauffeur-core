@@ -18,6 +18,7 @@ import {
   plannedRestart,
   type RestartPlan,
   restartWarning,
+  UPDATE_REVEAL_EVENT,
   updateCard,
   updating,
   waitingForIdle,
@@ -80,6 +81,19 @@ export function UpdateCard() {
       window.removeEventListener("focus", check);
     };
   }, [connected, status?.phase]);
+
+  // Check for Updates… in the app menu shows the card again, a hidden version included.
+  useEffect(() => {
+    const reveal = () => {
+      setDismissed(null);
+      void client
+        .call("update.status", {})
+        .then(setStatus)
+        .catch(() => {});
+    };
+    window.addEventListener(UPDATE_REVEAL_EVENT, reveal);
+    return () => window.removeEventListener(UPDATE_REVEAL_EVENT, reveal);
+  }, []);
 
   const phase = status?.phase;
 

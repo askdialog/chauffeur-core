@@ -199,6 +199,8 @@ pub fn build(
     let close_window = item("close-window", "Close Window")?;
     let settings = item("settings", "Settings…")?;
     let mobile = MenuItemBuilder::with_id("mobile-connection", "Connect Phone…").build(app)?;
+    let check_updates =
+        MenuItemBuilder::with_id("check-for-updates", "Check for Updates…").build(app)?;
     let mut app_menu = SubmenuBuilder::new(app, "Chauffeur")
         .about(Some(AboutMetadata {
             name: Some("Chauffeur".into()),
@@ -213,6 +215,7 @@ pub fn build(
             ),
             ..Default::default()
         }))
+        .item(&check_updates)
         .separator()
         .item(&settings);
     if member {
