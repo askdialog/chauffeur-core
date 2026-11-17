@@ -2,4 +2,9 @@
 import type { ExtensionPackagePhase } from "./ExtensionPackagePhase";
 import type { ExtensionUi } from "./ExtensionUi";
 
-export type ExtensionPackageInfo = { desired_installed: boolean, installed: boolean, auto_update: boolean, available: string | null, phase: ExtensionPackagePhase, error: string | null, ui: ExtensionUi | null, can_restore: boolean, };
+export type ExtensionPackageInfo = { desired_installed: boolean, installed: boolean, auto_update: boolean, available: string | null, phase: ExtensionPackagePhase, error: string | null, ui: ExtensionUi | null, can_restore: boolean, 
+/**
+ * A check, install or update the user started still runs, past the call that started it:
+ * another one would be refused until it ends.
+ */
+busy: boolean, };

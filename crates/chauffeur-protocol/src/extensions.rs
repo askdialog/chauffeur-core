@@ -58,6 +58,9 @@ pub struct ExtensionPackageInfo {
     pub error: Option<String>,
     pub ui: Option<ExtensionUi>,
     pub can_restore: bool,
+    /// A check, install or update the user started still runs, past the call that started it:
+    /// another one would be refused until it ends.
+    pub busy: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]

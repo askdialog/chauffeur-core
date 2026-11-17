@@ -241,9 +241,16 @@ impl Managed {
                 "An extension download is already running; wait for it to finish".into(),
             ));
         }
-        let epoch = inner.state.lock().unwrap().journal.epoch;
+        // The error of an earlier attempt no longer describes what runs now.
+        let epoch = {
+            let mut state = inner.state.lock().unwrap();
+            state.error = None;
+            state.journal.epoch
+        };
+        let job = Job(inner.clone());
+        inner.publish();
         tokio::spawn(async move {
-            let _job = Job(inner.clone());
+            let _job = job;
             let _serial = inner.lifecycle.lock().await;
             if let Err(error) = inner.command(command, epoch).await {
                 inner.fail(error);
@@ -976,6 +983,7 @@ struct Job(Arc<Inner>);
 impl Drop for Job {
     fn drop(&mut self) {
         self.0.running_job.store(false, Ordering::SeqCst);
+        self.0.publish();
     }
 }
 struct View {
@@ -1099,6 +1107,7 @@ impl Runtime for Managed {
             error: state.error.clone(),
             ui: if state.journal.removed { None } else { ui },
             can_restore: state.journal.previous.is_some(),
+            busy: inner.running_job.load(Ordering::SeqCst),
         })
     }
     fn resume(&self) {
@@ -1514,6 +1523,40 @@ for line in sys.stdin:
         );
         assert!(reopened.0.state.lock().unwrap().journal.pending.is_none());
         reopened.0.stop().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_started_check_shows_busy_until_it_ends_and_clears_the_previous_error() {
+        let (_dir, daemon) = fixture();
+        let runtime = daemon
+            .extensions
+            .get::<Managed>(ExtensionId::Office)
+            .unwrap();
+        daemon
+            .shell_env
+            .set_vars(std::collections::BTreeMap::from([(
+                "PATH".into(),
+                "/no-github-cli".into(),
+            )]));
+        runtime.0.state.lock().unwrap().error = Some("release not found".into());
+        // The job waits behind the lifecycle, as it would behind a running update.
+        let lifecycle = runtime.0.lifecycle.lock().await;
+        runtime.manage(ExtensionCommand::Check).unwrap();
+        let info = runtime.package_info().unwrap();
+        assert!(info.busy);
+        assert_eq!(info.error, None);
+        assert!(runtime.manage(ExtensionCommand::Update).is_err());
+        drop(lifecycle);
+        for _ in 0..200 {
+            if !runtime.package_info().unwrap().busy {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let info = runtime.package_info().unwrap();
+        assert!(!info.busy);
+        // Without gh the check fails, and says so once it has ended.
+        assert!(info.error.is_some());
     }
 
     #[tokio::test]

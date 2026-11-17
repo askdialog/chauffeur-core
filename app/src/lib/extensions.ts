@@ -58,6 +58,10 @@ export function packageStatus(extension: ExtensionInfo): PackageStatus {
       ? { label: "Removing", tone: "working", detail: "Cancelling the download in progress.", busy: true }
       : { label: "Not installed", tone: "neutral", detail: pkg.error, busy: false };
   }
+  // A check or update the user started, before (or without) any download: nothing else may start.
+  if (pkg.busy && pkg.phase !== "downloading" && pkg.phase !== "starting") {
+    return { label: "Checking", tone: "working", detail: pkg.available ? `Getting version ${pkg.available}…` : "Checking for a new version…", busy: true };
+  }
   switch (pkg.phase) {
     case "downloading":
       return { label: "Downloading", tone: "working", detail: `Downloading and checking ${pkg.available ? `version ${pkg.available}` : "the extension"}…`, busy: true };

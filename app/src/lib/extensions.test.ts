@@ -12,6 +12,7 @@ const installed: ExtensionPackageInfo = {
   error: null,
   ui: { revision: "r", base_url: "http://127.0.0.1:1/extension-assets/x/r/n/", script: "ui/extension.js", stylesheet: null, assets: "ui/assets" },
   can_restore: false,
+  busy: false,
 };
 
 const extension = (id: "database" | "office", enabled: boolean, pkg: Partial<ExtensionPackageInfo> | null = {}): ExtensionInfo => ({
@@ -78,4 +79,11 @@ test("the Marketplace says what each package is doing", () => {
   expect(packageStatus(extension("database", true, { error: "1.2.0 needs another Chauffeur version" }))).toMatchObject({ tone: "attention", detail: "1.2.0 needs another Chauffeur version" });
   expect(packageStatus(extension("database", true, { desired_installed: false, installed: false }))).toMatchObject({ label: "Not installed", busy: false });
   expect(packageStatus(extension("database", true, { desired_installed: false, phase: "downloading" }))).toMatchObject({ label: "Removing", busy: true });
+});
+
+test("a check or update still running in the daemon keeps the Marketplace's buttons waiting", () => {
+  // The call that started it has already answered: only the daemon knows it still runs.
+  expect(packageStatus(extension("database", true, { busy: true, available: "0.31.0" }))).toEqual({ label: "Checking", tone: "working", detail: "Getting version 0.31.0…", busy: true });
+  expect(packageStatus(extension("database", true, { busy: true }))).toMatchObject({ detail: "Checking for a new version…", busy: true });
+  expect(packageStatus(extension("database", true, { busy: true, phase: "downloading", available: "0.31.0" }))).toMatchObject({ label: "Downloading", busy: true });
 });
