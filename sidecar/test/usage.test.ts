@@ -3,6 +3,8 @@ import { claudeUsageResult, refusedCredentials, signedOut } from "../src/agents/
 import { codexUsageResult, readCodexUsage } from "../src/agents/codex/usage.ts";
 
 import { silentLogger } from "../src/log.ts";
+import { ErrorCode } from "../src/protocol.ts";
+import { RpcError } from "../src/rpc/peer.ts";
 import { FakeAppServer, HOOK } from "./support/codex-fakes.ts";
 
 describe("usage limits", () => {
@@ -156,4 +158,18 @@ test("Codex keeps the reset count independent of capped details and preserves ex
   expect(server?.sent("account/rateLimits/read")).toEqual([{ excludeResetCreditDetails: false }]);
   expect(server?.requests.map((request) => request.method)).toEqual(["initialize", "account/read", "account/rateLimits/read"]);
   expect(server?.closed).toBe(true);
+});
+
+test("Codex without a `codex` to run reads as not installed, without starting anything", async () => {
+  const result = await readCodexUsage({
+    spawn: () => {
+      throw new Error("nothing to start");
+    },
+    resolveExecutable: () => {
+      throw new RpcError(ErrorCode.UNAVAILABLE, "codex is not installed");
+    },
+    baseEnv: {},
+    hookCommand: () => HOOK,
+  }, silentLogger);
+  expect(result).toEqual({ plan: null, windows: [], extra_usage: null, signed_out: null, not_installed: "codex is not installed" });
 });

@@ -26,7 +26,7 @@ export const DELEGATE_DESCRIPTION =
   "Delegate only what needs such a chat: a review or a second opinion (`review: true`), or a long or parallel piece " +
   "of work the user may want to follow; for a quick search or a small sub-task, use your own subagents when you have " +
   "them. It runs on your own agent, except a review: that goes to the other agent (Codex from Claude, Claude from " +
-  "Codex), whose model reads the work with other blind spots. If that agent is signed out or out of its plan's " +
+  "Codex), whose model reads the work with other blind spots. If that agent is not installed, signed out or out of its plan's " +
   "limits, Chauffeur gives the task to the other one and says so. Pick the model with `tier` (`fast` for quick, " +
   "simple tasks; `default`; `strongest` for hard work) and, when the task needs it, `effort`. Name `agent` or " +
   "`model` only when the user asked for one. The delegated chat knows nothing of this conversation: say in " +

@@ -7852,10 +7852,18 @@ async fn an_agent_delegates_a_task_to_a_subagent_chat_and_gets_its_answer() {
     assert!(matches!(refused, Err(Error::Conflict(_))), "{refused:?}");
 }
 
-/// A fake sidecar that lists each agent's models and reads Claude's 5h window `claude_5h` % used.
-fn catalog_sidecar(root: &Path, claude_5h: u32) -> PathBuf {
+/// A fake sidecar that lists each agent's models and reads Claude's 5h window `claude_5h` % used;
+/// Codex reads as not installed unless `codex_installed`.
+fn catalog_sidecar(root: &Path, claude_5h: u32, codex_installed: bool) -> PathBuf {
     let script = root.join("catalog-sidecar");
     let reset = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+    let codex_usage = if codex_installed {
+        format!(
+            r#"{{"plan":"plus","windows":[{{"label":"5h","used_percent":10,"resets_at":"{reset}","window_secs":18000}}],"extra_usage":null,"signed_out":null}}"#
+        )
+    } else {
+        r#"{"plan":null,"windows":[],"extra_usage":null,"signed_out":null,"not_installed":"codex is not installed"}"#.to_string()
+    };
     let model = |id: &str, efforts: &str, default: bool| {
         format!(
             r#"{{"id":"{id}","resolved":null,"name":"{id}","description":"","efforts":[{efforts}],"default_effort":null,"supports_fast":false,"is_default":{default}}}"#
@@ -7889,7 +7897,7 @@ while IFS= read -r line; do
     *'"method":"agent.usage"'*'"agent":"claude"'*)
       printf '%s\n' '{{"jsonrpc":"2.0","id":'"$id"',"result":{{"plan":"max","windows":[{{"label":"5h","used_percent":{claude_5h},"resets_at":"{reset}","window_secs":18000}},{{"label":"7d Fable","used_percent":100,"resets_at":"{reset}","window_secs":604800}}],"extra_usage":null,"signed_out":null}}}}' ;;
     *'"method":"agent.usage"'*)
-      printf '%s\n' '{{"jsonrpc":"2.0","id":'"$id"',"result":{{"plan":"plus","windows":[{{"label":"5h","used_percent":10,"resets_at":"{reset}","window_secs":18000}}],"extra_usage":null,"signed_out":null}}}}' ;;
+      printf '%s\n' '{{"jsonrpc":"2.0","id":'"$id"',"result":{codex_usage}}}' ;;
     *) [ -n "$id" ] && printf '{{"jsonrpc":"2.0","id":%s,"result":{{"closed":true}}}}\n' "$id" ;;
   esac
 done
@@ -7908,7 +7916,9 @@ async fn a_delegated_chat_runs_on_its_parents_agent_and_model_and_a_review_on_th
     use chauffeurd::Error;
     let f = fixture(49585);
     let d = &f.daemon;
-    d.chats.sidecar.use_binary(catalog_sidecar(&f.root, 10));
+    d.chats
+        .sidecar
+        .use_binary(catalog_sidecar(&f.root, 10, true));
     d.usage.get(d, true).await;
     let ws = d
         .workspaces
@@ -8032,7 +8042,9 @@ async fn a_task_for_an_agent_out_of_its_limits_goes_to_the_other_and_says_so() {
     use chauffeur_protocol::sidecar::ToolDelegateParams;
     let f = fixture(49590);
     let d = &f.daemon;
-    d.chats.sidecar.use_binary(catalog_sidecar(&f.root, 97));
+    d.chats
+        .sidecar
+        .use_binary(catalog_sidecar(&f.root, 97, true));
     d.usage.get(d, true).await;
     let ws = d
         .workspaces
@@ -8073,6 +8085,50 @@ async fn a_task_for_an_agent_out_of_its_limits_goes_to_the_other_and_says_so() {
         .account_lost(d, AgentKind::Codex, "not logged in".into());
     let started = delegate(None).await.unwrap();
     assert_eq!((started.agent, started.notice), (AgentKind::Claude, None));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_review_for_an_agent_not_installed_goes_to_the_other_and_says_so() {
+    use chauffeur_protocol::sidecar::ToolDelegateParams;
+    let f = fixture(49595);
+    let d = &f.daemon;
+    d.chats
+        .sidecar
+        .use_binary(catalog_sidecar(&f.root, 10, false));
+    d.usage.get(d, true).await;
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("no-codex".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let parent = d
+        .chats
+        .create(CreateChatParams {
+            workspace: ws.id.clone(),
+            agent: Some(AgentKind::Claude),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let started = d
+        .chats
+        .tool_delegate(ToolDelegateParams {
+            chat_id: parent.id.clone(),
+            prompt: "Review the diff of repo-a".into(),
+            review: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(started.agent, AgentKind::Claude);
+    assert_eq!(
+        started.notice.as_deref(),
+        Some("Codex is not installed: the task went to Claude Code instead.")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

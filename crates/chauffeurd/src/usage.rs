@@ -1,8 +1,8 @@
 //! What is left of each agent's plan limits: the sidecar asks the agents' own CLIs (which keep
 //! their login fresh), the daemon keeps a reading a few minutes and reads again after a turn.
 //! The same reading tells whether each CLI is logged in; a chat whose agent refused its
-//! credentials says it sooner. A signed-out agent is read again at every ask, so that a login
-//! made anywhere (the app, a terminal) shows at once.
+//! credentials says it sooner. A signed-out or missing agent is read again at every ask, so
+//! that a login or an install made anywhere (the app, a terminal) shows at once.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -44,6 +44,8 @@ struct Entry {
     stale: bool,
     account: AccountStatus,
     account_error: Option<String>,
+    /// The agent's CLI is not installed, as the last read said: why.
+    missing: Option<String>,
 }
 
 impl Usage {
@@ -58,11 +60,14 @@ impl Usage {
     }
 
     /// Why `agent` cannot take new work now, from the last reading (never read again here): it is
-    /// signed out, or one of its plan's own windows (`5h`, `7d`, not a model's) is used up to
-    /// `SPENT_PERCENT` and not reset yet. None when it can, or nothing is known.
+    /// not installed, signed out, or one of its plan's own windows (`5h`, `7d`, not a model's) is
+    /// used up to `SPENT_PERCENT` and not reset yet. None when it can, or nothing is known.
     pub fn spent(&self, agent: AgentKind) -> Option<String> {
         let entries = self.entries.lock().unwrap();
         let entry = entries.get(&agent)?;
+        if entry.missing.is_some() {
+            return Some("is not installed".into());
+        }
         if entry.account == AccountStatus::SignedOut {
             return Some("is signed out".into());
         }
@@ -180,6 +185,7 @@ impl Usage {
                 refresh
                     || entry.is_none_or(|e| {
                         e.stale
+                            || e.missing.is_some()
                             || e.account == AccountStatus::SignedOut
                             || e.read.is_none_or(|at| at.elapsed() >= FRESH)
                     })
@@ -206,7 +212,20 @@ impl Usage {
                 let entry = entries.entry(agent).or_default();
                 entry.read = Some(Instant::now());
                 entry.stale = false;
+                if let Ok(result) = &reading {
+                    entry.missing = result.not_installed.clone();
+                }
                 match reading {
+                    // Not installed: nothing to sign in to, no limits to show.
+                    Ok(AgentUsageResult {
+                        not_installed: Some(_),
+                        ..
+                    }) => {
+                        entry.last = None;
+                        entry.error = None;
+                        entry.failed_at = None;
+                        None
+                    }
                     // Signed out: the last limits read stay, behind the login to redo.
                     Ok(AgentUsageResult {
                         signed_out: Some(why),

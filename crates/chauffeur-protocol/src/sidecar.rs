@@ -496,6 +496,10 @@ pub struct AgentUsageResult {
     /// then empty.
     #[serde(default)]
     pub signed_out: Option<String>,
+    /// The agent's CLI is not installed on this machine: why. Its limits are then empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub not_installed: Option<String>,
 }
 
 /// Available manual resets. Details may be unavailable or capped by the provider.

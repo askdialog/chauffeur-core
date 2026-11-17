@@ -4245,8 +4245,8 @@ struct DelegateChoice {
 }
 
 /// The parent's agent unless the call names one, or names a model of the other, or asks for a
-/// review (the other agent); an agent signed out or out of its plan's limits hands the task to
-/// the other. The model is the one named, else the tier's (`default`: the parent's own on the
+/// review (the other agent); an agent not installed, signed out or out of its plan's limits hands
+/// the task to the other. The model is the one named, else the tier's (`default`: the parent's own on the
 /// parent's agent, else the user's default for the agent).
 async fn delegate_choice(
     d: &Arc<Daemon>,

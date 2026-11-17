@@ -4,7 +4,8 @@
 
 import { homedir } from "node:os";
 import { errorMessage, type Logger } from "../../log.ts";
-import type { AgentUsageResult, UsageWindow } from "../../protocol.ts";
+import { type AgentUsageResult, ErrorCode, type UsageWindow } from "../../protocol.ts";
+import { RpcError } from "../../rpc/peer.ts";
 import type { GetAccountRateLimitsResponse } from "./generated/v2/GetAccountRateLimitsResponse.ts";
 import type { RateLimitSnapshot } from "./generated/v2/RateLimitSnapshot.ts";
 import type { RateLimitWindow } from "./generated/v2/RateLimitWindow.ts";
@@ -14,6 +15,13 @@ import type { CodexSessionDeps } from "./session.ts";
 export const CODEX_SIGNED_OUT = "Codex is not logged in";
 
 export function readCodexUsage(deps: CodexSessionDeps, log: Logger): Promise<AgentUsageResult> {
+  // No `codex` to run: said as such, so that the daemon hands Codex's delegated tasks to Claude.
+  try {
+    deps.resolveExecutable(deps.baseEnv);
+  } catch (error) {
+    if (!(error instanceof RpcError) || error.code !== ErrorCode.UNAVAILABLE) throw error;
+    return Promise.resolve({ plan: null, windows: [], extra_usage: null, signed_out: null, not_installed: error.message });
+  }
   return probeCodex(deps, log, homedir(), "read its usage", async (server) => {
     const { account, requiresOpenaiAuth } = await server.request("account/read", { refreshToken: false });
     if (account === null && requiresOpenaiAuth) return { plan: null, windows: [], extra_usage: null, signed_out: CODEX_SIGNED_OUT };

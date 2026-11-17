@@ -24,4 +24,8 @@ reset_credits?: ResetCredits,
  * The agent's CLI is not logged in, or its credentials were refused: why. Its limits are
  * then empty.
  */
-signed_out: string | null, };
+signed_out: string | null, 
+/**
+ * The agent's CLI is not installed on this machine: why. Its limits are then empty.
+ */
+not_installed?: string, };
