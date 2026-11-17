@@ -24,7 +24,7 @@ tokio-util = { version = "0.7", features = ["codec", "io"] }
 futures-util = "0.3"
 axum = { version = "0.8", features = ["ws"] }
 tokio-tungstenite = "0.30"
-rusqlite = { version = "0.41", features = ["bundled", "hooks", "backup"] }
+rusqlite = { version = "0.42", features = ["bundled", "hooks", "backup"] }
 sqlite-vec = "0.1.6"
 clap = { version = "4", features = ["derive", "env"] }
 uuid = { version = "1", features = ["v7"] }
