@@ -20,6 +20,7 @@ Asked by Justin 2026-11-17, with it:
 
 ## Consequences
 
+- It ships in steps: the merge and the filter of allow rules first; the opt-out setting and the first-write notice follow in their own pull requests, until which the left-out rules are warned about at every config write.
 - The clone's file is only read, at every config write: its latest permissions and hooks apply from then on, nothing is copied and Chauffeur never writes it.
 - The merge already wraps a repo's hooks to run in that repo's worktree, so the clone's hooks run there unchanged. Its `Read`/`Edit` paths are re-anchored at the repo like any repo rule (Claude Code anchors a local file's paths at the session's working directory, not where the file lives).
 - Always allow in Chauffeur keeps writing to the workspace's own settings, never to the clone's.
