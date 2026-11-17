@@ -753,7 +753,7 @@ impl Inner {
         download::asset(
             &self.catalogue,
             &self.daemon()?.shell_env.vars(),
-            &format!("v{}", signed.verify(&self.catalogue)?.version),
+            &packages::tag(self.catalogue.id, &signed.verify(&self.catalogue)?.version),
             &target.archive,
             &archive,
             u64::from(target.bytes),
@@ -1523,6 +1523,41 @@ for line in sys.stdin:
         );
         assert!(reopened.0.state.lock().unwrap().journal.pending.is_none());
         reopened.0.stop().await;
+    }
+
+    #[tokio::test]
+    async fn an_update_downloads_its_archive_from_the_extension_tag() {
+        let (dir, daemon) = fixture();
+        let runtime = daemon
+            .extensions
+            .get::<Managed>(ExtensionId::Office)
+            .unwrap();
+        // A gh that records what it was asked and finds nothing.
+        let bin = dir.path().join("fake-gh");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = dir.path().join("gh.log");
+        std::fs::write(
+            bin.join("gh"),
+            format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 1\n", log.display()),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(bin.join("gh")).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+        std::fs::set_permissions(bin.join("gh"), permissions).unwrap();
+        daemon
+            .shell_env
+            .set_vars(std::collections::BTreeMap::from([(
+                "PATH".into(),
+                format!("{}:/usr/bin:/bin", bin.display()),
+            )]));
+        let signed = package(&runtime.0, "1.2.3", false).release;
+        let epoch = runtime.0.state.lock().unwrap().journal.epoch;
+        assert!(runtime.0.download(signed, true, epoch).await.is_err());
+        let asked = std::fs::read_to_string(&log).unwrap();
+        assert!(
+            asked.starts_with("release download office-v1.2.3 "),
+            "{asked}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

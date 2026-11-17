@@ -31,6 +31,12 @@ pub fn slug(id: ExtensionId) -> &'static str {
     }
 }
 
+/// The release tag of an extension's version on Core: `database-v0.31.0`, never `v0.31.0`,
+/// which names Chauffeur's own releases.
+pub fn tag(id: ExtensionId, version: &str) -> String {
+    format!("{}-v{version}", slug(id))
+}
+
 pub fn platform() -> Result<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => Ok("aarch64-apple-darwin"),

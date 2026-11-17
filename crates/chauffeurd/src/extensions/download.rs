@@ -173,7 +173,7 @@ pub async fn manifest(
     .await?;
     let signed = SignedRelease::read(directory.path())?;
     let release = signed.verify(catalogue)?;
-    if format!("{}-v{}", packages::slug(catalogue.id), release.version) != tag {
+    if packages::tag(catalogue.id, &release.version) != tag {
         return Err(Error::BadRequest(
             "The extension release tag does not match its signed version; use another release"
                 .into(),
