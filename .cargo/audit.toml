@@ -18,4 +18,7 @@ ignore = [
     # webview (webkit2gtk, gtk 0.18) is built on. Fixed only by Tauri moving to gtk-rs 0.20+.
     "RUSTSEC-2024-0370",
     "RUSTSEC-2024-0429",
+    # chrono unmaintained: no release replaces it. Pulled in by chauffeur-cli, chauffeurd,
+    # chauffeur-design-share and feed-rs; drop it once chrono is maintained again or they move off it.
+    "RUSTSEC-2026-0543",
 ]
