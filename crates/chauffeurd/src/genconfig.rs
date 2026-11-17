@@ -284,29 +284,34 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
     Ok(Value::Object(out))
 }
 
-/// Claude Code anchors a `Read(/…)` or `Edit(/…)` rule at the session's primary working
-/// directory: the repo for the repo's own settings, the workspace root once merged here. Such a
-/// rule is rewritten to keep pointing into the repo (`/web/src/**` for `/src/**`, `//<abs>/src/**`
-/// when the repo is not under the root). Absolute (`//`), home (`~/`) and cwd-relative paths, and
-/// rules without a path, are kept as they are.
+/// Claude Code resolves the path of a `Read(…)` or `Edit(…)` rule (the only rules with paths)
+/// from the session's working directory: a `/src/**` path is anchored there, a `src/**`,
+/// `./src/**` or `*.ts` path matches at any depth below it. A repo's rules were written for a
+/// session started in the repo; merged here, at the workspace root, the first would miss the repo
+/// and the others would reach every repo. They are rewritten to stay in the repo: `/src/**`
+/// becomes `/web/src/**`, `src/**` becomes `/web/**/src/**` (`//<abs>/…` when the repo is not
+/// under the root). Absolute (`//`) and home (`~`) paths, and rules without a path, are kept.
 fn anchor_rule_at_repo(rule: &Value, repo_path: &Path, root: &Path) -> Value {
-    let Some(text) = rule.as_str() else {
+    let Some((tool, path)) = rule
+        .as_str()
+        .and_then(|text| text.strip_suffix(')'))
+        .and_then(|text| text.split_once('('))
+        .filter(|(tool, _)| matches!(*tool, "Read" | "Edit"))
+    else {
         return rule.clone();
     };
-    for tool in ["Read", "Edit"] {
-        let Some(path) = text
-            .strip_prefix(tool)
-            .and_then(|rest| rest.strip_prefix('('))
-            .and_then(|rest| rest.strip_suffix(')'))
-        else {
-            continue;
-        };
-        if path.starts_with('/') && !path.starts_with("//") {
-            let repo = repo_path.strip_prefix(root).unwrap_or(repo_path);
-            return json!(format!("{tool}(/{}{path})", repo.display()));
+    let repo = repo_path.strip_prefix(root).unwrap_or(repo_path);
+    if repo.as_os_str().is_empty() || path.starts_with("//") || path.starts_with('~') {
+        return rule.clone();
+    }
+    let repo = repo.display();
+    match path.strip_prefix('/') {
+        Some(anchored) => json!(format!("{tool}(/{repo}/{anchored})")),
+        None => {
+            let floating = path.strip_prefix("./").unwrap_or(path);
+            json!(format!("{tool}(/{repo}/**/{floating})"))
         }
     }
-    rule.clone()
 }
 
 /// Rewrites a repo's hook group so its command hooks run in the repo, and only for files of the
@@ -433,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn a_repos_settings_relative_rules_keep_pointing_into_the_repo_once_merged() {
+    fn a_repos_relative_rules_keep_pointing_into_the_repo_once_merged() {
         let root = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let web = root.path().join("web");
@@ -442,11 +447,14 @@ mod tests {
             (
                 &web,
                 r#"{"allow":["Edit(/src/**)","Read(//etc/hosts)","Read(~/notes/**)","Edit(src/**)",
-                    "Read(./docs/**)","Bash(pnpm test *)","WebFetch","mcp__linear"],
+                    "Read(./docs/**)","Edit(*.ts)","Bash(pnpm test *)","WebFetch","mcp__linear"],
                    "ask":["Read(/config/*.json)"],
                    "deny":["Edit(/secrets/**)"]}"#,
             ),
-            (&api, r#"{"deny":["Edit(/secrets/**)"]}"#),
+            (
+                &api,
+                r#"{"allow":["Edit(*.ts)"],"deny":["Edit(/secrets/**)"]}"#,
+            ),
         ] {
             std::fs::create_dir_all(repo.join(".claude")).unwrap();
             std::fs::write(
@@ -485,11 +493,13 @@ mod tests {
                 "Edit(/web/src/**)",
                 "Read(//etc/hosts)",
                 "Read(~/notes/**)",
-                "Edit(src/**)",
-                "Read(./docs/**)",
+                "Edit(/web/**/src/**)",
+                "Read(/web/**/docs/**)",
+                "Edit(/web/**/*.ts)",
                 "Bash(pnpm test *)",
                 "WebFetch",
-                "mcp__linear"
+                "mcp__linear",
+                format!("Edit(/{}/**/*.ts)", api.display())
             ])
         );
         assert_eq!(permissions["ask"], json!(["Read(/web/config/*.json)"]));
@@ -500,6 +510,14 @@ mod tests {
                 format!("Edit(/{}/secrets/**)", api.display())
             ])
         );
+    }
+
+    #[test]
+    fn a_repo_at_the_workspace_root_keeps_its_rules_as_written() {
+        let root = Path::new("/ws");
+        for rule in ["Edit(/src/**)", "Edit(src/**)", "Read(./docs/**)"] {
+            assert_eq!(anchor_rule_at_repo(&json!(rule), root, root), json!(rule));
+        }
     }
 
     #[test]
