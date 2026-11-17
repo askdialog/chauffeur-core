@@ -251,8 +251,9 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
                         .into_iter()
                         .flatten()
                     {
-                        if !list.contains(rule) {
-                            list.push(rule.clone());
+                        let rule = anchor_rule_at_repo(rule, &repo.path, config.root);
+                        if !list.contains(&rule) {
+                            list.push(rule);
                         }
                     }
                 }
@@ -281,6 +282,31 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
         );
     }
     Ok(Value::Object(out))
+}
+
+/// Claude Code anchors a `Read(/…)` or `Edit(/…)` rule at the session's primary working
+/// directory: the repo for the repo's own settings, the workspace root once merged here. Such a
+/// rule is rewritten to keep pointing into the repo (`/web/src/**` for `/src/**`, `//<abs>/src/**`
+/// when the repo is not under the root). Absolute (`//`), home (`~/`) and cwd-relative paths, and
+/// rules without a path, are kept as they are.
+fn anchor_rule_at_repo(rule: &Value, repo_path: &Path, root: &Path) -> Value {
+    let Some(text) = rule.as_str() else {
+        return rule.clone();
+    };
+    for tool in ["Read", "Edit"] {
+        let Some(path) = text
+            .strip_prefix(tool)
+            .and_then(|rest| rest.strip_prefix('('))
+            .and_then(|rest| rest.strip_suffix(')'))
+        else {
+            continue;
+        };
+        if path.starts_with('/') && !path.starts_with("//") {
+            let repo = repo_path.strip_prefix(root).unwrap_or(repo_path);
+            return json!(format!("{tool}(/{}{path})", repo.display()));
+        }
+    }
+    rule.clone()
 }
 
 /// Rewrites a repo's hook group so its command hooks run in the repo, and only for files of the
@@ -404,6 +430,76 @@ mod tests {
         assert!(claude_md.contains("Skills written for plain git"));
         let agents_md = std::fs::read_to_string(root.path().join("AGENTS.md")).unwrap();
         assert!(agents_md.contains("# ecom"));
+    }
+
+    #[test]
+    fn a_repos_settings_relative_rules_keep_pointing_into_the_repo_once_merged() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let web = root.path().join("web");
+        let api = outside.path().join("api");
+        for (repo, rules) in [
+            (
+                &web,
+                r#"{"allow":["Edit(/src/**)","Read(//etc/hosts)","Read(~/notes/**)","Edit(src/**)",
+                    "Read(./docs/**)","Bash(pnpm test *)","WebFetch","mcp__linear"],
+                   "ask":["Read(/config/*.json)"],
+                   "deny":["Edit(/secrets/**)"]}"#,
+            ),
+            (&api, r#"{"deny":["Edit(/secrets/**)"]}"#),
+        ] {
+            std::fs::create_dir_all(repo.join(".claude")).unwrap();
+            std::fs::write(
+                repo.join(".claude/settings.json"),
+                format!(r#"{{"permissions":{rules}}}"#),
+            )
+            .unwrap();
+        }
+        let repos = [&web, &api].map(|path| RepoEntry {
+            repo: path.file_name().unwrap().to_string_lossy().into_owned(),
+            path: path.clone(),
+            base_branch: "main".into(),
+        });
+        write(&WorkspaceConfig {
+            slug: "xyz-1-x",
+            branch: "alice/xyz-1-x",
+            root: root.path(),
+            repos: &repos,
+            tickets: &[],
+            port_base: 41000,
+            port_count: 10,
+            parent_slug: None,
+            cli: Path::new("/opt/chauffeur"),
+            explore: false,
+        })
+        .unwrap();
+
+        let settings: Value = serde_json::from_str(
+            &std::fs::read_to_string(root.path().join(".claude/settings.json")).unwrap(),
+        )
+        .unwrap();
+        let permissions = &settings["permissions"];
+        assert_eq!(
+            permissions["allow"],
+            json!([
+                "Edit(/web/src/**)",
+                "Read(//etc/hosts)",
+                "Read(~/notes/**)",
+                "Edit(src/**)",
+                "Read(./docs/**)",
+                "Bash(pnpm test *)",
+                "WebFetch",
+                "mcp__linear"
+            ])
+        );
+        assert_eq!(permissions["ask"], json!(["Read(/web/config/*.json)"]));
+        assert_eq!(
+            permissions["deny"],
+            json!([
+                "Edit(/web/secrets/**)",
+                format!("Edit(/{}/secrets/**)", api.display())
+            ])
+        );
     }
 
     #[test]

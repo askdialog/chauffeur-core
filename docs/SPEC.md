@@ -182,7 +182,7 @@ and the mobile app remain private. See [core-mit-license](adr/core-mit-license.m
 
 **Generated workspace config.** At the workspace root, Chauffeur writes:
 - a CLAUDE.md that `@`-imports each repo's CLAUDE.md, and an AGENTS.md that inlines each repo's AGENTS.md (Codex has no imports);
-- a `.claude/settings.json` that merges each repo's hooks (commands rewritten to absolute paths);
+- a `.claude/settings.json` that merges each repo's hooks (commands rewritten to absolute paths), plugins and permission rules (a `Read(/…)` or `Edit(/…)` rule, which Claude Code anchors at the session's working directory, is rewritten to keep pointing into its repo: `Edit(/src/**)` of `web` becomes `Edit(/web/src/**)`);
 - the Codex config and hooks;
 - a session-start hook that prints branch, status and recent log of each repo.
 
