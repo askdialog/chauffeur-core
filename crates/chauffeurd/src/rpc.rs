@@ -337,14 +337,14 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
                 .chats
                 .move_tab(&params.chat, params.before.as_deref())?,
         ),
-        ClientCall::ChatClose(params) => {
-            to_value(daemon.chats.close(&params.chat, params.force).await?)
-        }
-        ClientCall::ChatReopen(params) => to_value(daemon.chats.reopen(&params.chat)?),
-        ClientCall::ChatSeen(params) => {
-            daemon.chats.seen(&params.chat)?;
-            to_value(EmptyParams {})
-        }
+        call @ (ClientCall::ChatClose(_)
+        | ClientCall::ChatReopen(_)
+        | ClientCall::ChatSeen(_)
+        | ClientCall::ChatDelete(_)
+        | ClientCall::ChatFork(_)
+        | ClientCall::ChatSendConfirmed(_)
+        | ClientCall::ChatSend(_)
+        | ClientCall::ChatShell(_)) => handle_chat_actions(daemon, call).await,
         ClientCall::ChatResumeFailed(_) => {
             daemon.chats.resume_failed_turns()?;
             to_value(EmptyParams {})
@@ -396,28 +396,6 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::ChatRegenerateBrief(params) => {
             to_value(daemon.chats.regenerate_brief(&params.chat)?)
         }
-        ClientCall::ChatDelete(params) => {
-            to_value(daemon.chats.delete(&params.chat, params.force).await?)
-        }
-        ClientCall::ChatFork(params) => to_value(
-            daemon
-                .chats
-                .fork(&params.chat, params.turn, params.agent)
-                .await?,
-        ),
-        ClientCall::ChatSendConfirmed(params) => {
-            if params.client_id.is_none() || params.suggestion.is_some() {
-                return Err(Error::BadRequest(
-                    "A confirmed send requires a client identifier and cannot send a suggestion"
-                        .into(),
-                ));
-            }
-            to_value(crate::chat_sends::send(daemon, &params).await?)
-        }
-        ClientCall::ChatSend(params) => match &params.suggestion {
-            Some(suggestion) => to_value(daemon.workspace_shares.send(&params, suggestion).await?),
-            None => to_value(crate::chat_sends::send(daemon, &params).await?),
-        },
         ClientCall::WorkspaceShareState(params) => {
             to_value(daemon.workspace_shares.state(&params.workspace)?)
         }
@@ -447,9 +425,6 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         }
         ClientCall::ChatShareCommentDelete(params) => {
             to_value(daemon.workspace_shares.delete_comment(&params).await?)
-        }
-        ClientCall::ChatShell(params) => {
-            to_value(daemon.chats.shell(&params.chat, &params.command).await?)
         }
         ClientCall::ChatQueueSet(params) => to_value(QueueResult {
             messages: daemon.chats.queue_set(&params.chat, &params.items)?,
@@ -1065,6 +1040,55 @@ fn handle_deliverables(
                     .set_brand(&params.chat, params.brand.as_deref())?,
             ),
             _ => unreachable!("only deliverable calls reach this handler"),
+        }
+    })
+}
+
+/// Closing, sending to and forking chats: out of `handle_other`, whose poll frame is at the edge of
+/// a worker's stack when a transfer reenters it.
+#[inline(never)]
+fn handle_chat_actions(
+    daemon: &Arc<Daemon>,
+    call: ClientCall,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
+    Box::pin(async move {
+        match call {
+            ClientCall::ChatClose(params) => {
+                to_value(daemon.chats.close(&params.chat, params.force).await?)
+            }
+            ClientCall::ChatReopen(params) => to_value(daemon.chats.reopen(&params.chat)?),
+            ClientCall::ChatSeen(params) => {
+                daemon.chats.seen(&params.chat)?;
+                to_value(EmptyParams {})
+            }
+            ClientCall::ChatDelete(params) => {
+                to_value(daemon.chats.delete(&params.chat, params.force).await?)
+            }
+            ClientCall::ChatFork(params) => to_value(
+                daemon
+                    .chats
+                    .fork(&params.chat, params.turn, params.agent)
+                    .await?,
+            ),
+            ClientCall::ChatSendConfirmed(params) => {
+                if params.client_id.is_none() || params.suggestion.is_some() {
+                    return Err(Error::BadRequest(
+                        "A confirmed send requires a client identifier and cannot send a suggestion"
+                            .into(),
+                    ));
+                }
+                to_value(crate::chat_sends::send(daemon, &params).await?)
+            }
+            ClientCall::ChatSend(params) => match &params.suggestion {
+                Some(suggestion) => {
+                    to_value(daemon.workspace_shares.send(&params, suggestion).await?)
+                }
+                None => to_value(crate::chat_sends::send(daemon, &params).await?),
+            },
+            ClientCall::ChatShell(params) => {
+                to_value(daemon.chats.shell(&params.chat, &params.command).await?)
+            }
+            _ => unreachable!("only chat actions reach this handler"),
         }
     })
 }
