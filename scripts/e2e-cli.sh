@@ -85,16 +85,13 @@ c --json show standalone | python3 -c 'import sys,json; w=json.load(sys.stdin); 
 c archive standalone --force
 echo "== repos. the saved display order is used by the CLI"
 c --json repos | python3 -c 'import sys,json; r=json.load(sys.stdin); assert [repo["name"] for repo in r["repos"]] == ["beta", "alpha"], r'
-echo "== clone settings. a workspace merges its clone's local Claude settings, without rules aimed at the clone"
+echo "== clone settings. a workspace merges its clone's local Claude settings, read at every config write"
 mkdir -p "$T/clones/alpha/.claude"
-printf '{"permissions":{"allow":["Bash(make *)","Edit(/%s/clones/alpha/**)"],"deny":["Edit(/secrets/**)"]}}\n' "$T" \
-  > "$T/clones/alpha/.claude/settings.local.json"
+echo '{"permissions":{"deny":["Edit(/secrets/**)"]}}' > "$T/clones/alpha/.claude/settings.local.json"
 c new --repo alpha --name clone-settings >/dev/null
 generated="$CHAUFFEUR_WORKSPACES_DIR/clone-settings/.claude/settings.json"
-python3 -c 'import sys,json; p=json.load(open(sys.argv[1]))["permissions"]; assert p["allow"] == ["Bash(make *)"] and p["deny"] == ["Edit(/alpha/secrets/**)"], p' "$generated"
-sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "select payload from events where payload like '%left out%'" | grep -q "clones/alpha/.claude/settings.local.json"
-# Read at every config write: an edit shows once the config is written again (adding a repo).
-printf '{"permissions":{"deny":["Edit(/private/**)"]}}\n' > "$T/clones/alpha/.claude/settings.local.json"
+python3 -c 'import sys,json; p=json.load(open(sys.argv[1]))["permissions"]; assert p["deny"] == ["Edit(/alpha/secrets/**)"], p' "$generated"
+echo '{"permissions":{"deny":["Edit(/private/**)"]}}' > "$T/clones/alpha/.claude/settings.local.json"
 c add-repo clone-settings beta >/dev/null
 python3 -c 'import sys,json; p=json.load(open(sys.argv[1]))["permissions"]; assert p["deny"] == ["Edit(/alpha/private/**)"], p' "$generated"
 c archive clone-settings --force

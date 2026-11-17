@@ -16,8 +16,9 @@ pub struct RepoEntry {
     pub repo: String,
     /// Absolute path of the worktree.
     pub path: PathBuf,
-    /// The clone the worktree was made from; none for a workspace restored from the cloud.
-    pub clone: Option<PathBuf>,
+    /// The clone the worktree was made from (Chauffeur's own copy for a workspace restored from
+    /// the cloud); none while a cloud restore writes the config.
+    pub clone_path: Option<PathBuf>,
     pub base_branch: String,
 }
 
@@ -213,6 +214,7 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
     let mut allow: Vec<Value> = Vec::new();
     let mut deny: Vec<Value> = Vec::new();
     let mut ask: Vec<Value> = Vec::new();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
     for repo in config.repos {
         // The repo's folder under the root; a repo elsewhere keeps its rules as written.
         let folder = repo
@@ -221,26 +223,15 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
             .ok()
             .map(|folder| folder.display().to_string())
             .filter(|folder| !folder.is_empty());
-        // The local file is gitignored, so a worktree rarely has one: the clone's stands in, as
-        // Claude Code itself reads it from the main checkout in a worktree.
-        let local = repo.path.join(".claude/settings.local.json");
-        let clone = repo.clone.as_deref().filter(|_| !local.exists());
-        let files = [
-            (repo.path.join(".claude/settings.json"), None),
-            match clone {
-                Some(clone) => (clone.join(".claude/settings.local.json"), Some(clone)),
-                None => (local, None),
-            },
-        ];
-        for (file, from_clone) in files {
+        let clone_paths = repo
+            .clone_path
+            .as_deref()
+            .map(|clone| clone_spellings(clone, home.as_deref()))
+            .unwrap_or_default();
+        for file in settings_files(repo) {
             let Some(settings) = read_json(&file) else {
                 continue;
             };
-            let clone_paths = from_clone
-                .map(|clone| {
-                    clone_spellings(clone, std::env::var_os("HOME").as_deref().map(Path::new))
-                })
-                .unwrap_or_default();
             if let Some(events) = settings.get("hooks").and_then(Value::as_object) {
                 for (event, groups) in events {
                     for group in groups.as_array().into_iter().flatten() {
@@ -276,13 +267,15 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
                         .into_iter()
                         .flatten()
                     {
-                        if key != "deny"
+                        // Ask and deny rules only restrict: kept whatever they name.
+                        if key == "allow"
                             && let Some(text) = rule.as_str()
                             && names_path(text, &clone_paths)
                         {
                             warnings.push(format!(
-                                "{}: left out `{text}` of {}, which names the clone; workspace agents \
-                                 work in its worktree",
+                                "{}: left out `{text}` from {}: it names the clone, and workspace \
+                                 agents work in its worktree; write it relative to the repo \
+                                 (`Edit(/src/**)`) to have it in workspaces",
                                 repo.repo,
                                 file.display()
                             ));
@@ -372,10 +365,23 @@ fn anchor_rule_at_repo(rule: &Value, kind: &str, folder: &str) -> Value {
     json!(format!("{tool}({rewritten})"))
 }
 
+/// A repo's settings files: its `.claude/settings.json`, and its `.claude/settings.local.json`,
+/// the clone's when the worktree has none (the file is gitignored, and Claude Code itself reads
+/// it from the main checkout in a worktree).
+fn settings_files(repo: &RepoEntry) -> [PathBuf; 2] {
+    let local = repo.path.join(".claude/settings.local.json");
+    let local = match &repo.clone_path {
+        Some(clone) if !local.exists() => clone.join(".claude/settings.local.json"),
+        _ => local,
+    };
+    [repo.path.join(".claude/settings.json"), local]
+}
+
 /// How a rule can name the clone: its path as stored and resolved, and from the home folder
-/// (`~/code/web`).
+/// (`~/code/web`, `$HOME/code/web`, `${HOME}/code/web`).
 fn clone_spellings(clone: &Path, home: Option<&Path>) -> Vec<String> {
-    let mut paths = vec![clone.to_path_buf()];
+    let clone: PathBuf = clone.components().collect();
+    let mut paths = vec![clone.clone()];
     if let Ok(resolved) = clone.canonicalize()
         && resolved != clone
     {
@@ -385,25 +391,28 @@ fn clone_spellings(clone: &Path, home: Option<&Path>) -> Vec<String> {
         .iter()
         .map(|path| path.display().to_string())
         .collect();
-    if let Some(home) = home {
-        for path in &paths {
-            if let Ok(rest) = path.strip_prefix(home) {
-                spellings.push(format!("~/{}", rest.display()));
-            }
+    for rest in paths
+        .iter()
+        .filter_map(|path| path.strip_prefix(home?).ok())
+    {
+        for prefix in ["~", "$HOME", "${HOME}"] {
+            spellings.push(format!("{prefix}/{}", rest.display()));
         }
     }
     spellings
 }
 
 /// Whether `text` holds one of `spellings` as a whole path: `/code/web/x` and `/code/web)` do,
-/// `/code/web.old` does not.
+/// `/code/web.old` and `/backup/code/web` do not.
 fn names_path(text: &str, spellings: &[String]) -> bool {
+    let in_a_name = |c: char| c.is_alphanumeric() || matches!(c, '-' | '_' | '.');
     spellings.iter().any(|path| {
         text.match_indices(path.as_str()).any(|(at, _)| {
-            text[at + path.len()..]
-                .chars()
-                .next()
-                .is_none_or(|next| !(next.is_alphanumeric() || matches!(next, '-' | '_' | '.')))
+            !text[..at].chars().next_back().is_some_and(in_a_name)
+                && !text[at + path.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(in_a_name)
         })
     })
 }
@@ -484,13 +493,13 @@ mod tests {
             RepoEntry {
                 repo: "web".into(),
                 path: ecom.clone(),
-                clone: None,
+                clone_path: None,
                 base_branch: "staging".into(),
             },
             RepoEntry {
                 repo: "api".into(),
                 path: api.clone(),
-                clone: None,
+                clone_path: None,
                 base_branch: "staging".into(),
             },
         ];
@@ -563,7 +572,7 @@ mod tests {
         let repos = [&web, &api].map(|path| RepoEntry {
             repo: path.file_name().unwrap().to_string_lossy().into_owned(),
             path: path.clone(),
-            clone: None,
+            clone_path: None,
             base_branch: "main".into(),
         });
         write(&WorkspaceConfig {
@@ -661,7 +670,7 @@ mod tests {
             r#"{{"hooks":{{"PostToolUse":[{{"matcher":"Edit","hooks":[{{"type":"command","command":"pnpm lint"}}]}}]}},
                 "enabledPlugins":{{"mine@x":true}},
                 "permissions":{{
-                  "allow":["Bash(pnpm test *)","Edit(/{c}/**)","Bash(cd {c} && make)","Read(/{c}.old/**)"],
+                  "allow":["Bash(pnpm test *)","Edit(/{c}/**)","Bash(cd {c} && make)"],
                   "ask":["Read(/{c}/notes/**)"],
                   "deny":["Edit(/{c}/secrets/**)","Edit(/secrets/**)"]}}}}"#
         );
@@ -669,7 +678,7 @@ mod tests {
         let repos = [RepoEntry {
             repo: "web".into(),
             path: worktree.clone(),
-            clone: Some(clone.clone()),
+            clone_path: Some(clone.clone()),
             base_branch: "main".into(),
         }];
 
@@ -684,21 +693,15 @@ mod tests {
         );
         assert_eq!(settings["enabledPlugins"]["mine@x"], true);
         let permissions = &settings["permissions"];
-        assert_eq!(
-            permissions["allow"],
-            json!(["Bash(pnpm test *)", format!("Read(/{c}.old/**)")])
-        );
-        assert_eq!(permissions["ask"], json!([]));
+        assert_eq!(permissions["allow"], json!(["Bash(pnpm test *)"]));
+        // Ask and deny rules only restrict: kept, even when they name the clone.
+        assert_eq!(permissions["ask"], json!([format!("Read(/{c}/notes/**)")]));
         assert_eq!(
             permissions["deny"],
             json!([format!("Edit(/{c}/secrets/**)"), "Edit(/web/secrets/**)"])
         );
-        assert_eq!(warnings.len(), 3, "{warnings:?}");
-        for rule in [
-            format!("Edit(/{c}/**)"),
-            format!("Bash(cd {c} && make)"),
-            format!("Read(/{c}/notes/**)"),
-        ] {
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        for rule in [format!("Edit(/{c}/**)"), format!("Bash(cd {c} && make)")] {
             assert!(
                 warnings
                     .iter()
@@ -710,23 +713,21 @@ mod tests {
             std::fs::read_to_string(clone.join(".claude/settings.local.json")).unwrap(),
             local
         );
-        assert!(
-            settings["$comment"]
-                .as_str()
-                .unwrap()
-                .contains("settings.local.json")
-        );
     }
 
     #[test]
-    fn a_worktrees_own_local_settings_win_over_its_clones() {
+    fn a_worktrees_own_local_settings_win_over_its_clones_and_are_filtered_alike() {
         let root = tempfile::tempdir().unwrap();
         let clone = tempfile::tempdir().unwrap();
         let worktree = root.path().join("web");
+        // A copy of the clone's file (`.worktreeinclude`) still names the clone.
         claude_file(
             &worktree,
             "settings.local.json",
-            r#"{"permissions":{"allow":["Bash(make)"]}}"#,
+            &format!(
+                r#"{{"permissions":{{"allow":["Bash(make)","Edit(/{}/**)"]}}}}"#,
+                clone.path().display()
+            ),
         );
         claude_file(
             clone.path(),
@@ -736,19 +737,21 @@ mod tests {
         let repos = [RepoEntry {
             repo: "web".into(),
             path: worktree,
-            clone: Some(clone.path().to_path_buf()),
+            clone_path: Some(clone.path().to_path_buf()),
             base_branch: "main".into(),
         }];
 
-        let (settings, _) = generate(root.path(), &repos);
+        let (settings, warnings) = generate(root.path(), &repos);
 
         assert_eq!(settings["permissions"]["allow"], json!(["Bash(make)"]));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
     }
 
     #[test]
     fn a_rule_names_the_clone_only_by_its_whole_path_or_from_home() {
+        // Stored with a trailing slash, as a user may type it.
         let spellings = clone_spellings(
-            Path::new("/Users/al/code/web"),
+            Path::new("/Users/al/code/web/"),
             Some(Path::new("/Users/al")),
         );
         for named in [
@@ -757,6 +760,8 @@ mod tests {
             "Read(~/code/web/src/**)",
             "Bash(cd /Users/al/code/web && make)",
             "Bash(ls ~/code/web)",
+            "Bash(cd $HOME/code/web && make)",
+            "Bash(cd ${HOME}/code/web *)",
         ] {
             assert!(names_path(named, &spellings), "{named}");
         }
@@ -764,6 +769,7 @@ mod tests {
             "Edit(//Users/al/code/web.old/**)",
             "Edit(//Users/al/code/web-api/**)",
             "Read(~/code/webby/**)",
+            "Read(//Volumes/backup/Users/al/code/web/**)",
             "Edit(/web/**)",
             "Bash(pnpm test *)",
         ] {

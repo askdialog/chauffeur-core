@@ -1941,7 +1941,7 @@ impl WorkspaceManager {
             .map(|w| genconfig::RepoEntry {
                 repo: w.repo,
                 path: PathBuf::from(w.path),
-                clone: Some(PathBuf::from(w.clone_path)),
+                clone_path: Some(PathBuf::from(w.clone_path)),
                 base_branch: w.base_branch,
             })
             .collect();

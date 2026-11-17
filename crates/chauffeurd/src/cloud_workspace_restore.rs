@@ -351,7 +351,7 @@ async fn restore_inner(
             .map(|repo| crate::genconfig::RepoEntry {
                 repo: repo.repo.clone(),
                 path: root.join(&repo.path),
-                clone: None,
+                clone_path: None,
                 base_branch: repo.base_branch.clone(),
             })
             .collect::<Vec<_>>();

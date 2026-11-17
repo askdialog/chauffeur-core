@@ -13,7 +13,7 @@ Proposed 2026-11-16 with the import from Claude Code, decided with Justin 2026-1
 
 Asked by Justin 2026-11-17, with it:
 
-- Allow and ask rules of the clone's file that name the clone's path (absolute `//…`, from the home folder `~/…`, or plain in a `Bash(…)` rule) are left out, each one reported as a workspace warning: otherwise a rule like `Edit(//Users/…/my-clone/**)` would let every workspace agent write into the clone without asking. Deny rules are kept: they only restrict.
+- Allow rules that name the clone's path, in any of the repo's settings files (in practice the clone's local file, or a copy of it in the worktree), (absolute `//…`, from the home folder `~/…`, `$HOME/…`, or plain in a `Bash(…)` rule) are left out, each one reported as a workspace warning: otherwise a rule like `Edit(//Users/…/my-clone/**)` would let every workspace agent write into the clone without asking. Ask and deny rules are kept: they only restrict (first worded as allow and ask, narrowed the same day once it was clear that dropping an ask rule loosens the user's protection).
 - A setting turns the reading of the clone's file off, globally or per repo, in `~/.chauffeur/settings.toml`.
 - The first config write that takes a clone's local file into a workspace lists, for that workspace, the rules and hooks it adds.
 - The generated settings' `$comment` names the clone's local file.
@@ -25,4 +25,6 @@ Asked by Justin 2026-11-17, with it:
 - Always allow in Chauffeur keeps writing to the workspace's own settings, never to the clone's.
 - It applies to every workspace, existing ones from their next config regeneration, agents in auto mode included: permissions granted long ago in the terminal and personal hooks start applying at once. The release notes announce it. Showing in the app where each rule comes from (repo or clone) is left for later; the first-write notice stands in for it.
 - A worktree's own local file only exists when `.worktreeinclude` copies it, as a snapshot of the clone's; it then replaces the clone's file, where Claude Code would apply an older starting-folder file together with the root one.
-- A workspace restored from the cloud has no clone and generates as before.
+- Ask and deny rules naming the clone protect the clone only, not the worktree's copies of the same files (`.env*` copied by default): mirroring them onto the worktree is left for later.
+- Hooks are kept whatever they name: a hook running a script of the clone on the worktree's files is legitimate.
+- A workspace restored from the cloud reads the local file of Chauffeur's own copy of the repo, which has none.
