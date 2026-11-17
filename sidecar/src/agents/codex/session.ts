@@ -48,7 +48,7 @@ import { readThreadHistory } from "./history.ts";
 import { compactCodexHistory, compactionSummary, type JevAsker, jevAsker, removedTokens } from "./jev.ts";
 import { mergeRepoLayers, readRepoLayers, type RepoLayer, threadOverrides, withRepoLayers } from "./repo-config.ts";
 import { DELEGATE } from "../delegate-tool.ts";
-import { codexChauffeurTools, codexToolCall } from "./repo-tools.ts";
+import { codexChauffeurTools, codexToolCall, type FinishedToolCall, heldBackDelegate } from "./repo-tools.ts";
 import { codexSkills, repoSkillRoots, skillInput } from "./skills.ts";
 import {
   appServerArgs,
@@ -125,6 +125,8 @@ export class CodexSession implements AgentSession {
    * its answer to come as a message (`detach`), unless the user interrupted or stopped the chat.
    */
   private readonly toolCalls = new Map<RpcId, { abort: AbortController; detach: AbortController; delegate: boolean }>();
+  /** The last of Chauffeur's tool calls to have answered (see `heldBackDelegate`). */
+  private lastToolCall: FinishedToolCall | undefined;
   private server: AppServer | undefined;
   private state: State = "new";
   private stopping: Promise<void> | undefined;
@@ -948,6 +950,9 @@ export class CodexSession implements AgentSession {
         // Chauffeur's tools; `add_repo` puts the repo to the user, withdrawn if Codex withdraws the call, and
         // `delegate` waits for a delegated chat (`toolCalls` says what becomes of it when Codex stops waiting).
         // Aborted too while it has not asked yet (it first reads the repos from the daemon).
+        const startedAt = Date.now();
+        const held = heldBackDelegate(message.params, this.lastToolCall, startedAt);
+        if (held) return { contentItems: [{ type: "inputText", text: held.text }], success: false };
         const call = { abort: new AbortController(), detach: new AbortController(), delegate: message.params.tool === DELEGATE };
         this.toolCalls.set(message.id, call);
         try {
@@ -959,6 +964,7 @@ export class CodexSession implements AgentSession {
         } finally {
           this.toolCalls.delete(message.id);
           this.serverRequests.delete(message.id);
+          this.lastToolCall = { turnId: message.params.turnId, startedAt, endedAt: Date.now() };
         }
       }
       case "mcpServer/elicitation/request":

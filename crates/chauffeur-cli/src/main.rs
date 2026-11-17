@@ -111,7 +111,8 @@ enum Command {
         /// Create a child workspace of this one (id or slug).
         #[arg(long, env = "CHAUFFEUR_PARENT")]
         parent: Option<String>,
-        /// First message of a chat started in the workspace.
+        /// First message of a chat started in the workspace; `-` reads it from standard input
+        /// (a quoted heredoc keeps backticks and `$` as written).
         #[arg(short, long)]
         prompt: Option<String>,
         /// Image or file to send with the first message (repeatable).
@@ -244,7 +245,8 @@ enum Command {
     /// The workspace's state, its chats and the last answer, without waiting (or one chat's,
     /// given its id).
     Status { workspace: String },
-    /// Send a message to a chat (or to a workspace's first chat).
+    /// Send a message to a chat (or to a workspace's first chat); `-` as the text reads it from
+    /// standard input (a quoted heredoc keeps backticks and `$` as written).
     Send {
         target: String,
         #[arg(required_unless_present = "images", num_args = 1..)]
@@ -1138,7 +1140,7 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
                     name,
                     branch,
                     parent,
-                    prompt,
+                    prompt: prompt.map(text_or_stdin).transpose()?,
                     images: image_inputs(&images)?,
                     chat_kind: None,
                     agent: agent.map(Into::into),
@@ -1367,7 +1369,7 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
                 .call(ClientCall::ChatSend(SendParams {
                     client_id: None,
                     chat: target,
-                    text: text.join(" "),
+                    text: text_or_stdin(text.join(" "))?,
                     images: image_inputs(&images)?,
                     mode: queue.then_some(SendMode::Queue),
                     suggestion: None,
@@ -2801,6 +2803,11 @@ fn wait_text(result: &WaitResult) -> String {
     for request in &result.open_requests {
         out.push_str(&format!("\n\n{}", render::open_request(request)));
     }
+    if !result.open_requests.is_empty() && result.workspace.parent_id.is_some() {
+        out.push_str(
+            "\n\nThe user sees these requests in the parent's chat and may answer them there: do not ask them again.",
+        );
+    }
     if let Some(text) = &result.last_text {
         out.push_str(&format!("\n\n{text}"));
     }
@@ -2903,6 +2910,25 @@ fn ticket_list(
         }
     }
     Ok(tickets)
+}
+
+/// A message given on the command line, or read from standard input when it is `-`: a brief
+/// written between double quotes loses what the shell substitutes (a backticked command, `$x`).
+fn text_or_stdin(text: String) -> anyhow::Result<String> {
+    use std::io::Read;
+    if text != "-" {
+        return Ok(text);
+    }
+    let mut read = String::new();
+    std::io::stdin()
+        .read_to_string(&mut read)
+        .context("could not read the message from standard input")?;
+    let read = read.trim_end_matches('\n').to_string();
+    anyhow::ensure!(
+        !read.trim().is_empty(),
+        "the message read from standard input is empty"
+    );
+    Ok(read)
 }
 
 /// Asks a yes/no question on the terminal; refuses (rather than guesses) when nobody is there to

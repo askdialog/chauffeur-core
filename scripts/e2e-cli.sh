@@ -138,6 +138,15 @@ c routine activate Triage | grep -q "(active, next run "
 c routine history Triage | grep -q "^run .* by hand, v2"
 c routine pause Triage | grep -q "(paused)"
 c routine rm Triage | grep -q "its workspace stays"
+echo "== a brief read from standard input keeps its backticks and \$ as written"
+c new --name e2e-stdin-brief --prompt - >/dev/null <<'EOF'
+Accept old links in `share_id_of` and in `chauffeur new --workspace-share`, with $HOME untouched.
+EOF
+c --json routine new --from e2e-stdin-brief --name Stdin | python3 -c '
+import sys, json
+r = json.load(sys.stdin)
+assert r["spec"]["prompt"].strip() == "Accept old links in `share_id_of` and in `chauffeur new --workspace-share`, with $HOME untouched.", r'
+c routine rm Stdin >/dev/null
 c routine ls | grep -q "^no routines"
 c archive routine-triage --force >/dev/null
 c archive e2e-routine-src --force >/dev/null

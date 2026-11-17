@@ -1494,7 +1494,7 @@ impl ChatManager {
             .is_some_and(|ids| ids.contains(request_id));
         if !open || !self.is_live(&chat.id) {
             return Err(Error::NotFound(format!(
-                "no open request {request_id} in this chat"
+                "no open request {request_id} in this chat: it was answered or withdrawn already (the user may have answered it in the app), so do not send the answer again as a message"
             )));
         }
         self.sidecar

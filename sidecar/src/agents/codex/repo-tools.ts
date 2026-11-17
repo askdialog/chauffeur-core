@@ -60,3 +60,37 @@ export async function codexToolCall(
   } else answer = { text: `Chauffeur has no tool ${params.tool}.`, error: true };
   return { contentItems: [{ type: "inputText", text: answer.text }], success: !answer.error };
 }
+
+/** One of Chauffeur's tool calls once Codex has its result. */
+export interface FinishedToolCall {
+  turnId: string;
+  startedAt: number;
+  endedAt: number;
+}
+
+/** A tool call that ran this long holds back the calls Codex made beside it. */
+const HELD_BACK_AFTER_MS = 30_000;
+/** Codex's model takes longer than this to answer a result with a new call. */
+const NEXT_CALL_MS = 1_000;
+
+/**
+ * Codex runs the calls of one response to Chauffeur's tools one after another: a second `delegate`
+ * beside the first only starts when the first has answered, maybe long after its model has moved
+ * on and given that work to another chat. A `delegate` call
+ * that reaches Chauffeur the instant a long call of its turn ended is such a call: it is refused,
+ * with what happened, and the model calls again if the work is still to give.
+ */
+export function heldBackDelegate(params: DynamicToolCallParams, previous: FinishedToolCall | undefined, now: number): ToolText | null {
+  if (params.namespace !== CHAUFFEUR_TOOLS || params.tool !== DELEGATE || !previous) return null;
+  if (previous.turnId !== params.turnId || now - previous.endedAt > NEXT_CALL_MS) return null;
+  const held = previous.endedAt - previous.startedAt;
+  if (held < HELD_BACK_AFTER_MS) return null;
+  return {
+    text:
+      `Chauffeur started no delegated chat for this call: Codex held it back until the call made beside it had ` +
+      `answered, about ${Math.round(held / 60_000)} min after you made it. If its task was not given to another chat ` +
+      `since, call delegate again; to run several delegated chats at once, make each call in its own response.`,
+    error: true,
+  };
+}
+
