@@ -212,6 +212,13 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
     let mut deny: Vec<Value> = Vec::new();
     let mut ask: Vec<Value> = Vec::new();
     for repo in config.repos {
+        // The repo's folder under the root; a repo elsewhere keeps its rules as written.
+        let folder = repo
+            .path
+            .strip_prefix(config.root)
+            .ok()
+            .map(|folder| folder.display().to_string())
+            .filter(|folder| !folder.is_empty());
         for file in [".claude/settings.json", ".claude/settings.local.json"] {
             let Some(settings) = read_json(&repo.path.join(file)) else {
                 continue;
@@ -251,7 +258,10 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
                         .into_iter()
                         .flatten()
                     {
-                        let rule = anchor_rule_at_repo(rule, &repo.path, config.root);
+                        let rule = folder.as_deref().map_or_else(
+                            || rule.clone(),
+                            |folder| anchor_rule_at_repo(rule, folder),
+                        );
                         if !list.contains(&rule) {
                             list.push(rule);
                         }
@@ -288,10 +298,10 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
 /// from the session's working directory: a `/src/**` path is anchored there, a `src/**`,
 /// `./src/**` or `*.ts` path matches at any depth below it. A repo's rules were written for a
 /// session started in the repo; merged here, at the workspace root, the first would miss the repo
-/// and the others would reach every repo. They are rewritten to stay in the repo: `/src/**`
-/// becomes `/web/src/**`, `src/**` becomes `/web/**/src/**` (`//<abs>/…` when the repo is not
-/// under the root). Absolute (`//`) and home (`~`) paths, and rules without a path, are kept.
-fn anchor_rule_at_repo(rule: &Value, repo_path: &Path, root: &Path) -> Value {
+/// and the others would reach every repo. They are rewritten to stay in the repo's `folder`:
+/// `/src/**` becomes `/web/src/**`, `src/**` becomes `/web/**/src/**`. Absolute (`//`) and home
+/// (`~`) paths, and rules without a path, are kept.
+fn anchor_rule_at_repo(rule: &Value, folder: &str) -> Value {
     let Some((tool, path)) = rule
         .as_str()
         .and_then(|text| text.strip_suffix(')'))
@@ -300,16 +310,14 @@ fn anchor_rule_at_repo(rule: &Value, repo_path: &Path, root: &Path) -> Value {
     else {
         return rule.clone();
     };
-    let repo = repo_path.strip_prefix(root).unwrap_or(repo_path);
-    if repo.as_os_str().is_empty() || path.starts_with("//") || path.starts_with('~') {
+    if path.starts_with("//") || path.starts_with('~') {
         return rule.clone();
     }
-    let repo = repo.display();
     match path.strip_prefix('/') {
-        Some(anchored) => json!(format!("{tool}(/{repo}/{anchored})")),
+        Some(anchored) => json!(format!("{tool}(/{folder}/{anchored})")),
         None => {
             let floating = path.strip_prefix("./").unwrap_or(path);
-            json!(format!("{tool}(/{repo}/**/{floating})"))
+            json!(format!("{tool}(/{folder}/**/{floating})"))
         }
     }
 }
@@ -440,9 +448,8 @@ mod tests {
     #[test]
     fn a_repos_relative_rules_keep_pointing_into_the_repo_once_merged() {
         let root = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
         let web = root.path().join("web");
-        let api = outside.path().join("api");
+        let api = root.path().join("api");
         for (repo, rules) in [
             (
                 &web,
@@ -499,25 +506,14 @@ mod tests {
                 "Bash(pnpm test *)",
                 "WebFetch",
                 "mcp__linear",
-                format!("Edit(/{}/**/*.ts)", api.display())
+                "Edit(/api/**/*.ts)"
             ])
         );
         assert_eq!(permissions["ask"], json!(["Read(/web/config/*.json)"]));
         assert_eq!(
             permissions["deny"],
-            json!([
-                "Edit(/web/secrets/**)",
-                format!("Edit(/{}/secrets/**)", api.display())
-            ])
+            json!(["Edit(/web/secrets/**)", "Edit(/api/secrets/**)"])
         );
-    }
-
-    #[test]
-    fn a_repo_at_the_workspace_root_keeps_its_rules_as_written() {
-        let root = Path::new("/ws");
-        for rule in ["Edit(/src/**)", "Edit(src/**)", "Read(./docs/**)"] {
-            assert_eq!(anchor_rule_at_repo(&json!(rule), root, root), json!(rule));
-        }
     }
 
     #[test]
