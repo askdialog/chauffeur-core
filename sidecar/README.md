@@ -2,7 +2,7 @@
 
 The agent runtime of Chauffeur: one Bun process, spawned and supervised by `chauffeurd`, hosting every agent session.
 
-- **Claude** runs through the official Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, pinned to `0.3.322`).
+- **Claude** runs through the official Claude Agent SDK (`@anthropic-ai/claude-agent-sdk`, pinned to `0.3.325`).
 - **Codex** runs through `codex app-server` (JSON-RPC over stdio), one process per session. Its TypeScript types are generated from codex-cli `0.167.0` (stable surface only) into `src/agents/codex/generated/`.
 
 ## Build, test, run
