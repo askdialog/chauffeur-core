@@ -4,7 +4,7 @@
 
 import type { RequestResponse } from "@chauffeur/protocol";
 import { Check, ChevronLeft, ChevronRight } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { QuestionItem } from "@/lib/chat";
 import {
   answerOf,
@@ -44,6 +44,10 @@ export function QuestionPrompt({
   const [busy, setBusy] = useState(false);
   /** The option row under the pointer: its preview shows over the focused one's. */
   const [hovered, setHovered] = useState<number | null>(null);
+  /** The preview box only grows while a question shows: a shorter preview under the pointer would
+   * shrink the prompt, move the options under a still pointer, hover another one, and loop. */
+  const [previewFloor, setPreviewFloor] = useState(0);
+  const previewBox = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const other = useRef<HTMLInputElement>(null);
   const review = needsReview(questions);
@@ -74,6 +78,12 @@ export function QuestionPrompt({
       setBusy(false);
     }
   };
+
+  useLayoutEffect(() => setPreviewFloor(0), [item.requestId, state.tab]);
+  useLayoutEffect(() => {
+    const height = previewBox.current?.offsetHeight ?? 0;
+    if (height > previewFloor) setPreviewFloor(height);
+  });
 
   const onKeyDown = (event: React.KeyboardEvent) => {
     if (busy || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -248,6 +258,8 @@ export function QuestionPrompt({
                     <div className="flex flex-col gap-3 @2xl:flex-row">
                       {options}
                       <div
+                        ref={previewBox}
+                        style={{ minHeight: previewFloor || undefined }}
                         className="max-h-[38vh] min-h-[72px] min-w-0 flex-1 overflow-auto rounded-md border border-line bg-panel px-3 py-2 font-mono text-[12px]"
                         data-testid="question-preview"
                       >
