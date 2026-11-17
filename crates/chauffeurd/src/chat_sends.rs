@@ -18,6 +18,7 @@ pub struct Receipt {
 }
 
 pub async fn send(daemon: &Daemon, params: &SendParams) -> Result<ChatInfo> {
+    daemon.chats.took_part(&params.chat)?;
     let Some(id) = params.client_id.as_deref() else {
         return daemon
             .chats

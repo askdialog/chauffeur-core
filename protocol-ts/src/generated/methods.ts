@@ -514,6 +514,7 @@ export type ClientMethods = {
   "chat.move": [MoveChatParams, ChatInfo];
   "chat.close": [CloseChatParams, ChatInfo];
   "chat.reopen": [ChatParams, ChatInfo];
+  "chat.seen": [ChatParams, EmptyParams];
   "chat.resume_failed": [EmptyParams, EmptyParams];
   "chat.delete": [CloseChatParams, ChatInfo];
   "chat.fork": [ChatForkParams, ChatInfo];
@@ -909,6 +910,7 @@ export const METHOD_NAMES = [
   "chat.move",
   "chat.close",
   "chat.reopen",
+  "chat.seen",
   "chat.resume_failed",
   "chat.delete",
   "chat.fork",
@@ -1088,6 +1090,7 @@ export const PHONE_METHODS = [
   "chat.interrupt",
   "chat.respond",
   "chat.configure",
+  "chat.seen",
   "design.canvas",
   "design.resource",
   "events.subscribe",

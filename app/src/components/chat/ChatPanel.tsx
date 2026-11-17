@@ -187,6 +187,11 @@ function WorkspaceChats({ workspace, session, setup = null, onCloseShortcut, inU
   useEffect(() => {
     if (shownId) strip.current?.querySelector(`[data-chat="${shownId}"]`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [shownId, open.length]);
+  // A delegated chat looked at while it works stays open once it has answered (story 49).
+  const watchedDelegate = chat?.parent_chat && (chat.status === "working" || chat.status === "needs_input") ? chat.id : null;
+  useEffect(() => {
+    if (watchedDelegate) client.call("chat.seen", { chat: watchedDelegate }).catch(() => {});
+  }, [watchedDelegate]);
   // A workspace being created takes messages already: they wait for its agent.
   // Moved to another machine, its chats run there, piloted through this daemon while it answers.
   const relay = useWorkspaceSelector(session, (s) => s.relay);

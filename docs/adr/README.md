@@ -165,5 +165,6 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Child workspaces have no count limit](unlimited-child-workspaces.md) | 2026-11-16 | accepted |
 | [Telling the owner of comments that do not mention them, after a quiet half hour](untagged-comments-digest.md) | 2026-11-16 | accepted |
 | [Make the interface foundations and recovery paths dependable](ux-audit-foundations.md) | 2026-11-16 | accepted |
+| [A delegated chat closes once it has answered, unless the user took part in it](delegated-chats-close-once-answered.md) | 2026-11-17 | accepted |
 | [Update and restart in one step, at once or once no agent works](restart-when-idle.md) | 2026-11-17 | accepted |
 | [Check for Updates… in the app menu brings the update card back](update-from-the-menu.md) | 2026-11-17 | accepted |

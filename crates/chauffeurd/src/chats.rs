@@ -122,6 +122,10 @@ pub struct ChatManager {
     /// agent (its sender dropped): messages reach it in the order they were sent, one waiting for
     /// shell commands holding up those after it.
     deliveries: std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Receiver<()>>>,
+    /// Delegated chats the user took part in (wrote in, was asked something by, looked at while
+    /// they worked): left open once they have answered. In memory: an answer is given within the
+    /// daemon's run.
+    taken_part: std::sync::Mutex<HashSet<String>>,
 }
 
 /// A shell command of the user's that runs, and the message that hands it to the agent once it
@@ -193,6 +197,7 @@ impl ChatManager {
             shells: Default::default(),
             shell_ended: tokio::sync::watch::Sender::new(0),
             deliveries: Default::default(),
+            taken_part: Default::default(),
         }
     }
 
@@ -1712,6 +1717,9 @@ impl ChatManager {
                 ChatEvent::PermissionRequest { request_id, .. }
                 | ChatEvent::Question { request_id, .. }
                 | ChatEvent::McpElicitation { request_id, .. } => {
+                    if chat.parent_chat.is_some() {
+                        self.taken_part.lock().unwrap().insert(chat.id.clone());
+                    }
                     open.insert(request_id.clone());
                     Some(ChatStatus::NeedsInput)
                 }
@@ -3634,7 +3642,9 @@ impl ChatManager {
     ) -> Result<ToolDelegateResult> {
         let child = self.child_of(&params.chat_id, &params.child)?;
         let (child, _) = self.wait_settled(&child.id, true, None).await?;
-        self.delegate_result(&child)
+        let result = self.delegate_result(&child)?;
+        self.close_once_answered(&result);
+        Ok(result)
     }
 
     /// Interrupts a delegated chat: its parent gave up waiting for it.
@@ -3664,13 +3674,54 @@ impl ChatManager {
                 });
                 d.chats
                     .send_from(&parent, &late_answer(&result), &[], SendMode::Steer, from)
-                    .await
+                    .await?;
+                d.chats.close_once_answered(&result);
+                Ok::<_, Error>(())
             };
             if let Err(error) = forwarded.await {
                 tracing::warn!(%error, parent, child = child.id, "could not send a delegated chat's answer to its parent");
             }
         });
         Ok(())
+    }
+
+    /// The user wrote in a chat: a delegated one stays open once it has answered.
+    pub fn took_part(&self, key: &str) -> Result<()> {
+        let chat = self.resolve(key)?;
+        if chat.parent_chat.is_some() {
+            self.taken_part.lock().unwrap().insert(chat.id);
+        }
+        Ok(())
+    }
+
+    /// The user looks at a chat: a delegated one that works or waits for them stays open once it
+    /// has answered; one looked at after it answered was closed already, or is kept by then.
+    pub fn seen(&self, key: &str) -> Result<()> {
+        let chat = self.resolve(key)?;
+        if chat.parent_chat.is_some()
+            && matches!(chat.status, ChatStatus::Working | ChatStatus::NeedsInput)
+        {
+            self.taken_part.lock().unwrap().insert(chat.id);
+        }
+        Ok(())
+    }
+
+    /// Closes a delegated chat whose answer reached its parent (SPEC story 49), unless the user
+    /// took part in it or its turn did not end with an answer: there one reads why. In the
+    /// background, so that the parent gets its answer without waiting for the agent to stop.
+    fn close_once_answered(&self, result: &ToolDelegateResult) {
+        if result.outcome != Some(TurnOutcome::Success)
+            || self.taken_part.lock().unwrap().contains(&result.chat)
+        {
+            return;
+        }
+        let d = self.d();
+        let chat = result.chat.clone();
+        tokio::spawn(async move {
+            if let Err(error) = d.chats.close(&chat, false).await {
+                tracing::warn!(%error, chat, "could not close a delegated chat that answered");
+            }
+        });
     }
 
     /// A delegated chat of `parent`, by id.

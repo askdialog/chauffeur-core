@@ -8215,6 +8215,135 @@ async fn a_delegated_chat_left_by_its_parents_turn_works_on_and_its_answer_comes
             .lines()
             .any(|line| line.contains("session.interrupt") && line.contains(&child))
     );
+    // Its answer given, nobody having taken part in it, it leaves the tabs.
+    eventually("the delegated chat was closed", || {
+        d.chats.resolve(&child).unwrap().closed
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_delegated_chat_closes_once_answered_unless_the_user_took_part_in_it() {
+    use chauffeur_protocol::events::ChatEvent;
+    use chauffeur_protocol::model::TurnOutcome;
+    use chauffeur_protocol::sidecar::{ToolDelegateChildParams, ToolDelegateParams};
+    // Ports of a block no other test of this file takes.
+    let f = fixture(63900);
+    let d = &f.daemon;
+    let log = f.root.join("sidecar.log");
+    d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("closing".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let parent = new_chat(d, &ws.id).await;
+    let ended = |outcome: TurnOutcome| ChatEvent::TurnEnded {
+        outcome,
+        duration_ms: None,
+        cost_usd: None,
+        estimated_cost_usd: None,
+        session_tokens: None,
+        tokens: None,
+        context_tokens: None,
+        error: None,
+        fork_point: None,
+    };
+    // Delegates a task, lets `meanwhile` happen while it works, ends its turn with `outcome`, and
+    // says whether the delegated chat is closed once the parent has its answer.
+    let delegate = async |chat: Option<&str>, meanwhile: &dyn Fn(&str), outcome: TurnOutcome| {
+        let child = d
+            .chats
+            .tool_delegate(ToolDelegateParams {
+                chat_id: parent.id.clone(),
+                prompt: "Check the README".into(),
+                chat: chat.map(str::to_string),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .chat;
+        d.chats.on_event(&child, ChatEvent::TurnStarted);
+        meanwhile(&child);
+        d.chats.on_event(
+            &child,
+            ChatEvent::AssistantText {
+                message_id: format!("m-{child}"),
+                text: "Fine.".into(),
+                parent_tool_use_id: None,
+            },
+        );
+        d.chats.on_event(&child, ended(outcome));
+        d.chats
+            .tool_delegate_wait(ToolDelegateChildParams {
+                chat_id: parent.id.clone(),
+                child: child.clone(),
+            })
+            .await
+            .unwrap();
+        // The close runs in the background: give it the time to.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        (child.clone(), d.chats.resolve(&child).unwrap().closed)
+    };
+    let nothing = |_: &str| {};
+
+    let (answered, closed) = delegate(None, &nothing, TurnOutcome::Success).await;
+    assert!(closed, "an answered task nobody looked at leaves the tabs");
+    let (_, closed) = delegate(
+        None,
+        &|child| d.chats.seen(child).unwrap(),
+        TurnOutcome::Success,
+    )
+    .await;
+    assert!(!closed, "the user looked at it while it worked");
+    let (_, closed) = delegate(
+        None,
+        &|child| {
+            d.chats.on_event(
+                child,
+                ChatEvent::Question {
+                    request_id: format!("q-{child}"),
+                    questions: vec![],
+                },
+            );
+            d.chats.on_event(
+                child,
+                ChatEvent::RequestResolved {
+                    request_id: format!("q-{child}"),
+                    outcome: "answered".into(),
+                    rules: None,
+                },
+            );
+        },
+        TurnOutcome::Success,
+    )
+    .await;
+    assert!(!closed, "it asked the user something");
+    let (_, closed) = delegate(
+        None,
+        &|child| d.chats.took_part(child).unwrap(),
+        TurnOutcome::Success,
+    )
+    .await;
+    assert!(!closed, "the user wrote in it");
+    let (_, closed) = delegate(None, &nothing, TurnOutcome::Error).await;
+    assert!(!closed, "it did not answer: its chat says why");
+
+    // Looking at it once it has answered keeps nothing: it was closed already.
+    d.chats.seen(&answered).unwrap();
+    // More work for a closed one puts it back among the tabs, and it closes again once answered.
+    let (again, closed) = delegate(
+        Some(&answered),
+        &|child| assert!(!d.chats.resolve(child).unwrap().closed),
+        TurnOutcome::Success,
+    )
+    .await;
+    assert_eq!(again, answered);
+    assert!(closed);
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -689,6 +689,12 @@ methods! {
         #[access(Any)]
         #[relay(Act)]
         ChatReopen(ChatParams) -> ChatInfo,
+        /// The user looks at a chat. A delegated chat looked at while it works or waits for the
+        /// user stays among the tabs once it has answered (story 49).
+        #[serde(rename = "chat.seen")]
+        #[access(Any, phone)]
+        #[relay(Read)]
+        ChatSeen(ChatParams) -> EmptyParams,
         /// The user is back (the app's window took the focus): every idle chat whose last turn failed
         /// on an error that trying again could cure (no network, an overloaded API) resumes it, once
         /// per message of the user's. Returns at once.

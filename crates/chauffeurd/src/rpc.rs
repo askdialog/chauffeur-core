@@ -341,6 +341,10 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
             to_value(daemon.chats.close(&params.chat, params.force).await?)
         }
         ClientCall::ChatReopen(params) => to_value(daemon.chats.reopen(&params.chat)?),
+        ClientCall::ChatSeen(params) => {
+            daemon.chats.seen(&params.chat)?;
+            to_value(EmptyParams {})
+        }
         ClientCall::ChatResumeFailed(_) => {
             daemon.chats.resume_failed_turns()?;
             to_value(EmptyParams {})

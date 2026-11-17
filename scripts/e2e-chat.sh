@@ -1167,7 +1167,7 @@ assert not asked, asked'
   delegated() {
     local slug=$1 parent_agent=$2 sub_agent=$3 word=$4 sub_model=${5:-}
     c --json wait "$slug" --timeout 480 >/dev/null
-    c --json chats "$slug" | python3 -c '
+    c --json chats --all "$slug" | python3 -c '
 import sys, json
 chats = json.load(sys.stdin)["chats"]
 parent = chats[0]
@@ -1179,8 +1179,8 @@ assert subs[0]["agent"] == "'"$sub_agent"'" and subs[0].get("parent_tool_use"), 
 assert not "'"$sub_model"'" or subs[0].get("model") == "'"$sub_model"'", subs' 
     local parent sub sub_call
     parent=$(chat_id "$slug")
-    sub=$(c --json chats "$slug" | python3 -c 'import sys,json; print(next(ch["id"] for ch in json.load(sys.stdin)["chats"] if ch.get("parent_chat")))')
-    sub_call=$(c --json chats "$slug" | python3 -c 'import sys,json; print(next(ch["parent_tool_use"] for ch in json.load(sys.stdin)["chats"] if ch.get("parent_chat")))')
+    sub=$(c --json chats --all "$slug" | python3 -c 'import sys,json; print(next(ch["id"] for ch in json.load(sys.stdin)["chats"] if ch.get("parent_chat")))')
+    sub_call=$(c --json chats --all "$slug" | python3 -c 'import sys,json; print(next(ch["parent_tool_use"] for ch in json.load(sys.stdin)["chats"] if ch.get("parent_chat")))')
     # `chauffeur wait <chat>`: that chat alone, its own answer.
     c --json wait "$sub" --timeout 60 | python3 -c '
 import sys, json
@@ -1200,6 +1200,12 @@ assert "'"$sub_call"'" in calls, ("'"$sub_call"'", calls)
 assert any("'"$word"'" in r["output"] and not r["is_error"] for r in results), results
 texts = [e["text"] for e in events if e["type"] == "assistant_text" and not e.get("parent_tool_use_id")]
 print("parent:", texts[-1] if texts else None)'
+    # Its answer given, nobody having taken part in it, it leaves the tabs once its agent stopped.
+    for _ in $(seq 1 30); do
+      c --json chats --all "$slug" | python3 -c 'import sys,json; sys.exit(0 if any(ch.get("closed") for ch in json.load(sys.stdin)["chats"] if ch.get("parent_chat")) else 1)' && break
+      sleep 1
+    done
+    c --json chats --all "$slug" | python3 -c 'import sys,json; subs=[ch for ch in json.load(sys.stdin)["chats"] if ch.get("parent_chat")]; assert subs[0].get("closed"), ("the delegated chat stayed open", subs)'
     c archive --force "$slug" >/dev/null
   }
 
