@@ -254,6 +254,7 @@ fn merged_settings(
         let mut report = LocalSettingsReport::default();
         for (file, from_clone) in settings_files(repo) {
             let Some(settings) = read_json(&file) else {
+                report.unreadable |= file.exists();
                 continue;
             };
             if from_clone {
@@ -319,10 +320,8 @@ fn merged_settings(
                             || rule.clone(),
                             |folder| anchor_rule_at_repo(rule, key, folder),
                         );
+                        report.add_rule(key, rule, &anchored, from_clone);
                         if !list.contains(&anchored) {
-                            if from_clone && let Some(text) = rule.as_str() {
-                                report.rules.entry(key).or_default().push(text.to_string());
-                            }
                             list.push(anchored);
                         }
                     }
@@ -415,8 +414,12 @@ fn anchor_rule_at_repo(rule: &Value, kind: &str, folder: &str) -> Value {
 #[derive(Default)]
 struct LocalSettingsReport {
     clone_file: Option<PathBuf>,
-    /// Rules as written, by kind (`allow`, `ask`, `deny`: the map's order), those the repo's
-    /// other file did not grant already.
+    /// A file of the repo exists but could not be read (caught mid-write): nothing to say yet.
+    unreadable: bool,
+    /// The repo's own rules, as merged, by kind.
+    granted: Vec<(&'static str, Value)>,
+    /// The clone's rules as written, by kind (`allow`, `ask`, `deny`: the map's order), those the
+    /// repo's own `settings.json` does not have already.
     rules: BTreeMap<&'static str, Vec<String>>,
     /// Hook commands (or types), by event.
     hooks: BTreeMap<String, Vec<String>>,
@@ -426,6 +429,17 @@ struct LocalSettingsReport {
 }
 
 impl LocalSettingsReport {
+    fn add_rule(&mut self, kind: &'static str, rule: &Value, anchored: &Value, from_clone: bool) {
+        let entry = (kind, anchored.clone());
+        if self.granted.contains(&entry) {
+            return;
+        }
+        self.granted.push(entry);
+        if from_clone && let Some(text) = rule.as_str() {
+            self.rules.entry(kind).or_default().push(text.to_string());
+        }
+    }
+
     fn add_hooks(&mut self, event: &str, group: &Value) {
         for hook in group
             .get("hooks")
@@ -447,6 +461,9 @@ impl LocalSettingsReport {
 
     /// The notice, none when there is nothing to tell.
     fn message(&self, repo: &str) -> Option<String> {
+        if self.unreadable {
+            return None;
+        }
         let mut sentences = Vec::new();
         if let Some(file) = &self.clone_file {
             let mut added: Vec<String> = self
@@ -951,13 +968,29 @@ mod tests {
                     "permissions":{{"allow":["Bash(make)","Bash(lint)","Bash(cd {c} && x)"]}}}}"#
             ),
         );
-        let repos = [RepoEntry {
-            repo: "next.js".into(),
-            path: worktree.clone(),
-            clone_path: Some(clone.path().to_path_buf()),
-            read_clone_local_settings: true,
-            base_branch: "main".into(),
-        }];
+        // Another repo granting the same rule does not hide what this clone adds to this repo.
+        let api = root.path().join("api");
+        claude_file(
+            &api,
+            "settings.json",
+            r#"{"permissions":{"allow":["Bash(lint)"]}}"#,
+        );
+        let repos = [
+            RepoEntry {
+                repo: "api".into(),
+                path: api,
+                clone_path: None,
+                read_clone_local_settings: false,
+                base_branch: "main".into(),
+            },
+            RepoEntry {
+                repo: "next.js".into(),
+                path: worktree.clone(),
+                clone_path: Some(clone.path().to_path_buf()),
+                read_clone_local_settings: true,
+                base_branch: "main".into(),
+            },
+        ];
 
         let (_, notices) = generate(root.path(), &repos);
 
@@ -985,6 +1018,11 @@ mod tests {
             assert!(sentence.ends_with(&rule), "{sentence}");
         }
         assert!(notice.contains(r#"`[repos."next.js"]`"#), "{notice}");
+
+        // A file of the repo that cannot be read (caught mid-write): nothing to say yet.
+        std::fs::write(worktree.join(".claude/settings.json"), "{\"permissions\":").unwrap();
+        let (_, notices) = generate(root.path(), &repos);
+        assert!(notices.is_empty(), "{notices:?}");
     }
 
     #[test]
