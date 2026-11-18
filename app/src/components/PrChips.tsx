@@ -9,6 +9,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { fitCount } from "@/lib/fit";
 import { openExternal } from "@/lib/native";
 import { mergeBlocker } from "@/lib/prs";
+import { forgeWords } from "@/lib/forge";
+import { useForge } from "@/state/gitlab";
 import { Button, cx, IconButton, Spinner } from "./ui";
 
 export type PrStatus = { prs: PrInfo[] | null; error: string | null; loading: boolean; refresh: () => void };
@@ -43,12 +45,13 @@ export function PrRow({
 }) {
   const row = useRef<HTMLDivElement>(null);
   const measure = useRef<HTMLDivElement>(null);
+  const words = forgeWords(useForge());
   const entries = prEntries(repos, status.prs);
   const mergeOf = (pr: PrInfo | undefined) =>
-    onMerge && pr && !mergeBlocker(pr, status.prs ?? []) ? () => onMerge(pr) : undefined;
+    onMerge && pr && !mergeBlocker(pr, status.prs ?? [], words) ? () => onMerge(pr) : undefined;
   // Why an open PR has no Merge button, for its chip's tooltip.
   const blockerOf = (pr: PrInfo | undefined) =>
-    onMerge && pr?.state === "OPEN" ? mergeBlocker(pr, status.prs ?? []) : null;
+    onMerge && pr?.state === "OPEN" ? mergeBlocker(pr, status.prs ?? [], words) : null;
   const [layout, setLayout] = useState<{ fit: number; titleWidth: number | null }>({ fit: entries.length, titleWidth: null });
 
   // Measure every chip off screen, then lay them out on one line; again whenever the row resizes.
@@ -91,7 +94,7 @@ export function PrRow({
       {hidden.length > 0 && <OverflowChip entries={entries} hidden={hidden} all={fit === 0} mergeOf={mergeOf} blockerOf={blockerOf} />}
       {refreshable && (
         <IconButton
-          title={status.error ? `Could not read the PR status: ${status.error}. Retry` : "Refresh the PR status"}
+          title={status.error ? `Could not read the ${words.short} status: ${status.error}. Retry` : `Refresh the ${words.short} status`}
           onClick={status.refresh}
           disabled={status.loading}
           className="h-[18px] w-[18px] shrink-0"
@@ -166,7 +169,8 @@ function RepoChip({
   /** The off-screen copy that measures the chip: no test handles. */
   measuring?: boolean;
 }) {
-  const local = pr ? localState(pr) : `${repo}: reading the pull request status…`;
+  const words = forgeWords(useForge());
+  const local = pr ? localState(pr) : `${repo}: reading the ${words.long} status…`;
   const marks = (
     <>
       {pr && pr.ahead > 0 && <span className="shrink-0 text-faint">↑{pr.ahead}</span>}
@@ -177,7 +181,7 @@ function RepoChip({
     const url = pr.url;
     const chip = (
       <button
-        title={`Open #${pr.number} on GitHub${pr.title ? `: ${pr.title}` : ""}\n${local}${blocker ? `\nNot mergeable yet: ${blocker}` : ""}`}
+        title={`Open ${words.number(pr.number)} on ${words.name}${pr.title ? `: ${pr.title}` : ""}\n${local}${blocker ? `\nNot mergeable yet: ${blocker}` : ""}`}
         onClick={() => void openExternal(url)}
         data-repo-chip={repo}
         className={cx(CHIP, "hover:border-line-strong hover:text-fg")}
@@ -185,7 +189,8 @@ function RepoChip({
         <span className="shrink-0">{repo}</span>
         {marks}
         <span className="inline-flex shrink-0 items-center gap-0.5 text-fg/90">
-          <GitPullRequest size={10} />#{pr.number}
+          <GitPullRequest size={10} />
+          {words.number(pr.number)}
         </span>
         {pr.title && titleWidth !== 0 && (
           <span data-chip-title className="min-w-0 truncate text-faint" style={titleWidth ? { maxWidth: titleWidth } : undefined}>
@@ -208,18 +213,19 @@ function RepoChip({
     <span title={local} data-repo-chip={repo} className={CHIP}>
       <span className="shrink-0">{repo}</span>
       {marks}
-      {pr && <span className="shrink-0 text-faint">no PR</span>}
+      {pr && <span className="shrink-0 text-faint">no {words.short}</span>}
     </span>
   );
 }
 
 /** The green button that merges one PR (after its dialog: the method, then confirm). */
 function MergeButton({ pr, onMerge, measuring = false }: { pr: PrInfo; onMerge: () => void; measuring?: boolean }) {
+  const words = forgeWords(useForge());
   return (
     <Button
       size="xs"
       variant="success"
-      title={`Merge #${pr.number}`}
+      title={`Merge ${words.number(pr.number)}`}
       onClick={onMerge}
       data-testid={measuring ? undefined : "merge"}
       data-merge={measuring ? undefined : pr.branch}
@@ -248,6 +254,7 @@ function OverflowChip({
   mergeOf: (pr: PrInfo | undefined) => (() => void) | undefined;
   blockerOf: (pr: PrInfo | undefined) => string | null;
 }) {
+  const words = forgeWords(useForge());
   const anchor = useRef<HTMLSpanElement>(null);
   const [hovered, setHovered] = useState(false);
   const [pinned, setPinned] = useState(false);
@@ -300,7 +307,7 @@ function OverflowChip({
         }}
         onFocus={show}
         aria-expanded={open}
-        title={failing ? `${entries.length} chips: checks fail on a PR not shown here` : `${entries.length} repos and PRs`}
+        title={failing ? `${entries.length} chips: checks fail on a ${words.short} not shown here` : `${entries.length} repos and ${words.shorts}`}
         data-testid="pr-overflow"
         className={cx(
           CHIP_SHAPE,
@@ -329,6 +336,7 @@ function PrPopover({
   mergeOf: (pr: PrInfo | undefined) => (() => void) | undefined;
   blockerOf: (pr: PrInfo | undefined) => string | null;
 }) {
+  const words = forgeWords(useForge());
   return (
     <div
       data-popover
@@ -352,7 +360,8 @@ function PrPopover({
               {pr?.number != null ? (
                 <>
                   <span className="inline-flex shrink-0 items-center gap-0.5 text-fg/90">
-                    <GitPullRequest size={11} />#{pr.number}
+                    <GitPullRequest size={11} />
+                    {words.number(pr.number)}
                   </span>
                   <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[11px] text-faint">
                     <PrState pr={pr} />
@@ -360,7 +369,7 @@ function PrPopover({
                   </span>
                 </>
               ) : (
-                <span className="shrink-0 text-faint">{pr ? "no PR" : "…"}</span>
+                <span className="shrink-0 text-faint">{pr ? `no ${words.short}` : "…"}</span>
               )}
             </div>
             {pr?.title && <div className="mt-0.5 line-clamp-2 text-muted">{pr.title}</div>}

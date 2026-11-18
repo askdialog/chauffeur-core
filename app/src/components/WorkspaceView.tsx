@@ -36,6 +36,8 @@ import { CreatePrDialog, MergeDialog } from "./PrDialogs";
 import { TicketResults, useTicketSearch } from "./TicketSearch";
 import { Badge, Button, cx, IconButton, inputClass, Modal, Spinner, StatusDot, workspaceStatus } from "./ui";
 import { WorkspaceViews } from "./WorkspaceViews";
+import { forgeWords } from "@/lib/forge";
+import { useForge } from "@/state/gitlab";
 
 export function WorkspaceView({ workspace }: { workspace: WorkspaceInfo }) {
   const session = useWorkspaceSession(workspace.id);
@@ -53,6 +55,7 @@ export function WorkspaceView({ workspace }: { workspace: WorkspaceInfo }) {
 }
 
 function Header({ workspace, session }: { workspace: WorkspaceInfo; session: WorkspaceSession }) {
+  const changeRequests = forgeWords(useForge()).shorts;
   const repos = workspace.state === "archived" ? workspaceRepoNames(workspace) : workspaceRepos(workspace);
   const prs = usePrStatus(workspace, session);
   const status = workspaceStatus(workspace);
@@ -143,7 +146,7 @@ function Header({ workspace, session }: { workspace: WorkspaceInfo; session: Wor
               )}
               {!workspace.explore && (
                 <Button size="sm" onClick={() => setPrOpen(true)}>
-                  <GitPullRequest size={12} /> Create PRs
+                  <GitPullRequest size={12} /> Create {changeRequests}
                 </Button>
               )}
             </>

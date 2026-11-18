@@ -768,6 +768,7 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
             let statuses = prs::status(daemon, &row.id).await?;
             let tickets: Vec<String> = row.tickets.iter().map(|t| t.identifier.clone()).collect();
             let prompt = prs::create_prompt(
+                daemon.settings.get().forge,
                 &statuses,
                 &tickets,
                 params.draft,

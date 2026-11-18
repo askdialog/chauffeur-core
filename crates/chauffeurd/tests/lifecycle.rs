@@ -4798,6 +4798,105 @@ async fn archiving_asks_docker_only_for_tracked_compose_files_and_never_waits_on
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn on_a_gitlab_installation_the_header_reads_and_merges_merge_requests_through_glab() {
+    use chauffeur_protocol::client::{
+        MergeMethod, MergePrsParams, SettingsUpdate, WorkspaceDefaultsUpdate,
+    };
+    let f = fixture(47640);
+    let d = &f.daemon;
+    chauffeurd::preferences::set(
+        d,
+        SettingsUpdate {
+            workspaces: Some(WorkspaceDefaultsUpdate {
+                forge: Some(Forge::Gitlab),
+                gitlab_host: Some("gitlab.example.com".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    // A fake `glab`: GitLab's API as `glab api` gives it, for repo-a only; records each call.
+    let bin = f.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let calls = f.root.join("glab-calls.log");
+    fake_tool(
+        &bin,
+        "glab",
+        &format!(
+            r#"repo=$(basename "$PWD")
+echo "$repo $*" >> {calls}
+case "$repo|$1 $2" in
+  "repo-a|api projects/:id/merge_requests?source_branch=tester%2Fgl&"*)
+    echo '[{{"iid":42,"target_branch":"main","web_url":"https://gitlab.example.com/g/sub/repo-a/-/merge_requests/42","state":"opened","title":"Fix the filter","draft":false,"source_branch":"tester/gl","sha":"0000000000000000000000000000000000000000","source_project_id":7,"target_project_id":7,"detailed_merge_status":"mergeable","has_conflicts":false}}]' ;;
+  "repo-a|api projects/:id/merge_requests/42") echo '{{"head_pipeline":{{"status":"success"}}}}' ;;
+  "repo-a|api projects/:id") echo '{{"squash_option":"default_off","merge_method":"merge","permissions":{{"project_access":{{"access_level":40}},"group_access":null}}}}' ;;
+  "repo-a|mr merge") exit 0 ;;
+  *"|api projects/:id/merge_requests?"*) echo '[]' ;;
+  *) echo "unexpected: $*" >&2; exit 1 ;;
+esac"#,
+            calls = calls.display()
+        ),
+    );
+    let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    let path = format!("{}:{}", bin.display(), vars["PATH"]);
+    vars.insert("PATH".into(), path);
+    d.shell_env.set_vars(vars);
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("gl".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+
+    let prs = chauffeurd::prs::status(d, &ws.id).await.unwrap();
+    let mr = prs.iter().find(|pr| pr.repo == "repo-a").unwrap();
+    assert_eq!(
+        (
+            mr.number,
+            mr.state.as_deref(),
+            mr.checks.as_deref(),
+            mr.mergeable.as_deref()
+        ),
+        (Some(42), Some("OPEN"), Some("SUCCESS"), Some("MERGEABLE"))
+    );
+    assert_eq!(mr.merge_methods, [MergeMethod::Squash, MergeMethod::Merge]);
+    assert_eq!(
+        (mr.can_merge, mr.merge_blocker.as_deref()),
+        (Some(true), None)
+    );
+    assert!(
+        prs.iter()
+            .find(|pr| pr.repo == "repo-b")
+            .unwrap()
+            .number
+            .is_none()
+    );
+
+    let outcomes = chauffeurd::prs::merge(
+        d,
+        &MergePrsParams {
+            workspace: ws.id.clone(),
+            method: MergeMethod::Squash,
+            prs: Vec::new(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(outcomes.len() == 1 && outcomes[0].merged, "{outcomes:?}");
+    let log = std::fs::read_to_string(&calls).unwrap();
+    assert!(
+        log.contains("repo-a mr merge 42 --yes --auto-merge=false --squash"),
+        "{log}"
+    );
+    assert!(!log.contains("unexpected"), "{log}");
+}
+
 /// The number of the PR the header shows for the workspace's own worktree of `repo`.
 async fn pr_number(d: &Arc<Daemon>, workspace: &str, repo: &str) -> Option<u64> {
     chauffeurd::prs::status(d, workspace)

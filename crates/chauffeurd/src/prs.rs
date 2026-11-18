@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use std::time::{Duration, Instant};
 
-use chauffeur_protocol::client::{MergeMethod, MergeOutcome, MergePrsParams, PrInfo, PrRef};
+use chauffeur_protocol::client::{Forge, MergeMethod, MergeOutcome, MergePrsParams, PrInfo, PrRef};
 use chauffeur_protocol::model::{WorkspaceState, WorktreeOrigin};
 use serde_json::Value;
 
@@ -56,6 +56,7 @@ pub async fn status(daemon: &Arc<Daemon>, workspace: &str) -> Result<Vec<PrInfo>
         tracing::warn!(workspace = %row.id, "could not sync the worktrees: {error:#}");
     }
     let git = Git::new(daemon.shell_env.clone());
+    let forge = daemon.settings.get().forge;
     // The workspace's own worktrees, then those its agents made on their own branches (one per
     // sub-ticket, say), whose PRs are the workspace's too.
     let mut worktrees: Vec<WorktreeRow> = daemon
@@ -76,7 +77,7 @@ pub async fn status(daemon: &Arc<Daemon>, workspace: &str) -> Result<Vec<PrInfo>
     });
     let futures = worktrees
         .iter()
-        .map(|w| repo_status(&daemon.store, &git, &daemon.shell_env, w));
+        .map(|w| repo_status(forge, &daemon.store, &git, &daemon.shell_env, w));
     let read = futures_util::future::join_all(futures).await;
     // A gh call that failed reads as no PR: only a whole read is reported, or a hook would take
     // the workspace for one without PRs.
@@ -92,8 +93,9 @@ pub async fn status(daemon: &Arc<Daemon>, workspace: &str) -> Result<Vec<PrInfo>
     Ok(prs)
 }
 
-/// The worktree's PR, and whether GitHub answered (a failed `gh` call reads as no PR).
+/// The worktree's PR, and whether the forge answered (a failed `gh` or `glab` call reads as no PR).
 async fn repo_status(
+    forge: Forge,
     store: &Store,
     git: &Git,
     env: &ShellEnv,
@@ -120,6 +122,7 @@ async fn repo_status(
         mergeable: None,
         merge_methods: Vec::new(),
         can_merge: None,
+        merge_blocker: None,
     };
     if !worktree.removed && dir.exists() {
         let base = format!("origin/{}", worktree.base_branch);
@@ -138,9 +141,17 @@ async fn repo_status(
     if worktree.branch.is_empty() {
         return (info, true);
     }
-    let found = find_pr_checked(store, git, env, worktree, "all", STATUS_FIELDS).await;
+    let found = find_pr_checked(forge, store, git, env, worktree, "all", STATUS_FIELDS).await;
     let answered = found.is_ok();
-    if let Ok(Some((pr, _))) = found {
+    if let Ok(Some((mut pr, _))) = found {
+        let clone = Path::new(&worktree.clone_path);
+        if forge == Forge::Gitlab
+            && pr["state"].as_str() == Some("OPEN")
+            && let Some(number) = pr["number"].as_u64()
+        {
+            pr["statusCheckRollup"] = crate::mrs::checks(env, clone, number).await;
+        }
+        info.merge_blocker = pr["mergeBlocker"].as_str().map(String::from);
         info.number = pr["number"].as_u64();
         info.pr_base_branch = pr["baseRefName"].as_str().map(String::from);
         info.url = pr["url"].as_str().map(String::from);
@@ -154,7 +165,7 @@ async fn repo_status(
             .map(String::from);
         info.mergeable = pr["mergeable"].as_str().map(String::from);
         if info.state.as_deref() == Some("OPEN") {
-            let repo = merge_rights(env, Path::new(&worktree.clone_path)).await;
+            let repo = merge_rights(forge, env, clone).await;
             info.merge_methods = repo.methods;
             info.can_merge = repo.can_merge;
         }
@@ -203,6 +214,7 @@ pub enum Found {
 /// the local branch (the PR head is the local tip, or behind it). A PR opened from another
 /// workspace is never returned: when in doubt (a git or gh error, several PRs), none is.
 pub async fn find_pr(
+    forge: Forge,
     store: &Store,
     git: &Git,
     env: &ShellEnv,
@@ -210,7 +222,7 @@ pub async fn find_pr(
     state: &str,
     fields: &str,
 ) -> Option<(Value, Found)> {
-    find_pr_checked(store, git, env, worktree, state, fields)
+    find_pr_checked(forge, store, git, env, worktree, state, fields)
         .await
         .ok()
         .flatten()
@@ -218,6 +230,7 @@ pub async fn find_pr(
 
 /// [`find_pr`], telling a `gh` call that failed (`Err`) from no PR (`Ok(None)`).
 pub(crate) async fn find_pr_checked(
+    forge: Forge,
     store: &Store,
     git: &Git,
     env: &ShellEnv,
@@ -231,7 +244,7 @@ pub(crate) async fn find_pr_checked(
     }
     let clone = Path::new(&worktree.clone_path);
     let fields = format!("{fields},{IDENTITY_FIELDS}");
-    let prs = gh_pr_list(env, clone, branch, state, &fields)
+    let prs = pr_list(forge, env, clone, branch, state, &fields)
         .await
         .ok_or(())?;
     if let Some(pr) = prs.into_iter().find(|pr| {
@@ -243,7 +256,7 @@ pub(crate) async fn find_pr_checked(
     let Some(name) = pushed_name(store, git, clone, worktree).await else {
         return Ok(None);
     };
-    let prs = gh_pr_list(env, clone, &name, state, &fields)
+    let prs = pr_list(forge, env, clone, &name, state, &fields)
         .await
         .ok_or(())?;
     let local = format!("refs/heads/{branch}");
@@ -285,6 +298,22 @@ fn only_one(mut prs: Vec<Value>) -> Option<Value> {
 /// A full commit id, so never an option nor a ref name.
 fn is_object_id(oid: &str) -> bool {
     matches!(oid.len(), 40 | 64) && oid.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The PRs from the branch `head`: `gh pr list`, or a GitLab's merge requests in the same shape;
+/// `None` when the forge's CLI fails.
+async fn pr_list(
+    forge: Forge,
+    env: &ShellEnv,
+    clone: &Path,
+    head: &str,
+    state: &str,
+    fields: &str,
+) -> Option<Vec<Value>> {
+    match forge {
+        Forge::Github => gh_pr_list(env, clone, head, state, fields).await,
+        Forge::Gitlab => crate::mrs::list(env, clone, head, state).await,
+    }
 }
 
 /// `gh pr list --head <head>`; `None` when gh fails or answers something else than a list.
@@ -419,14 +448,25 @@ struct MergeRights {
 /// What each clone's repo allows, and when GitHub said so.
 type RightsCache = Mutex<HashMap<PathBuf, (Instant, MergeRights)>>;
 
-/// What a repo allows, asked of GitHub at most once an hour.
-async fn merge_rights(env: &ShellEnv, clone: &Path) -> MergeRights {
+/// What a repo allows, asked of its forge at most once an hour.
+async fn merge_rights(forge: Forge, env: &ShellEnv, clone: &Path) -> MergeRights {
     static CACHE: OnceLock<RightsCache> = OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
     if let Some((at, rights)) = cache.lock().unwrap().get(clone)
         && at.elapsed() < RIGHTS_FRESH
     {
         return rights.clone();
+    }
+    if forge == Forge::Gitlab {
+        let Some((methods, can_merge)) = crate::mrs::merge_rights(env, clone).await else {
+            return MergeRights::default();
+        };
+        let rights = MergeRights { methods, can_merge };
+        cache
+            .lock()
+            .unwrap()
+            .insert(clone.to_path_buf(), (Instant::now(), rights.clone()));
+        return rights;
     }
     let output = tokio::process::Command::new("gh")
         .args([
@@ -492,6 +532,7 @@ pub async fn merge(daemon: &Arc<Daemon>, params: &MergePrsParams) -> Result<Vec<
         )));
     }
     let worktrees = daemon.store.worktrees_of(&row.id)?;
+    let forge = daemon.settings.get().forge;
     // Where each merged PR landed: its repo and head branch, the branch it merged into.
     let mut landed: HashMap<PrRef, String> = statuses
         .iter()
@@ -540,7 +581,13 @@ pub async fn merge(daemon: &Arc<Daemon>, params: &MergePrsParams) -> Result<Vec<
             branch: base.clone(),
         };
         if let Some(onto) = landed.get(&below).cloned() {
-            match gh(daemon, &clone, &["pr", "edit", &number, "--base", &onto]).await {
+            let retarget = match forge {
+                Forge::Github => ["pr", "edit", &number, "--base", &onto]
+                    .map(String::from)
+                    .into(),
+                Forge::Gitlab => crate::mrs::retarget_args(&number, &onto),
+            };
+            match forge_cli(daemon, forge, &clone, &retarget).await {
                 Ok(()) => {
                     base = onto;
                     retargeted = true;
@@ -560,13 +607,13 @@ pub async fn merge(daemon: &Arc<Daemon>, params: &MergePrsParams) -> Result<Vec<
             // GitHub takes a moment to recompute a retargeted PR; until then it refuses it.
             let attempts = if retargeted { 4 } else { 1 };
             for attempt in 1..=attempts {
-                error = gh(
-                    daemon,
-                    &clone,
-                    &["pr", "merge", &number, params.method.flag()],
-                )
-                .await
-                .err();
+                let merge = match forge {
+                    Forge::Github => ["pr", "merge", &number, params.method.flag()]
+                        .map(String::from)
+                        .into(),
+                    Forge::Gitlab => crate::mrs::merge_args(&number, params.method),
+                };
+                error = forge_cli(daemon, forge, &clone, &merge).await.err();
                 if error.is_none() || attempt == attempts {
                     break;
                 }
@@ -600,9 +647,19 @@ pub async fn merge(daemon: &Arc<Daemon>, params: &MergePrsParams) -> Result<Vec<
     Ok(outcomes)
 }
 
-/// Runs `gh` in a clone; its error is the last line it printed, without its "X " or "! " mark.
-async fn gh(daemon: &Daemon, clone: &Path, args: &[&str]) -> std::result::Result<(), String> {
-    let output = tokio::process::Command::new("gh")
+/// Runs the forge's CLI (`gh` or `glab`) in a clone; its error is the last line it printed,
+/// without its "X " or "! " mark.
+async fn forge_cli(
+    daemon: &Daemon,
+    forge: Forge,
+    clone: &Path,
+    args: &[String],
+) -> std::result::Result<(), String> {
+    let (cli, not_connected) = match forge {
+        Forge::Github => ("gh", crate::github::NOT_CONNECTED),
+        Forge::Gitlab => ("glab", crate::mrs::NOT_CONNECTED),
+    };
+    let output = tokio::process::Command::new(cli)
         .args(args)
         .current_dir(clone)
         .env_clear()
@@ -611,14 +668,17 @@ async fn gh(daemon: &Daemon, clone: &Path, args: &[&str]) -> std::result::Result
         .output()
         .await
         .map_err(|error| match error.kind() {
-            std::io::ErrorKind::NotFound => crate::github::NOT_CONNECTED.to_string(),
-            _ => format!("could not run gh: {error}"),
+            std::io::ErrorKind::NotFound => not_connected.to_string(),
+            _ => format!("could not run {cli}: {error}"),
         })?;
     if output.status.success() {
         return Ok(());
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let line = stderr.trim().lines().last().unwrap_or("gh failed");
+    let line = stderr.trim().lines().last().unwrap_or(match forge {
+        Forge::Github => "gh failed",
+        Forge::Gitlab => "glab failed",
+    });
     let line = line
         .strip_prefix("X ")
         .or_else(|| line.strip_prefix("! "))
@@ -701,26 +761,37 @@ fn combined_checks(rollup: &Value) -> Option<String> {
 /// skills when installed (the first opens each PR ready for review, the second drives it through
 /// CI and the AI review, never merging), the repo's own conventions otherwise.
 pub fn create_prompt(
+    forge: Forge,
     prs: &[PrInfo],
     tickets: &[String],
     draft: bool,
     instructions: Option<&str>,
 ) -> String {
-    let mut out = String::from(
-        "Open the pull requests of this workspace, one per repo below that has commits ahead of its base branch or uncommitted work that belongs to the task (skip the others).\n\n\
+    // The words of the forge the installation goes through (docs/adr/gitlab-as-the-forge.md).
+    let (requests, request, by_hand, short) = match forge {
+        Forge::Github => ("pull requests", "pull request", "open it yourself", "PR"),
+        Forge::Gitlab => (
+            "merge requests",
+            "merge request",
+            "open it yourself with `glab mr create`",
+            "MR",
+        ),
+    };
+    let mut out = format!(
+        "Open the {requests} of this workspace, one per repo below that has commits ahead of its base branch or uncommitted work that belongs to the task (skip the others).\n\n\
 1. In each such repo's folder: commit that work and push the branch.\n\
-2. Open its pull request with an `open-pr` skill when one is available",
+2. Open its {request} with an `open-pr` skill when one is available",
     );
     out.push_str(if draft {
         ", as a draft"
     } else {
         ", ready for review"
     });
-    out.push_str(
-        "; without it, open it yourself against the base branch, following the repo's own conventions.\n\
-3. Once every pull request exists, edit each one's description to link the others of this workspace, and list their URLs.\n\
-4. Then drive each pull request with a `shepherd-pr` skill when one is available: CI and the AI review, until it is ready for a human. Never merge: the user does.\n\n",
-    );
+    out.push_str(&format!(
+        "; without it, {by_hand} against the base branch, following the repo's own conventions.\n\
+3. Once every {request} exists, edit each one's description to link the others of this workspace, and list their URLs.\n\
+4. Then drive each {request} with a `shepherd-pr` skill when one is available: CI and the AI review, until it is ready for a human. Never merge: the user does.\n\n",
+    ));
     for pr in prs {
         out.push_str(&format!(
             "- {}: branch `{}` → `{}`, {} commit(s) ahead{}{}\n",
@@ -744,7 +815,7 @@ pub fn create_prompt(
             pr.url
                 .as_ref()
                 .map(|u| format!(
-                    ", existing PR {u} ({})",
+                    ", existing {short} {u} ({})",
                     pr.state.clone().unwrap_or_default()
                 ))
                 .unwrap_or_default()
@@ -783,6 +854,7 @@ mod tests {
             mergeable: None,
             merge_methods: Vec::new(),
             can_merge: None,
+            merge_blocker: None,
         }
     }
 
@@ -869,13 +941,28 @@ mod tests {
     }
 
     #[test]
+    fn the_prompt_speaks_of_merge_requests_on_gitlab() {
+        let github = create_prompt(Forge::Github, &[pr("web", "OPEN")], &[], false, None);
+        assert!(github.starts_with("Open the pull requests of this workspace"));
+        assert!(!github.contains("merge request") && !github.contains("glab"));
+        let existing = PrInfo {
+            url: Some("https://gitlab.example.com/g/web/-/merge_requests/3".into()),
+            ..pr("web", "OPEN")
+        };
+        let gitlab = create_prompt(Forge::Gitlab, &[existing], &[], false, None);
+        assert!(gitlab.starts_with("Open the merge requests of this workspace"));
+        assert!(gitlab.contains("open it yourself with `glab mr create`"));
+        assert!(gitlab.contains("existing MR ") && !gitlab.contains("pull request"));
+    }
+
+    #[test]
     fn the_prompt_names_an_agent_worktree_s_folder() {
         let sub = PrInfo {
             group: Some("abc-3214".into()),
             branch: "abc-3214-runs".into(),
             ..pr("web", "OPEN")
         };
-        let prompt = create_prompt(&[pr("web", "OPEN"), sub], &[], false, None);
+        let prompt = create_prompt(Forge::Github, &[pr("web", "OPEN"), sub], &[], false, None);
         assert!(prompt.contains("- web: branch `web-branch`"));
         assert!(prompt.contains("- web in `.worktrees/abc-3214/web`: branch `abc-3214-runs`"));
     }

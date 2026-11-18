@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PrInfo } from "@chauffeur/protocol";
 import { commonMethods, mergeBlocker, stackedAbove, stackedOn } from "./prs";
+import { forgeWords } from "./forge";
 
 const pr = (repo: string, state: string, methods: PrInfo["merge_methods"] = []): PrInfo => ({
   repo,
@@ -20,6 +21,7 @@ const pr = (repo: string, state: string, methods: PrInfo["merge_methods"] = []):
   mergeable: null,
   merge_methods: methods,
   can_merge: null,
+  merge_blocker: null,
 });
 
 describe("merging", () => {
@@ -61,6 +63,16 @@ describe("merging", () => {
     expect(mergeBlocker(above, [{ ...below, state: "MERGED" }, above])).toBeNull();
     expect(mergeBlocker(below, [below, above])).toBeNull();
     expect(stackedAbove(below, [below, above])).toEqual([above]);
+  });
+
+  test("on GitLab, a merge request is numbered with ! and told what else GitLab reports", () => {
+    const gitlab = forgeWords("gitlab");
+    const ready: PrInfo = { ...pr("a", "OPEN"), checks: "SUCCESS", mergeable: "MERGEABLE", can_merge: true };
+    const below: PrInfo = { ...ready, branch: "abc-1", number: 6n };
+    const above: PrInfo = { ...ready, branch: "abc-2", pr_base_branch: "abc-1" };
+    expect(mergeBlocker(above, [below, above], gitlab)).toBe("stacked on !6, to merge first");
+    expect(mergeBlocker({ ...ready, merge_blocker: "threads to resolve" }, [], gitlab)).toBe("threads to resolve");
+    expect(mergeBlocker({ ...ready, mergeable: "UNKNOWN" }, [], gitlab)).toBe("GitLab is still checking for conflicts");
   });
 
   test("a PR is stacked only on a PR of its own repo", () => {

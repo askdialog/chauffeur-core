@@ -69,6 +69,7 @@ pub mod login;
 pub mod mentions;
 pub mod mobile;
 pub mod models;
+pub mod mrs;
 pub mod news;
 pub mod ollama;
 pub mod open;

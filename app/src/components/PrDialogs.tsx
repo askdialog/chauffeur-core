@@ -5,11 +5,14 @@ import type { MergeMethod, PrInfo, WorkspaceInfo } from "@chauffeur/protocol";
 import { CheckCircle2, CircleDashed, CircleX, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { commonMethods, MERGE_METHODS, prLabel, stackedAbove } from "@/lib/prs";
+import { forgeWords } from "@/lib/forge";
+import { useForge } from "@/state/gitlab";
 import { errorMessage } from "@/lib/rpc";
 import { client, selectChat, setTab, toast, upsertChats } from "@/state/app";
 import { Button, cx, inputClass, Modal } from "./ui";
 
 export function CreatePrDialog({ open, onClose, workspace }: { open: boolean; onClose: () => void; workspace: WorkspaceInfo }) {
+  const words = forgeWords(useForge());
   const [instructions, setInstructions] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +41,7 @@ export function CreatePrDialog({ open, onClose, workspace }: { open: boolean; on
     <Modal
       open={open}
       onClose={onClose}
-      title="Create PRs"
+      title={`Create ${words.shorts}`}
       width={520}
       footer={
         <>
@@ -53,7 +56,7 @@ export function CreatePrDialog({ open, onClose, workspace }: { open: boolean; on
     >
       <div className="space-y-3 text-[12.5px] text-muted">
         <p>
-          The agent opens one PR per repo that has commits, with an <span className="font-mono text-fg">open-pr</span>{" "}
+          The agent opens one {words.short} per repo that has commits, with an <span className="font-mono text-fg">open-pr</span>{" "}
           skill when one is installed (else the repo's conventions). It links them together, then follows CI and the AI
           review with a <span className="font-mono text-fg">shepherd-pr</span> skill when there is one. It never merges.
         </p>
@@ -89,6 +92,7 @@ export function MergeDialog({
   workspace: WorkspaceInfo;
   onMerged: () => void;
 }) {
+  const words = forgeWords(useForge());
   const [method, setMethod] = useState<MergeMethod>(() => (localStorage.getItem(METHOD_KEY) as MergeMethod | null) ?? "squash");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -110,10 +114,10 @@ export function MergeDialog({
       onMerged();
       const outcome = result.outcomes.find((o) => o.repo === target.repo && o.branch === target.branch);
       if (outcome?.merged) {
-        toast(`Merged: ${prLabel(pr)} #${pr.number}`);
+        toast(`Merged: ${prLabel(pr)} ${words.number(pr.number)}`);
         onClose();
       } else {
-        setError(outcome?.error ?? "GitHub did not merge it");
+        setError(outcome?.error ?? `${words.name} did not merge it`);
       }
     } catch (err) {
       setError(errorMessage(err));
@@ -127,7 +131,7 @@ export function MergeDialog({
       open={pr != null}
       onClose={onClose}
       dismissable={!busy}
-      title="Merge pull request"
+      title={`Merge ${words.long}`}
       width={560}
       footer={
         <>
@@ -135,7 +139,7 @@ export function MergeDialog({
             Cancel
           </Button>
           <Button variant="success" busy={busy} onClick={() => void merge()} data-testid="confirm-merge">
-            Merge #{pr ? String(pr.number) : ""}
+            Merge {pr ? words.number(pr.number) : ""}
           </Button>
         </>
       }
@@ -145,7 +149,7 @@ export function MergeDialog({
           <div className="rounded-md border border-line bg-raised px-2.5 py-1.5">
             <span className="flex items-baseline gap-1.5">
               <span className="shrink-0 whitespace-nowrap font-medium text-fg">{prLabel(pr)}</span>
-              <span className="shrink-0 text-faint">#{pr.number}</span>
+              <span className="shrink-0 text-faint">{words.number(pr.number)}</span>
               <span className="truncate text-muted">{pr.title}</span>
             </span>
             <span className="mt-0.5 flex flex-wrap gap-x-3 text-[11.5px]">
@@ -167,15 +171,15 @@ export function MergeDialog({
                 data-testid={`merge-method-${m.id}`}
               >
                 <span className={cx("text-[12.5px] font-medium", effective === m.id ? "text-fg" : "text-muted")}>{m.label}</span>
-                <span className="text-[11px] text-faint">{m.detail}</span>
+                <span className="text-[11px] text-faint">{m.detail(words.short)}</span>
               </button>
             ))}
           </div>
           {above.length > 0 && effective !== "merge" && (
             <p className="text-[11.5px] text-attention" data-testid="stacked-warning">
-              {above.map((p) => `#${p.number}`).join(", ")} {above.length === 1 ? "is" : "are"} stacked on it: once it is{" "}
-              {effective === "squash" ? "squashed" : "rebased"}, {above.length === 1 ? "that PR still carries" : "they still carry"} its
-              original commits, so GitHub may report conflicts. A merge commit avoids it.
+              {above.map((p) => words.number(p.number)).join(", ")} {above.length === 1 ? "is" : "are"} stacked on it: once it is{" "}
+              {effective === "squash" ? "squashed" : "rebased"}, {above.length === 1 ? `that ${words.short} still carries` : "they still carry"} its
+              original commits, so {words.name} may report conflicts. A merge commit avoids it.
             </p>
           )}
           {error && (
@@ -190,7 +194,7 @@ export function MergeDialog({
   );
 }
 
-/** What GitHub will look at: checks, review, conflicts, draft. */
+/** What the forge will look at: checks, review, conflicts, draft, and what else it reports. */
 function Readiness({ pr }: { pr: PrInfo }) {
   const checks =
     pr.checks === "SUCCESS" ? (
@@ -220,6 +224,7 @@ function Readiness({ pr }: { pr: PrInfo }) {
       {checks}
       {review && <span className={review.tone}>{review.text}</span>}
       {pr.mergeable === "CONFLICTING" && <span className="text-danger">conflicts with {pr.pr_base_branch ?? pr.base_branch}</span>}
+      {pr.merge_blocker && <span className="text-attention">{pr.merge_blocker}</span>}
     </>
   );
 }

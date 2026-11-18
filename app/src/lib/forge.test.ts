@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { changeRequestTerm, forgeName, gitlabConnectingLabel } from "./forge";
+import { changeRequestTerm, forgeName, forgeWords, gitlabConnectingLabel } from "./forge";
 
 describe("the words follow the forge", () => {
   test("GitHub, the default, says PR and pull request", () => {
@@ -19,5 +19,12 @@ describe("the words follow the forge", () => {
     expect(gitlabConnectingLabel(step)).toStartWith("Getting GitLab's connector, 25%");
     expect(gitlabConnectingLabel({ ...step, phase: "signing_in" })).toBe("Signing in…");
     expect(gitlabConnectingLabel({ ...step, error: "bad token" })).toBe("Could not connect GitLab: bad token");
+  });
+
+  test("a change is numbered as its forge does", () => {
+    expect(forgeWords("github").number(12)).toBe("#12");
+    expect(forgeWords("gitlab").number(12)).toBe("!12");
+    expect(forgeWords("gitlab").shorts).toBe("MRs");
+    expect(forgeWords(undefined).long).toBe("pull request");
   });
 });

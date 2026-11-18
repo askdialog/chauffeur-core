@@ -1,11 +1,13 @@
 // The workspace's pull requests, as the app offers to merge them, one at a time.
 
 import type { MergeMethod, PrInfo } from "@chauffeur/protocol";
+import { forgeWords, type ForgeWords } from "./forge";
 
-export const MERGE_METHODS: Array<{ id: MergeMethod; label: string; detail: string }> = [
-  { id: "squash", label: "Squash and merge", detail: "one commit per PR" },
-  { id: "merge", label: "Create a merge commit", detail: "every commit kept" },
-  { id: "rebase", label: "Rebase and merge", detail: "the commits replayed" },
+/** `detail` names a change as its forge does: `one commit per PR` on GitHub, per MR on GitLab. */
+export const MERGE_METHODS: Array<{ id: MergeMethod; label: string; detail: (short: string) => string }> = [
+  { id: "squash", label: "Squash and merge", detail: (short) => `one commit per ${short}` },
+  { id: "merge", label: "Create a merge commit", detail: () => "every commit kept" },
+  { id: "rebase", label: "Rebase and merge", detail: () => "the commits replayed" },
 ];
 
 /** The open PR among `prs` that `pr` is stacked on: the one of its repo whose branch it merges into. */
@@ -25,19 +27,21 @@ export function commonMethods(prs: PrInfo[]): MergeMethod[] {
 
 /** Why `pr` cannot be merged on its own now, or null when it can: it is open and not a draft, it is
  * not stacked on another open PR of `prs` (merged first), its checks pass (or it has none), no
- * review blocks it, it has no conflict and the user may merge into the repo. */
-export function mergeBlocker(pr: PrInfo, prs: PrInfo[]): string | null {
+ * review blocks it, it has no conflict, nothing else the forge reports blocks it, and the user may
+ * merge into the repo. `words` name the forge (GitHub unless the installation is set to GitLab). */
+export function mergeBlocker(pr: PrInfo, prs: PrInfo[], words: ForgeWords = forgeWords("github")): string | null {
   if (pr.state !== "OPEN") return "is not open";
   if (pr.is_draft) return "is a draft";
   const below = stackedOn(pr, prs);
-  if (below) return `stacked on #${below.number}, to merge first`;
+  if (below) return `stacked on ${words.number(below.number)}, to merge first`;
   if (pr.can_merge === false) return "you cannot merge into this repo";
   if (pr.checks === "FAILURE") return "checks failed";
   if (pr.checks === "PENDING") return "checks are running";
   if (pr.review_decision === "CHANGES_REQUESTED") return "changes requested";
   if (pr.review_decision === "REVIEW_REQUIRED") return "review required";
   if (pr.mergeable === "CONFLICTING") return `conflicts with ${pr.pr_base_branch ?? pr.base_branch}`;
-  if (pr.mergeable !== "MERGEABLE") return "GitHub is still checking for conflicts";
+  if (pr.merge_blocker) return pr.merge_blocker;
+  if (pr.mergeable !== "MERGEABLE") return `${words.name} is still checking for conflicts`;
   return null;
 }
 

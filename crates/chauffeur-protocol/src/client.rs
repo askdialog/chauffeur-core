@@ -3453,6 +3453,10 @@ pub struct PrInfo {
     /// open PR; none while unknown.
     #[serde(default)]
     pub can_merge: Option<bool>,
+    /// What else the forge says stands in the way of merging it now, in a few words ("threads to
+    /// resolve"): GitLab's merge status beyond checks, review and conflicts; none otherwise.
+    #[serde(default)]
+    pub merge_blocker: Option<String>,
 }
 
 /// How a pull request is merged.

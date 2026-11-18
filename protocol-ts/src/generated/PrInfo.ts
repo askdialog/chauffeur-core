@@ -44,4 +44,9 @@ merge_methods: Array<MergeMethod>,
  * Whether the user may merge into the repo (write access or more), known once it has an
  * open PR; none while unknown.
  */
-can_merge: boolean | null, };
+can_merge: boolean | null, 
+/**
+ * What else the forge says stands in the way of merging it now, in a few words ("threads to
+ * resolve"): GitLab's merge status beyond checks, review and conflicts; none otherwise.
+ */
+merge_blocker: string | null, };

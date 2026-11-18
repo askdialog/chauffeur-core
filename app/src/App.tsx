@@ -40,10 +40,12 @@ import { sidebarGroups, visibleRows } from "./lib/workspaceOrder";
 
 import { GlobalExtensionView } from "./extensions";
 import { BrandEditor } from "./components/BrandEditor";
+import { refreshGitlab } from "./state/gitlab";
 
 export function App() {
   useEffect(() => {
     startApp();
+    void refreshGitlab();
   }, []);
   useShortcuts();
 

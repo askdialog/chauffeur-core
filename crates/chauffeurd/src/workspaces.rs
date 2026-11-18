@@ -3333,8 +3333,16 @@ pub(crate) fn copy_dir(from: &Path, to: &Path) -> anyhow::Result<()> {
 /// ([`crate::prs::find_pr`]). Through the name the branch was pushed under, only when the
 /// branch's tip is the merged PR's head: the branch then holds nothing that was not merged.
 async fn pr_is_merged(d: &Daemon, git: &Git, worktree: &WorktreeRow) -> bool {
-    let Some((pr, found)) =
-        crate::prs::find_pr(&d.store, git, &d.shell_env, worktree, "merged", "number").await
+    let Some((pr, found)) = crate::prs::find_pr(
+        d.settings.get().forge,
+        &d.store,
+        git,
+        &d.shell_env,
+        worktree,
+        "merged",
+        "number",
+    )
+    .await
     else {
         return false;
     };

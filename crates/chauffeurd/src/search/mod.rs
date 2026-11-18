@@ -346,6 +346,7 @@ impl Search {
             return;
         }
         let git = crate::git::Git::new(d.shell_env.clone());
+        let forge = d.settings.get().forge;
         for _ in 0..LOOKUPS_PER_PASS {
             let Ok(Some(workspace)) = self
                 .blocking(false, |index| {
@@ -364,6 +365,7 @@ impl Search {
                 .filter(|worktree| std::path::Path::new(&worktree.clone_path).is_dir())
             {
                 match crate::prs::find_pr_checked(
+                    forge,
                     &d.store,
                     &git,
                     &d.shell_env,

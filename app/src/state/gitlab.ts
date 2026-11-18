@@ -1,7 +1,7 @@
 // The GitLab an installation set to it goes through, shared by every place that shows its setup.
 
 import { useEffect } from "react";
-import type { GitlabStatus } from "@chauffeur/protocol";
+import type { Forge, GitlabStatus } from "@chauffeur/protocol";
 import { create } from "zustand";
 import { errorMessage } from "@/lib/rpc";
 import { client, loadRepos } from "./app";
@@ -35,4 +35,10 @@ export function useGitlabStatus(): { status: GitlabStatus | null; error: string 
     return () => clearInterval(timer);
   }, [moving]);
   return { status, error };
+}
+
+/** The forge the installation goes through, as last read: GitHub until GitLab's state says
+ *  otherwise. `refreshGitlab` runs at the app's start. */
+export function useForge(): Forge {
+  return useGitlab((s) => (s.status?.enabled ? "gitlab" : "github"));
 }
