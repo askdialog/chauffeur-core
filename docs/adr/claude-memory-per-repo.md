@@ -13,7 +13,7 @@ In V1, chats read the clone's Claude memory without being able to write it. Prop
 
 - At every session start, the sidecar appends to the system prompt the head of the `MEMORY.md` that Claude Code keeps for the clone of the workspace's first repo (the one asked first; decided 2026-11-18), cut as Claude Code cuts it. It presents it as the user's memory, read-only, with the folder's path so that the agent reads its topic files when needed. The folder is read without asking; the agent is told never to write it, and its edit tools are refused there (a shell command is not checked).
 - The workspace's own auto memory does not change: what agents write there never reaches the clone's.
-- Only the first repo's memory is loaded. The generated `CLAUDE.md` gives the path of the other repos' memories, to read when needed (in a later pull request). It is an accepted limit.
+- Only the first repo's memory is loaded. The system prompt gives the path of the other repos' memories, to read when needed, read without asking and refused to edits as the first's (decided 2026-11-18: first planned in the generated `CLAUDE.md`, which is only rewritten when the workspace's structure changes and would have needed a copy of Claude Code's folder key outside the sidecar). It is an accepted limit.
 - A setting turns the sharing off, globally or for one repo, in `~/.chauffeur/settings.toml` (in a later pull request).
 - `CLAUDE_CODE_PROJECT_DIR_NAME` is not used: that variable would move the transcripts too.
 - Claude chats only (decided 2026-11-18): it is Claude Code's memory; Codex and Vibe chats do not get it.
@@ -29,11 +29,12 @@ Once we have seen what agents put in their workspace's memory, a new ADR can ope
 
 ## Consequences
 
-- It ships in steps: the first repo's memory in the system prompt first, then the other repos' paths in the generated `CLAUDE.md`, then the setting that turns it off.
+- It ships in steps: the first repo's memory in the system prompt first, then the other repos' paths, then the setting that turns it off.
 - Every workspace starts with what the user, their terminal and VS Code taught Claude about the repo, always current since it is read again at every session.
 - The clone's memory is meant to change only through the terminal or VS Code: a Chauffeur agent is told not to write it and cannot with its edit tools.
 - What agents learn stays in their workspace's memory and is not read again after archiving, as today.
 - Explorations and design chats read it like other chats.
 - In a workspace with several repos, the memory of the repos after the first is not loaded up front.
+- The read rules come from the sidecar: Claude Code ignores the allow rules of a folder's `.claude/settings.json` until the folder is trusted, and a workspace never is.
 - The import from Claude Code has no memory to copy, and this decision no longer depends on checking `autoMemoryDirectory`.
 - A user who moved their memory with `autoMemoryDirectory` is not followed there.
