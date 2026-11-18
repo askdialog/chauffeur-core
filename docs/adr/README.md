@@ -161,6 +161,7 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [The phone creates a workspace on the Mac](mobile-workspace-creation.md) | 2026-11-15 | accepted |
 | [Reviews starts a fix in a new workspace and records the decision](reviews-fix-with-an-agent.md) | 2026-11-15 | accepted |
 | [Review conversations are read from Reviews, not listed in the sidebar](reviews-without-sidebar-conversations.md) | 2026-11-15 | accepted |
+| [Chats read the Claude memory of their repo](claude-memory-per-repo.md) | 2026-11-16 | accepted |
 | [Reconnect MCP servers directly from their warning](direct-mcp-reconnection.md) | 2026-11-16 | accepted |
 | [Child workspaces have no count limit](unlimited-child-workspaces.md) | 2026-11-16 | accepted |
 | [Telling the owner of comments that do not mention them, after a quiet half hour](untagged-comments-digest.md) | 2026-11-16 | accepted |
