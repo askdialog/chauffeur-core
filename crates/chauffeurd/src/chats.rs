@@ -1072,8 +1072,10 @@ impl ChatManager {
                     .into_owned()
             }),
             brands_dir: brands.as_ref().map(|b| b.root.clone()),
+            // A repo turned off is left out: the first repo left is the one loaded.
             memory_clones: config_repos
                 .iter()
+                .filter(|repo| d.settings.get().clone_claude_memory_of(&repo.repo))
                 .filter_map(|repo| repo.clone_path.as_ref())
                 .map(|clone| clone.display().to_string())
                 .collect(),

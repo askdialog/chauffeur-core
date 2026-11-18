@@ -76,6 +76,10 @@ pub struct UserSettings {
     /// the repo's clone (docs/adr/clone-local-claude-settings.md); `[repos.<name>]` can say
     /// otherwise for one repo.
     pub clone_local_claude_settings: bool,
+    /// A Claude chat starts with the Claude Code memory of the workspace's first repo's clone and
+    /// is pointed at the other repos' (docs/adr/claude-memory-per-repo.md); `[repos.<name>]` can
+    /// say otherwise for one repo.
+    pub clone_claude_memory: bool,
     /// Explicit clone paths and default branches, by repo name.
     pub repos: BTreeMap<String, RepoOverride>,
     /// The app's fonts.
@@ -103,6 +107,14 @@ impl UserSettings {
             .get(repo)
             .and_then(|o| o.clone_local_claude_settings)
             .unwrap_or(self.clone_local_claude_settings)
+    }
+
+    /// Whether Claude chats read `repo`'s clone's Claude Code memory.
+    pub fn clone_claude_memory_of(&self, repo: &str) -> bool {
+        self.repos
+            .get(repo)
+            .and_then(|o| o.clone_claude_memory)
+            .unwrap_or(self.clone_claude_memory)
     }
 }
 
@@ -409,6 +421,8 @@ pub struct RepoOverride {
     pub env: RepoEnv,
     /// Over the global `clone_local_claude_settings`, for this repo.
     pub clone_local_claude_settings: Option<bool>,
+    /// Over the global `clone_claude_memory`, for this repo.
+    pub clone_claude_memory: Option<bool>,
     /// `[repos.<name>.sessions.<session>]`, over the repo's own declarations.
     pub sessions: BTreeMap<String, SessionDecl>,
 }
@@ -532,6 +546,7 @@ impl Default for UserSettings {
             linear_enabled: true,
             linear_start_tickets: true,
             clone_local_claude_settings: true,
+            clone_claude_memory: true,
             repos: BTreeMap::new(),
             sessions: BTreeMap::new(),
             appearance: AppearanceSettings::default(),
@@ -957,6 +972,34 @@ mod tests {
         assert_eq!(configured.default_repos, ["my-app"]);
         assert_eq!(configured.clone_roots, ["~/code"]);
         assert_eq!(configured.workers.project, "my-cloud-project");
+    }
+
+    #[test]
+    fn a_clones_claude_memory_is_read_unless_turned_off_globally_or_for_the_repo() {
+        let default: UserSettings = toml::from_str("").unwrap();
+        assert!(default.clone_claude_memory_of("web"));
+
+        let settings: UserSettings = toml::from_str(
+            r#"clone_claude_memory = false
+                [repos.web]
+                clone_claude_memory = true
+                [repos.api]
+                path = "~/code/api"
+            "#,
+        )
+        .unwrap();
+        assert!(settings.clone_claude_memory_of("web"));
+        assert!(!settings.clone_claude_memory_of("api"));
+        assert!(!settings.clone_claude_memory_of("docs"));
+
+        let settings: UserSettings = toml::from_str(
+            r#"[repos.web]
+                clone_claude_memory = false
+            "#,
+        )
+        .unwrap();
+        assert!(!settings.clone_claude_memory_of("web"));
+        assert!(settings.clone_claude_memory_of("api"));
     }
 
     #[test]

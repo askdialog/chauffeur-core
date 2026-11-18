@@ -3014,6 +3014,38 @@ async fn claude_chats_are_given_the_clones_local_allow_rules_as_they_are_at_sess
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repo_whose_clone_memory_is_turned_off_is_left_out_the_next_one_loaded() {
+    // `extra` lands in `[repos.repo-b]`.
+    let f = fixture_with(47460, "clone_claude_memory = false");
+    let d = &f.daemon;
+    let log = f.root.join("sidecar.log");
+    d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            repos: vec!["repo-b".into(), "repo-a".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let chat = new_chat(d, &ws.id).await;
+    d.chats.send(&chat.id, "What do I know?").await.unwrap();
+    let start: serde_json::Value = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|call| call["method"] == "session.start" && call["params"]["chat_id"] == chat.id)
+        .unwrap();
+    let clone_a = d.settings.get().repos["repo-a"].path.clone().unwrap();
+    assert_eq!(
+        start["params"]["memory_clones"],
+        serde_json::json!([clone_a]),
+        "{start}"
+    );
+}
+
 async fn new_chat(d: &Daemon, workspace: &str) -> chauffeur_protocol::model::ChatInfo {
     d.chats
         .create(CreateChatParams {
