@@ -1,7 +1,7 @@
-// The user's own Claude Code auto memory of the workspace's first repo, read from its clone
+// The user's own Claude Code auto memory of the workspace's repos, read from their clones
 // (docs/adr/claude-memory-per-repo.md): a session started in the workspace folder, not a repo, has
-// a memory of its own and would never see what the user taught Claude in the clone. Read only:
-// nothing here writes to it.
+// a memory of its own and would never see what the user taught Claude in a clone. The first
+// repo's is loaded, the others' pointed at. Read only: nothing here writes to them.
 
 import { open, realpath } from "node:fs/promises";
 import { join } from "node:path";
@@ -80,8 +80,14 @@ export async function readCloneMemories(clones: string[], env: Record<string, st
   return { first, others: others.filter((memory) => memory !== undefined) };
 }
 
+/** What the session is told of its memories: the first loaded, the others pointed at; none without any. */
+export function memoriesPrompt({ first, others }: CloneMemories): string | undefined {
+  const parts = [first && memoryPrompt(first), others.length > 0 && otherMemoriesPrompt(others)].filter(Boolean);
+  return parts.length > 0 ? parts.join("\n\n") : undefined;
+}
+
 /** What the session is told of the memory: whose it is, that it is read-only, and its index. */
-export function memoryPrompt(memory: CloneMemory): string {
+function memoryPrompt(memory: CloneMemory): string {
   const cut = memory.cut ? " (cut as Claude Code loads it: read the file for the rest)" : "";
   return [
     `The user's own Claude Code memory of the repo cloned at \`${memory.clone}\`: what they taught Claude while working in that clone, kept in \`${memory.dir}\`. Read-only: never write to that folder; what is worth remembering from this session goes to your own memory, where Claude Code keeps it. Its index, MEMORY.md, follows${cut}; read the other files of that folder when the work touches them.`,
@@ -91,7 +97,7 @@ export function memoryPrompt(memory: CloneMemory): string {
 }
 
 /** What the session is told of the other repos' memories: where they are, to read when needed. */
-export function otherMemoriesPrompt(others: CloneMemory[]): string {
+function otherMemoriesPrompt(others: CloneMemory[]): string {
   return [
     "The user's own Claude Code memory of the workspace's other repos, read-only and not loaded: when the work touches one of them, read its folder's MEMORY.md, then the files it points to. Never write to these folders.",
     ...others.map((memory) => `- \`${memory.clone}\`: \`${memory.dir}\``),

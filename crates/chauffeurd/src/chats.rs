@@ -1083,9 +1083,10 @@ impl ChatManager {
             // The user's local allow rules reach neither a design chat, which starts in its own
             // folder where the workspace's generated settings do not apply, nor an exploration,
             // read-only whatever the user allows elsewhere.
-            local_allow: match design_dir.is_none() && !workspace.explore {
-                true => crate::genconfig::local_allow_rules(&config_repos),
-                false => Vec::new(),
+            local_allow: if design_dir.is_none() && !workspace.explore {
+                crate::genconfig::local_allow_rules(&config_repos)
+            } else {
+                Vec::new()
             },
             resume_session_id: chat.agent_session_id.clone(),
             env,
@@ -1097,13 +1098,13 @@ impl ChatManager {
                 self.subagent_notice(&chat).as_deref(),
                 // Codex and Vibe keep their plan natively; Claude, with Chauffeur's tool.
                 (chat.agent == AgentKind::Claude && design_dir.is_none()).then_some(PLAN_NOTICE),
-                &d.settings.get(),
+                &settings,
             ),
             design_dir,
             prompt,
             prompt_attachments: attachments,
             jev: d.jev.session_params(&d.store),
-            prompt_suggestions: d.settings.get().prompt_suggestions,
+            prompt_suggestions: settings.prompt_suggestions,
             always_allow: always_allowed(&d.store, &chat.id),
             // One level of delegation: a delegated chat answers its parent, it delegates nothing.
             delegate: chat.kind == ChatKind::Chat && chat.parent_chat.is_none(),

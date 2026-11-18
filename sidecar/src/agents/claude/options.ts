@@ -16,7 +16,7 @@ import { RpcError } from "../../rpc/peer.ts";
 import { SIDECAR_VERSION } from "../../version.ts";
 import type { Hooks } from "./hooks.ts";
 import { USER_JEV_PLUGIN } from "./jev.ts";
-import { type CloneMemories, memoryPrompt, otherMemoriesPrompt } from "./memory.ts";
+import { type CloneMemories, memoriesPrompt } from "./memory.ts";
 import { DELEGATE_TOOL } from "../delegate-tool.ts";
 import { DESIGN_BROWSER, designBrowserCommand } from "../design-browser.ts";
 import { ADD_REPO_TOOL, CHAUFFEUR_TOOLS, LIST_REPOS_TOOL, UPDATE_PLAN_TOOL } from "../repo-tools.ts";
@@ -266,9 +266,8 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
     options.mcpServers = { [CHAUFFEUR_TOOLS]: deps.repoTools };
     addRules(settings, "allow", CHAUFFEUR_TOOL_RULES);
   }
-  // The clone's memory folder (docs/adr/claude-memory-per-repo.md): its topic files read without
-  // asking, though it sits outside the working directories; never written from a workspace.
-  // And the other repos' memory folders it is pointed at: granted here, as Claude Code ignores the
+  // The clones' memory folders (docs/adr/claude-memory-per-repo.md), outside the working
+  // directories: read without asking and never written; granted here, as Claude Code ignores the
   // allow rules of a folder never trusted, as a workspace is.
   const { first, others = [] } = deps.memories ?? {};
   for (const { dir } of [...(first ? [first] : []), ...others]) {
@@ -284,13 +283,7 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
   }
   if (Object.keys(settings).length > 0) options.settings = settings;
   if (params.resume_session_id) options.resume = params.resume_session_id;
-  const append = [
-    params.append_system_prompt,
-    first && memoryPrompt(first),
-    others.length > 0 && otherMemoriesPrompt(others),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const append = [params.append_system_prompt, deps.memories && memoriesPrompt(deps.memories)].filter(Boolean).join("\n\n");
   if (append) options.systemPrompt = { type: "preset", preset: "claude_code", append };
   if (deps.executable) options.pathToClaudeCodeExecutable = deps.executable;
   return options;
