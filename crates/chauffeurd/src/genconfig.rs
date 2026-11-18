@@ -260,7 +260,7 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
                     {
                         let rule = folder.as_deref().map_or_else(
                             || rule.clone(),
-                            |folder| anchor_rule_at_repo(rule, folder),
+                            |folder| anchor_rule_at_repo(rule, key, folder),
                         );
                         if !list.contains(&rule) {
                             list.push(rule);
@@ -295,13 +295,15 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
 }
 
 /// Claude Code resolves the path of a `Read(…)` or `Edit(…)` rule (the only rules with paths)
-/// from the session's working directory: a `/src/**` path is anchored there, a `src/**`,
-/// `./src/**` or `*.ts` path matches at any depth below it. A repo's rules were written for a
-/// session started in the repo; merged here, at the workspace root, the first would miss the repo
-/// and the others would reach every repo. They are rewritten to stay in the repo's `folder`:
-/// `/src/**` becomes `/web/src/**`, `src/**` becomes `/web/**/src/**`. Absolute (`//`) and home
-/// (`~`) paths, and rules without a path, are kept.
-fn anchor_rule_at_repo(rule: &Value, folder: &str) -> Value {
+/// from the session's working directory: a `/src/**` path is anchored there. A path without a
+/// leading `/` (`./` aside) is read as in a `.gitignore` for an allow rule, anchored there too when
+/// a `/` is left before its end (`src/**`), at any depth below it otherwise (`*.ts`, `dist/`); a
+/// deny or ask rule matches it at any depth. A repo's rules were written for a session started in
+/// the repo; merged here, at the workspace root, the anchored ones would miss the repo and the
+/// others would reach every repo. They are rewritten to keep their reach inside the repo's
+/// `folder`: `/src/**` becomes `/web/src/**`, `*.ts` becomes `/web/**/*.ts`. Absolute (`//`) and
+/// home (`~`) paths, and rules without a path, are kept.
+fn anchor_rule_at_repo(rule: &Value, kind: &str, folder: &str) -> Value {
     let Some((tool, path)) = rule
         .as_str()
         .and_then(|text| text.strip_suffix(')'))
@@ -313,12 +315,20 @@ fn anchor_rule_at_repo(rule: &Value, folder: &str) -> Value {
     if path.starts_with("//") || path.starts_with('~') {
         return rule.clone();
     }
-    match path.strip_prefix('/') {
-        Some(anchored) => json!(format!("{tool}(/{folder}/{anchored})")),
+    let (path, anchored) = match path.strip_prefix('/') {
+        Some(path) => (path, true),
         None => {
-            let floating = path.strip_prefix("./").unwrap_or(path);
-            json!(format!("{tool}(/{folder}/**/{floating})"))
+            let path = path.strip_prefix("./").unwrap_or(path);
+            (
+                path,
+                kind == "allow" && path.trim_end_matches('/').contains('/'),
+            )
         }
+    };
+    if anchored {
+        json!(format!("{tool}(/{folder}/{path})"))
+    } else {
+        json!(format!("{tool}(/{folder}/**/{path})"))
     }
 }
 
@@ -453,10 +463,11 @@ mod tests {
         for (repo, rules) in [
             (
                 &web,
-                r#"{"allow":["Edit(/src/**)","Read(//etc/hosts)","Read(~/notes/**)","Edit(src/**)",
-                    "Read(./docs/**)","Edit(*.ts)","Bash(pnpm test *)","WebFetch","mcp__linear"],
-                   "ask":["Read(/config/*.json)"],
-                   "deny":["Edit(/secrets/**)"]}"#,
+                r#"{"allow":["Edit(/src/**)","Read(//etc/hosts)","Read(~/notes/**)","Edit(lib/**)",
+                    "Read(./docs/**)","Edit(*.ts)","Edit(./*.md)","Edit(dist/)",
+                    "Bash(pnpm test *)","WebFetch","mcp__linear"],
+                   "ask":["Read(/config/*.json)","Read(config/**)"],
+                   "deny":["Edit(/secrets/**)","Edit(./secrets/**)"]}"#,
             ),
             (
                 &api,
@@ -500,19 +511,28 @@ mod tests {
                 "Edit(/web/src/**)",
                 "Read(//etc/hosts)",
                 "Read(~/notes/**)",
-                "Edit(/web/**/src/**)",
-                "Read(/web/**/docs/**)",
+                "Edit(/web/lib/**)",
+                "Read(/web/docs/**)",
                 "Edit(/web/**/*.ts)",
+                "Edit(/web/**/*.md)",
+                "Edit(/web/**/dist/)",
                 "Bash(pnpm test *)",
                 "WebFetch",
                 "mcp__linear",
                 "Edit(/api/**/*.ts)"
             ])
         );
-        assert_eq!(permissions["ask"], json!(["Read(/web/config/*.json)"]));
+        assert_eq!(
+            permissions["ask"],
+            json!(["Read(/web/config/*.json)", "Read(/web/**/config/**)"])
+        );
         assert_eq!(
             permissions["deny"],
-            json!(["Edit(/web/secrets/**)", "Edit(/api/secrets/**)"])
+            json!([
+                "Edit(/web/secrets/**)",
+                "Edit(/web/**/secrets/**)",
+                "Edit(/api/secrets/**)"
+            ])
         );
     }
 
