@@ -81,7 +81,7 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [0039. Changing a chat's provider with confirmation](0039-changing-a-chats-provider.md) | 2026-10-29 | accepted |
 | [0040. Render code review comments in chat](0040-code-comments.md) | 2026-10-29 | accepted |
 | [0041. Archived search uses the archive date](0041-archive-search-order.md) | 2026-10-29 | accepted |
-| [0042. PostgreSQL inside Chauffeur](0042-postgresql-client.md) | 2026-10-29 | accepted |
+| [0042. PostgreSQL inside Chauffeur](0042-postgresql-client.md) | 2026-10-29 | where connections are available superseded by [database-connections-for-every-workspace](database-connections-for-every-workspace.md) |
 | [0043. Touch ID before non-SELECT SQL](0043-database-touch-id.md) | 2026-10-29 | accepted |
 | [0044. Fall back to Codex for workspace titles](0044-title-provider-fallback.md) | 2026-10-29 | accepted |
 | [0047. A chat started by `delegate` is a delegated chat](0047-delegated-chats.md) | 2026-10-29 | accepted |
@@ -169,3 +169,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [A delegated chat closes once it has answered, unless the user took part in it](delegated-chats-close-once-answered.md) | 2026-11-17 | accepted |
 | [Update and restart in one step, at once or once no agent works](restart-when-idle.md) | 2026-11-17 | accepted |
 | [Check for Updates… in the app menu brings the update card back](update-from-the-menu.md) | 2026-11-17 | accepted |
+| [Database connections belong to Chauffeur, not to a workspace](database-connections-for-every-workspace.md) | 2026-11-18 | accepted |

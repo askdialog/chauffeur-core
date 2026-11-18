@@ -7,8 +7,9 @@ use std::io::Read;
 
 #[derive(Subcommand)]
 pub enum Action {
-    /// List global connections and those of this workspace (all when omitted).
+    /// List saved connections: every workspace has them all.
     List {
+        /// Ignored: kept for scripts written when connections could belong to one workspace.
         #[arg(long)]
         workspace: Option<String>,
     },

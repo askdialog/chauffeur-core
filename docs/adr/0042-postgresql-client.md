@@ -1,7 +1,7 @@
 # 0042. PostgreSQL inside Chauffeur
 
 - **Date:** 2026-10-29
-- **Status:** accepted
+- **Status:** where connections are available superseded by [database-connections-for-every-workspace](database-connections-for-every-workspace.md)
 
 ## Context
 
