@@ -1044,8 +1044,8 @@ impl ChatManager {
         }
         crate::ollama::codex_env(&d.paths.home, chat.agent, chat.model.as_deref(), &mut env)?;
         let brands = crate::brands::of_chat(&d, &chat);
-        // The workspace's repos, for a Claude session's clone memories and local allow rules.
         let settings = d.settings.get();
+        // The workspace's repos, for a Claude session's clone memories and local allow rules.
         let config_repos = match chat.agent {
             AgentKind::Claude => d.workspaces.config_repos(&workspace.id)?,
             AgentKind::Codex | AgentKind::Vibe => Vec::new(),

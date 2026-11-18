@@ -269,7 +269,7 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
   // The clones' memory folders (docs/adr/claude-memory-per-repo.md), outside the working
   // directories: read without asking and never written; granted here, as Claude Code ignores the
   // allow rules of a folder never trusted, as a workspace is.
-  const { first, others = [] } = deps.memories ?? {};
+  const { first, others } = deps.memories ?? { others: [] };
   for (const { dir } of [...(first ? [first] : []), ...others]) {
     addRules(settings, "allow", folderRules("Read", dir));
     addRules(settings, "deny", folderRules("Edit", dir));
