@@ -305,12 +305,12 @@ export function Toasts() {
             t.level === "error" ? "border-danger/40 bg-[#2a1617] text-[#f7b4b4]" : "border-line-strong bg-raised text-fg",
           )}
         >
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 leading-5">
             <span className="break-words selectable">{t.message}</span>
             {t.action && <button className="ml-2 underline underline-offset-2" onClick={() => { t.action?.run(); dismissToast(t.id); }}>{t.action.label}</button>}
             {t.report && <ToastReport toast={t} />}
           </div>
-          <button onClick={() => dismissToast(t.id)} className="text-faint hover:text-fg" aria-label="Dismiss">
+          <button onClick={() => dismissToast(t.id)} className="flex h-5 w-5 shrink-0 items-center justify-center text-faint hover:text-fg" aria-label="Dismiss">
             <X size={12} />
           </button>
         </div>
