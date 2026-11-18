@@ -1044,6 +1044,11 @@ impl ChatManager {
         }
         crate::ollama::codex_env(&d.paths.home, chat.agent, chat.model.as_deref(), &mut env)?;
         let brands = crate::brands::of_chat(&d, &chat);
+        // The repos whose clone memories and local allow rules a Claude session gets.
+        let config_repos = match chat.agent {
+            AgentKind::Claude => d.workspaces.config_repos(&workspace.id)?,
+            AgentKind::Codex | AgentKind::Vibe => Vec::new(),
+        };
         let params = SessionStartParams {
             launch_id: None,
             chat_id: chat.id.clone(),
@@ -1067,16 +1072,16 @@ impl ChatManager {
                     .into_owned()
             }),
             brands_dir: brands.as_ref().map(|b| b.root.clone()),
-            memory_clones: match chat.agent {
-                AgentKind::Claude => workspace_clones(&d.store, &workspace.id)?,
-                AgentKind::Codex | AgentKind::Vibe => Vec::new(),
-            },
-            local_allow: match chat.agent {
-                AgentKind::Claude => crate::genconfig::local_allow_rules(
-                    std::path::Path::new(&workspace.path),
-                    &d.workspaces.config_repos(&workspace.id)?,
-                ),
-                AgentKind::Codex | AgentKind::Vibe => Vec::new(),
+            memory_clones: config_repos
+                .iter()
+                .filter_map(|repo| repo.clone_path.as_ref())
+                .map(|clone| clone.display().to_string())
+                .collect(),
+            // The user's local allow rules reach neither a design chat, which starts outside the
+            // workspace, nor an exploration, read-only whatever the user allows elsewhere.
+            local_allow: match design_dir.is_none() && !workspace.explore {
+                true => crate::genconfig::local_allow_rules(&config_repos),
+                false => Vec::new(),
             },
             resume_session_id: chat.agent_session_id.clone(),
             env,
@@ -4156,16 +4161,6 @@ pub fn repo_dirs(workspace: &WorkspaceInfo) -> Vec<String> {
         .filter(|w| w.origin == WorktreeOrigin::Workspace && !w.removed)
         .map(|w| w.path.clone())
         .collect()
-}
-
-/// The clones of the workspace's repos, as the workspace lists them (the first asked first).
-fn workspace_clones(store: &crate::store::Store, workspace: &str) -> Result<Vec<String>> {
-    Ok(store
-        .worktrees_of(workspace)?
-        .into_iter()
-        .filter(|w| w.origin == WorktreeOrigin::Workspace && !w.removed)
-        .map(|w| w.clone_path)
-        .collect())
 }
 
 /// Whether a status change deserves the user's attention (an unread workspace): a turn ended or

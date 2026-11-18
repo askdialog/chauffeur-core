@@ -243,11 +243,7 @@ fn merged_settings(config: &WorkspaceConfig, notices: &mut Vec<LocalSettingsNoti
             .ok()
             .map(|folder| folder.display().to_string())
             .filter(|folder| !folder.is_empty());
-        let clone_paths = repo
-            .clone_path
-            .as_deref()
-            .map(|clone| clone_spellings(clone, home.as_deref()))
-            .unwrap_or_default();
+        let clone_paths = clone_paths(repo, home.as_deref());
         let mut report = LocalSettingsReport::default();
         for (file, from_clone) in settings_files(repo) {
             let Some(settings) = read_json(&file) else {
@@ -358,60 +354,60 @@ fn merged_settings(config: &WorkspaceConfig, notices: &mut Vec<LocalSettingsNoti
     Value::Object(out)
 }
 
-/// The allow rules of each repo's `.claude/settings.local.json` (the clone's when the worktree has
-/// none and the user did not turn it off), as the merge keeps them (anchored at the repo, those
-/// naming the clone left out), with each path made absolute. The user wrote them, and Claude Code
-/// ignores the allow rules of a folder never trusted, as a workspace is: the sidecar grants them as
-/// flag settings, where a `/` path would be read from elsewhere than the workspace.
-pub fn local_allow_rules(root: &Path, repos: &[RepoEntry]) -> Vec<String> {
+/// The allow rules of each repo's clone's `.claude/settings.local.json`, when the merge reads it
+/// (the worktree has none and the user did not turn it off), those naming the clone left out, each
+/// path anchored at the worktree's absolute path (as named, and resolved). The user wrote them, and
+/// Claude Code ignores the allow rules of a folder never trusted, as a workspace is: the sidecar
+/// grants them as flag settings, where a `/` path would be read from elsewhere than the workspace.
+/// A worktree's own local file, which a repo may commit or an agent write, is left to that trust.
+pub fn local_allow_rules(repos: &[RepoEntry]) -> Vec<String> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut rules = Vec::new();
     for repo in repos {
-        let [_, (file, _)] = settings_files(repo);
+        let [_, (file, from_clone)] = settings_files(repo);
+        if !from_clone {
+            continue;
+        }
         let Some(settings) = read_json(&file) else {
             continue;
         };
-        let folder = repo
-            .path
-            .strip_prefix(root)
-            .ok()
-            .map(|folder| folder.display().to_string())
-            .filter(|folder| !folder.is_empty());
-        let clone_paths = repo
-            .clone_path
-            .as_deref()
-            .map(|clone| clone_spellings(clone, home.as_deref()))
-            .unwrap_or_default();
+        let clone_paths = clone_paths(repo, home.as_deref());
+        let mut folders = vec![repo.path.clone()];
+        if let Ok(real) = repo.path.canonicalize()
+            && real != repo.path
+        {
+            folders.push(real);
+        }
         for rule in settings["permissions"]["allow"]
             .as_array()
             .into_iter()
             .flatten()
         {
-            let Some(text) = rule.as_str() else {
-                continue;
-            };
-            if names_path(text, &clone_paths) {
+            if rule
+                .as_str()
+                .is_none_or(|text| names_path(text, &clone_paths))
+            {
                 continue;
             }
-            let anchored = folder.as_deref().map_or_else(
-                || rule.clone(),
-                |folder| anchor_rule_at_repo(rule, "allow", folder),
-            );
-            let Some(anchored) = anchored.as_str() else {
-                continue;
-            };
-            let absolute = match anchored.split_once("(/") {
-                Some((tool, path)) if !path.starts_with('/') => {
-                    format!("{tool}(/{}/{path}", root.display())
+            for folder in &folders {
+                let anchored = anchor_rule_at_repo(rule, "allow", &folder.display().to_string());
+                if let Some(text) = anchored.as_str()
+                    && !rules.iter().any(|rule| rule == text)
+                {
+                    rules.push(text.to_string());
                 }
-                _ => anchored.to_string(),
-            };
-            if !rules.contains(&absolute) {
-                rules.push(absolute);
             }
         }
     }
     rules
+}
+
+/// How a rule can name the repo's clone, none without a clone.
+fn clone_paths(repo: &RepoEntry, home: Option<&Path>) -> Vec<String> {
+    repo.clone_path
+        .as_deref()
+        .map(|clone| clone_spellings(clone, home))
+        .unwrap_or_default()
 }
 
 /// Claude Code resolves the path of a `Read(…)` or `Edit(…)` rule (the only rules with paths)
@@ -1023,7 +1019,7 @@ mod tests {
     }
 
     #[test]
-    fn the_users_local_allow_rules_are_given_with_absolute_paths_the_repos_own_are_not() {
+    fn only_the_clones_local_allow_rules_are_given_anchored_at_the_worktrees_absolute_path() {
         let root = tempfile::tempdir().unwrap();
         let clone = tempfile::tempdir().unwrap();
         let worktree = root.path().join("web");
@@ -1037,8 +1033,8 @@ mod tests {
             clone.path(),
             "settings.local.json",
             &format!(
-                r#"{{"permissions":{{"allow":["Bash(make)","Edit(/src/**)","Edit(*.md)","Read(~/notes/**)","Edit(/{c}/**)"],
-                    "deny":["Edit(/secrets/**)"]}}}}"#
+                r#"{{"permissions":{{"allow":["Bash(make)","Bash(/usr/bin/make:*)","Edit(/src/**)","Edit(*.md)",
+                    "Read(~/notes/**)","Edit(/{c}/**)"],"deny":["Edit(/secrets/**)"]}}}}"#
             ),
         );
         let mut repos = [RepoEntry {
@@ -1046,26 +1042,32 @@ mod tests {
             read_clone_local_settings: true,
             ..repo("web", &worktree)
         }];
-        let r = root.path().display();
-        assert_eq!(
-            local_allow_rules(root.path(), &repos),
-            [
-                "Bash(make)".to_string(),
-                format!("Edit(/{r}/web/src/**)"),
-                format!("Edit(/{r}/web/**/*.md)"),
-                "Read(~/notes/**)".to_string(),
-            ]
-        );
+        // The worktree as named and, through a symlink (macOS's /var), as resolved.
+        let mut spellings = vec![worktree.display().to_string()];
+        let real = worktree.canonicalize().unwrap().display().to_string();
+        if real != spellings[0] {
+            spellings.push(real);
+        }
+        let mut expected = vec![
+            "Bash(make)".to_string(),
+            "Bash(/usr/bin/make:*)".to_string(),
+        ];
+        expected.extend(spellings.iter().map(|w| format!("Edit(/{w}/src/**)")));
+        expected.extend(spellings.iter().map(|w| format!("Edit(/{w}/**/*.md)")));
+        expected.push("Read(~/notes/**)".to_string());
+        assert_eq!(local_allow_rules(&repos), expected);
 
-        // The worktree's own local file wins, and is read even with the clone's turned off.
+        repos[0].read_clone_local_settings = false;
+        assert!(local_allow_rules(&repos).is_empty());
+        // A worktree's own local file (committed by a repo, or written by an agent) is no user's
+        // grant: left to Claude Code's trust, as in the terminal.
+        repos[0].read_clone_local_settings = true;
         claude_file(
             &worktree,
             "settings.local.json",
-            r#"{"permissions":{"allow":["Bash(lint)"]}}"#,
+            r#"{"permissions":{"allow":["Bash(*)"]}}"#,
         );
-        assert_eq!(local_allow_rules(root.path(), &repos), ["Bash(lint)"]);
-        repos[0].read_clone_local_settings = false;
-        assert_eq!(local_allow_rules(root.path(), &repos), ["Bash(lint)"]);
+        assert!(local_allow_rules(&repos).is_empty());
     }
 
     #[test]

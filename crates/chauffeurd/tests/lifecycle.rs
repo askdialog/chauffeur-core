@@ -2939,38 +2939,49 @@ async fn claude_sessions_are_given_their_repos_clones_to_read_their_memories_the
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn claude_sessions_are_given_the_users_local_allow_rules_with_absolute_paths() {
+async fn claude_chats_are_given_the_clones_local_allow_rules_as_they_are_at_session_start() {
+    use chauffeur_protocol::model::ChatKind;
+
     let f = fixture(47450);
     let d = &f.daemon;
     let log = f.root.join("sidecar.log");
     d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
     let clone = PathBuf::from(d.settings.get().repos["repo-b"].path.clone().unwrap());
-    std::fs::create_dir_all(clone.join(".claude")).unwrap();
-    std::fs::write(
-        clone.join(".claude/settings.local.json"),
-        r#"{"permissions":{"allow":["Bash(make)","Edit(/src/**)"]}}"#,
-    )
-    .unwrap();
-    let ws = d
-        .workspaces
-        .create(CreateWorkspaceParams {
-            repos: vec!["repo-b".into()],
-            ..Default::default()
-        })
-        .await
-        .unwrap()
-        .workspace;
-    // Granted from the clone's file as it is when the session starts.
-    std::fs::write(
-        clone.join(".claude/settings.local.json"),
-        r#"{"permissions":{"allow":["Bash(make)","Edit(/src/**)","Bash(lint)"]}}"#,
-    )
-    .unwrap();
-    for agent in [AgentKind::Claude, AgentKind::Codex] {
+    let local = |rules: &str| {
+        std::fs::create_dir_all(clone.join(".claude")).unwrap();
+        std::fs::write(
+            clone.join(".claude/settings.local.json"),
+            format!(r#"{{"permissions":{{"allow":{rules}}}}}"#),
+        )
+        .unwrap();
+    };
+    local(r#"["Bash(make)"]"#);
+    let mut created = Vec::new();
+    for explore in [false, true] {
+        let ws = d
+            .workspaces
+            .create(CreateWorkspaceParams {
+                repos: vec!["repo-b".into()],
+                explore,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .workspace;
+        created.push(ws.id);
+    }
+    local(r#"["Bash(make)","Bash(lint)"]"#);
+    let (workspace, exploration) = (&created[0], &created[1]);
+    for (ws, agent, kind, granted) in [
+        (workspace, AgentKind::Claude, ChatKind::Chat, true),
+        (workspace, AgentKind::Claude, ChatKind::Design, false),
+        (workspace, AgentKind::Codex, ChatKind::Chat, false),
+        (exploration, AgentKind::Claude, ChatKind::Chat, false),
+    ] {
         let chat = d
             .chats
             .create(CreateChatParams {
-                workspace: ws.id.clone(),
+                workspace: ws.clone(),
                 agent: Some(agent),
                 model: None,
                 effort: None,
@@ -2979,7 +2990,7 @@ async fn claude_sessions_are_given_the_users_local_allow_rules_with_absolute_pat
                 prompt: None,
                 images: None,
                 title: None,
-                kind: None,
+                kind: Some(kind),
                 source_chat: None,
             })
             .await
@@ -2992,17 +3003,13 @@ async fn claude_sessions_are_given_the_users_local_allow_rules_with_absolute_pat
             .find(|call| call["method"] == "session.start" && call["params"]["chat_id"] == chat.id)
             .unwrap();
         let rules = &start["params"]["local_allow"];
-        match agent {
-            AgentKind::Claude => assert_eq!(
+        match granted {
+            true => assert_eq!(
                 rules,
-                &serde_json::json!([
-                    "Bash(make)",
-                    format!("Edit(/{}/repo-b/src/**)", ws.path),
-                    "Bash(lint)"
-                ]),
+                &serde_json::json!(["Bash(make)", "Bash(lint)"]),
                 "{start}"
             ),
-            _ => assert!(rules.is_null(), "{start}"),
+            false => assert!(rules.is_null(), "{start}"),
         }
     }
 }

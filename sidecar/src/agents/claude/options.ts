@@ -256,10 +256,10 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
   if (params.brands_dir && !params.design_dir) {
     addRules(settings, "allow", folderRules("Read", params.brands_dir));
   }
-  // The allow rules of the repos' local Claude settings, the user's own: Claude Code ignores the
-  // allow rules of a folder never trusted, as a workspace is. Not in a design chat, which starts in
-  // its own folder and never reads the workspace's settings.
-  if (params.local_allow && !params.design_dir) addRules(settings, "allow", params.local_allow);
+  // The allow rules of the clones' local Claude settings, the user's own (the daemon gives them to
+  // a workspace's chats only): Claude Code ignores the allow rules of a folder never trusted, as a
+  // workspace is.
+  if (params.local_allow) addRules(settings, "allow", params.local_allow);
   // The repo tools (story 48), never in a design chat: allowed here so that neither a mode that asks
   // nor auto mode's classifier stands between the agent and `add_repo`'s own question.
   if (deps.repoTools && !params.design_dir) {
