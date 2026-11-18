@@ -666,9 +666,9 @@ pub struct SessionStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub brands_dir: Option<String>,
-    /// The clones of the workspace's repos, the first asked first, given to a Claude chat: its
-    /// session starts with the first one's Claude Code memory and is pointed at the others', all
-    /// read-only (docs/adr/claude-memory-per-repo.md).
+    /// The clones of the workspace's repos whose Claude memory the user did not turn off, the first
+    /// asked first, given to a Claude chat: its session starts with the first one's Claude Code
+    /// memory and is pointed at the others', all read-only (docs/adr/claude-memory-per-repo.md).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<String>>", optional)]
     pub memory_clones: Vec<String>,

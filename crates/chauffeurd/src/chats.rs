@@ -1044,7 +1044,8 @@ impl ChatManager {
         }
         crate::ollama::codex_env(&d.paths.home, chat.agent, chat.model.as_deref(), &mut env)?;
         let brands = crate::brands::of_chat(&d, &chat);
-        // The repos whose clone memories and local allow rules a Claude session gets.
+        // The workspace's repos, for a Claude session's clone memories and local allow rules.
+        let settings = d.settings.get();
         let config_repos = match chat.agent {
             AgentKind::Claude => d.workspaces.config_repos(&workspace.id)?,
             AgentKind::Codex | AgentKind::Vibe => Vec::new(),
@@ -1075,7 +1076,7 @@ impl ChatManager {
             // A repo turned off is left out: the first repo left is the one loaded.
             memory_clones: config_repos
                 .iter()
-                .filter(|repo| d.settings.get().clone_claude_memory_of(&repo.repo))
+                .filter(|repo| settings.clone_claude_memory_of(&repo.repo))
                 .filter_map(|repo| repo.clone_path.as_ref())
                 .map(|clone| clone.display().to_string())
                 .collect(),

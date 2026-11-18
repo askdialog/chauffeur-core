@@ -2828,14 +2828,7 @@ async fn both_agents_receive_chauffeur_reply_and_design_instructions() {
                 .send(&chat.id, "Which PR can I merge?")
                 .await
                 .unwrap();
-            let starts = std::fs::read_to_string(&log).unwrap();
-            let start: serde_json::Value = starts
-                .lines()
-                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-                .find(|call| {
-                    call["method"] == "session.start" && call["params"]["chat_id"] == chat.id
-                })
-                .unwrap();
+            let start = session_start(&log, &chat.id);
             let prompt = start["params"]["append_system_prompt"].as_str().unwrap();
             assert!(prompt.contains("clickable Markdown link"), "{start}");
             assert!(prompt.contains("tables and summaries"), "{start}");
@@ -2866,6 +2859,16 @@ async fn both_agents_receive_chauffeur_reply_and_design_instructions() {
             }
         }
     }
+}
+
+/// The `session.start` the fake sidecar logged for `chat`.
+fn session_start(log: &Path, chat: &str) -> serde_json::Value {
+    std::fs::read_to_string(log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|call| call["method"] == "session.start" && call["params"]["chat_id"] == chat)
+        .unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2916,14 +2919,7 @@ async fn claude_sessions_are_given_their_repos_clones_to_read_their_memories_the
                 .await
                 .unwrap();
             d.chats.send(&chat.id, "What do I know?").await.unwrap();
-            let start: serde_json::Value = std::fs::read_to_string(&log)
-                .unwrap()
-                .lines()
-                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-                .find(|call| {
-                    call["method"] == "session.start" && call["params"]["chat_id"] == chat.id
-                })
-                .unwrap();
+            let start = session_start(&log, &chat.id);
             // The first repo's memory is loaded, the others' pointed at.
             let clones = &start["params"]["memory_clones"];
             match agent {
@@ -2996,12 +2992,7 @@ async fn claude_chats_are_given_the_clones_local_allow_rules_as_they_are_at_sess
             .await
             .unwrap();
         d.chats.send(&chat.id, "Run make").await.unwrap();
-        let start: serde_json::Value = std::fs::read_to_string(&log)
-            .unwrap()
-            .lines()
-            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-            .find(|call| call["method"] == "session.start" && call["params"]["chat_id"] == chat.id)
-            .unwrap();
+        let start = session_start(&log, &chat.id);
         let rules = &start["params"]["local_allow"];
         match granted {
             true => assert_eq!(
@@ -3032,12 +3023,7 @@ async fn a_repo_whose_clone_memory_is_turned_off_is_left_out_the_next_one_loaded
         .workspace;
     let chat = new_chat(d, &ws.id).await;
     d.chats.send(&chat.id, "What do I know?").await.unwrap();
-    let start: serde_json::Value = std::fs::read_to_string(&log)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-        .find(|call| call["method"] == "session.start" && call["params"]["chat_id"] == chat.id)
-        .unwrap();
+    let start = session_start(&log, &chat.id);
     let clone_a = d.settings.get().repos["repo-a"].path.clone().unwrap();
     assert_eq!(
         start["params"]["memory_clones"],

@@ -45,9 +45,9 @@ notes_dir?: string,
  */
 brands_dir?: string, 
 /**
- * The clones of the workspace's repos, the first asked first, given to a Claude chat: its
- * session starts with the first one's Claude Code memory and is pointed at the others', all
- * read-only (docs/adr/claude-memory-per-repo.md).
+ * The clones of the workspace's repos whose Claude memory the user did not turn off, the first
+ * asked first, given to a Claude chat: its session starts with the first one's Claude Code
+ * memory and is pointed at the others', all read-only (docs/adr/claude-memory-per-repo.md).
  */
 memory_clones?: Array<string>, 
 /**

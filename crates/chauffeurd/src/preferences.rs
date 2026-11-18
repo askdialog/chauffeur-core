@@ -1097,7 +1097,7 @@ default_branch = "develop"
     }
 
     #[test]
-    fn the_template_parses_to_the_defaults() {
+    fn the_template_parses_to_the_defaults_and_its_keys_uncomment_where_they_belong() {
         let settings: crate::settings::UserSettings = toml::from_str(TEMPLATE).unwrap();
         assert!(settings.github_org.is_empty());
         assert!(settings.default_repos.is_empty());
