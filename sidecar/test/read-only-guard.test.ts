@@ -200,6 +200,18 @@ const allowed = [
   "# git push",
   "chauffeur worktree add --repo web --name fix",
   "",
+  // Reading GitLab.
+  "glab mr list",
+  "glab mr view 12 --comments",
+  "glab mr diff 12",
+  "glab -R team/web issue list",
+  "glab ci status",
+  "glab ci view",
+  "glab stack list",
+  "glab repo view team/web",
+  "glab api projects/:id/merge_requests",
+  "glab api graphql -f query='{ currentUser { username } }'",
+  "curl -s https://gitlab.example.com/api/v4/projects/1",
 ];
 
 const denied = [
@@ -645,6 +657,25 @@ const denied = [
   "echo pr | xargs -n 1 gh",
   "ls | xargs -0 /usr/bin/git add",
   "git ls-files | xargs git log --",
+  // GitLab, through glab or its API.
+  "glab mr create --fill",
+  "glab mr merge 12",
+  "glab -R team/web mr note 3 -m hi",
+  "glab mr approve 12",
+  "glab issue create -t x",
+  "glab repo clone team/web",
+  "glab ci run",
+  "glab auth login --hostname gitlab.example.com --stdin",
+  "glab auth git-credential get",
+  "glab stack sync",
+  "glab api -X POST projects/1/merge_requests",
+  "glab api --method PUT projects/:id",
+  "glab api projects/:id/issues -f title=x",
+  "glab api graphql -f query='mutation { x }'",
+  "curl -X POST https://gitlab.example.com/api/v4/projects/1/issues",
+  "curl --header \"PRIVATE-TOKEN: $GITLAB_TOKEN\" https://gitlab.example.com/api/v4/user",
+  "python3 -c 'import os; os.system(\"glab mr merge 1\")'",
+  "echo 1 | xargs -I{} glab mr close {}",
 ];
 
 describe("the read-only guard of explorations", () => {

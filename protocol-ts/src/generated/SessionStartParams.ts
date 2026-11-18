@@ -82,4 +82,9 @@ delegate?: boolean,
  * The rules the user allowed always earlier in this chat (`request_resolved.rules`), kept
  * over a new agent session (an idle one closed, a restart).
  */
-always_allow?: Array<string>, launch_id?: string, };
+always_allow?: Array<string>, 
+/**
+ * The GitLab's host on an installation set to GitLab: an exploration's or a design chat's
+ * sandbox lets its commands reach it, as it lets them reach GitHub.
+ */
+gitlab_host?: string, launch_id?: string, };

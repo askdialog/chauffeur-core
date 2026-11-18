@@ -111,7 +111,7 @@ pub mod update;
 pub mod usage;
 pub mod versions;
 mod worker_claude_config;
-mod worker_credentials;
+pub mod worker_credentials;
 pub mod worker_lifecycle;
 pub mod worker_login;
 pub mod worker_ssh;

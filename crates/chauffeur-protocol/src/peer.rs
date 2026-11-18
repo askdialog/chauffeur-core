@@ -28,7 +28,7 @@ use crate::worker::{
 /// The version of [`PeerCall`], sent in its `hello`. Both ends of a peer connection run the same
 /// Chauffeur (a transfer refuses daemons of other versions), so the daemon takes this one only;
 /// `protocol.lock` keeps its fingerprint as for the client protocol.
-pub const PEER_PROTOCOL_VERSION: u32 = 3;
+pub const PEER_PROTOCOL_VERSION: u32 = 4;
 
 methods! {
     /// What `/peer` serves.

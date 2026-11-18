@@ -380,7 +380,7 @@ import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 
 export const PROTOCOL_VERSION = 20;
 export const MIN_PROTOCOL_VERSION = 1;
-export const PEER_PROTOCOL_VERSION = 3;
+export const PEER_PROTOCOL_VERSION = 4;
 
 /** Client → daemon methods (`ClientCall`): `[params, result]`. */
 export type ClientMethods = {

@@ -122,7 +122,7 @@ impl Gitlab {
     }
 
     /// The host of an installation set to GitLab; none otherwise.
-    fn host(&self) -> Option<String> {
+    pub(crate) fn host(&self) -> Option<String> {
         let settings = self.d().settings.get();
         (settings.forge == Forge::Gitlab && !settings.gitlab_host.is_empty())
             .then(|| settings.gitlab_host.clone())
@@ -256,6 +256,39 @@ impl Gitlab {
             step.phase = phase.into();
             update(step);
         }
+    }
+
+    /// On a cloud worker: follows the Mac set to GitLab on `host`, and signs its `glab` in with
+    /// the Mac's token, installing it first when the worker has none.
+    pub(crate) async fn connect_worker(&self, host: &str, token: &str) -> anyhow::Result<()> {
+        let settings = self.d().settings.get();
+        if settings.forge != Forge::Gitlab || settings.gitlab_host != host {
+            self.d().settings.update(|doc| {
+                doc["forge"] = toml_edit::value("gitlab");
+                doc["gitlab_host"] = toml_edit::value(host);
+            })?;
+        }
+        self.run_connect(host, token).await?;
+        self.forget_account().await;
+        Ok(())
+    }
+
+    /// The token this Mac's `glab` keeps for the GitLab it is set to; none when it has none.
+    pub(crate) async fn token(&self) -> Option<(String, String)> {
+        let host = self.host()?;
+        let env = self.d().shell_env.vars();
+        let glab = find(&env, "glab")?;
+        let output = Command::new(glab)
+            .args(["config", "get", "token", "--host", &host])
+            .env_clear()
+            .envs(&env)
+            .env("GLAB_CHECK_UPDATE", "false")
+            .stdin(Stdio::null())
+            .output()
+            .await
+            .ok()?;
+        let token = String::from_utf8(output.stdout).ok()?.trim().to_string();
+        (output.status.success() && !token.is_empty()).then_some((host, token))
     }
 
     async fn run_connect(&self, host: &str, token: &str) -> anyhow::Result<()> {

@@ -1,4 +1,5 @@
-// The shell commands an exploration refuses: those that write git history or refs, or GitHub.
+// The shell commands an exploration refuses: those that write git history or refs, or GitHub (or
+// the GitLab, through `glab` or its API, on an installation set to GitLab).
 // The checkout itself is disposable, so a stray edit there is harmless; what an exploration must
 // not do is leave anything behind in the repos the checkouts share, or on GitHub.
 //
@@ -125,6 +126,37 @@ const GH_NESTED_WRITES: Record<string, Set<string>> = {
 /** `gh` options whose value is the next word, so it is not taken for a group or a verb. */
 const GH_OPTIONS_WITH_VALUE = new Set(["-R", "--repo", "--hostname", "-X", "--method", "-f", "--raw-field", "-F", "--field", "-H", "--header", "--input", "-q", "--jq", "-t", "--template", "--cache", "-p", "--preview"]);
 
+/** `glab <group> <verb>` that write on GitLab (or create a branch, a repo, a token on this machine). */
+const GLAB_WRITES: Record<string, Set<string>> = {
+  mr: new Set(["create", "merge", "close", "reopen", "note", "update", "approve", "revoke", "rebase", "delete", "subscribe", "unsubscribe", "todo", "checkout"]),
+  issue: new Set(["create", "close", "reopen", "note", "update", "delete", "subscribe", "unsubscribe"]),
+  incident: new Set(["close", "reopen", "note", "subscribe", "unsubscribe"]),
+  repo: new Set(["create", "delete", "fork", "clone", "archive", "transfer", "update", "mirror", "publish"]),
+  release: new Set(["create", "delete", "upload"]),
+  ci: new Set(["run", "retry", "cancel", "delete", "trigger", "run-trig"]),
+  job: new Set(["retry", "cancel", "play", "delete", "artifact"]),
+  schedule: new Set(["create", "delete", "run", "update"]),
+  label: new Set(["create", "delete", "edit"]),
+  milestone: new Set(["create", "delete", "edit"]),
+  variable: new Set(["set", "update", "delete"]),
+  snippet: new Set(["create"]),
+  alias: new Set(["set", "delete"]),
+  "ssh-key": new Set(["add", "delete"]),
+  "gpg-key": new Set(["add", "delete"]),
+  "deploy-key": new Set(["add", "delete"]),
+  token: new Set(["create", "revoke", "rotate"]),
+  securefile: new Set(["create", "remove", "download"]),
+  // `auth git-credential` hands git the user's token.
+  auth: new Set(["login", "logout", "git-credential", "configure-docker", "docker-helper", "dpop-gen"]),
+  config: new Set(["set", "edit"]),
+};
+/** `glab <group>` whose verbs all write, but these. */
+const GLAB_READS: Record<string, Set<string>> = {
+  stack: new Set(["list"]),
+};
+/** `glab` options whose value is the next word, so it is not taken for a group or a verb. */
+const GLAB_OPTIONS_WITH_VALUE = new Set(["-R", "--repo", "-g", "--group", "--hostname", "-X", "--method", "-f", "--raw-field", "-F", "--field", "-H", "--header", "--input"]);
+
 /** Interpreters taking code on the command line, and the option that carries it. */
 const INLINE_CODE: Record<string, RegExp> = {
   python: /^-[A-Za-z]*c/,
@@ -143,12 +175,14 @@ const INLINE_CODE: Record<string, RegExp> = {
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
 /** Shells and interpreters: what they run is code, read for mentions of git or GitHub. */
 const RUNS_CODE = new Set([...SHELLS, ...Object.keys(INLINE_CODE)]);
-/** `git` or `gh` as a word of some code, or GitHub's host. */
-const MENTIONS_GIT = /(?<![\w.-])(git|gh)(?![\w-])|github\.com/;
+/** `git`, `gh` or `glab` as a word of some code, or GitHub's host. */
+const MENTIONS_GIT = /(?<![\w.-])(git|gh|glab)(?![\w-])|github\.com/;
 
 const HTTP_CLIENTS = new Set(["curl", "wget", "http", "https", "xh", "xhs"]);
-/** A GitHub token in the arguments of an HTTP client: `$GH_TOKEN`, `$(gh auth token)`, a header. */
-const TOKEN = /GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|gh auth token|authorization/i;
+/** A GitHub or GitLab token in the arguments of an HTTP client: `$GH_TOKEN`, `$(gh auth token)`, a header. */
+const TOKEN = /GH_TOKEN|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|gh auth token|authorization|GITLAB_TOKEN|GLAB_TOKEN|private-token|job-token|glab config get token/i;
+/** A GitLab's REST or GraphQL API, whatever its host. */
+const GITLAB_API = /\/api\/(v4|graphql)\b/i;
 
 function writes(simple: SimpleCommand, command: string): boolean {
   const { program, args } = simple;
@@ -156,6 +190,7 @@ function writes(simple: SimpleCommand, command: string): boolean {
   if (program.includes("$")) return true;
   if (program === "git") return gitWrites(args);
   if (program === "gh") return ghWrites(args, command);
+  if (program === "glab") return glabWrites(args, command);
   // `xargs` and `find -exec` hand words nobody can read here to their program.
   if (program === "xargs") return args.some(isGit);
   if (program === "find") {
@@ -175,7 +210,7 @@ function writes(simple: SimpleCommand, command: string): boolean {
 
 function isGit(word: string): boolean {
   const name = basename(word);
-  return name === "git" || name === "gh";
+  return name === "git" || name === "gh" || name === "glab";
 }
 
 /** No script named and no `-c` code (a shell with `-c` and its script never gets here), or `-`/`-s`. */
@@ -302,6 +337,18 @@ function ghWrites(args: string[], command: string): boolean {
   return sub !== undefined && (GH_NESTED_WRITES[`${group} ${verb}`]?.has(sub) ?? false);
 }
 
+function glabWrites(args: string[], command: string): boolean {
+  const [group, verb] = positionalsOf(args, [...GLAB_OPTIONS_WITH_VALUE]).filter((a) => a !== "-");
+  if (group === undefined) return false;
+  if (group.includes("$") || verb?.includes("$")) return true;
+  // The same REST and GraphQL rules as `gh api`.
+  if (group === "api") return ghApiWrites(args, verb, command);
+  if (verb === undefined) return false;
+  if (GLAB_WRITES[group]?.has(verb)) return true;
+  const reads = GLAB_READS[group];
+  return reads !== undefined && !reads.has(verb);
+}
+
 function ghApiWrites(args: string[], endpoint: string | undefined, command: string): boolean {
   // GraphQL always posts: a mutation is the write. The query may come from a file or a heredoc, so
   // the whole command line is searched, best effort.
@@ -323,10 +370,10 @@ function optionValue(args: string[], short: string, long: string): string | unde
   return undefined;
 }
 
-/** An HTTP client sending to GitHub, or reaching it with a token (what follows cannot be read). */
+/** An HTTP client sending to GitHub or a GitLab's API, or reaching it with a token (what follows cannot be read). */
 function httpWritesGitHub(program: string, args: string[]): boolean {
   const text = args.join(" ");
-  if (!/github\.com/i.test(text)) return false;
+  if (!/github\.com/i.test(text) && !GITLAB_API.test(text)) return false;
   if (TOKEN.test(text)) return true;
   switch (program) {
     case "curl": {

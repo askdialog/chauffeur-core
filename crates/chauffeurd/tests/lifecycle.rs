@@ -4897,6 +4897,104 @@ esac"#,
     assert!(!log.contains("unexpected"), "{log}");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mac_set_to_gitlab_hands_its_glab_token_to_a_worker_which_follows_it() {
+    use chauffeur_protocol::client::{SettingsUpdate, WorkspaceDefaultsUpdate};
+    use chauffeur_protocol::worker::{WorkerCredentials, WorkerGithubToken};
+    let f = fixture(47660);
+    let d = &f.daemon;
+    // A fake `glab` (and no `gh`): it keeps a token for gitlab.example.com, knows its user, and
+    // records each call and what it read on its standard input.
+    let bin = f.root.join("bin");
+    let home = f.root.join("home");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    let calls = f.root.join("glab-calls.log");
+    fake_tool(
+        &bin,
+        "glab",
+        &format!(
+            r#"echo "$* token=$GITLAB_TOKEN" >> {calls}
+case "$1 $2" in
+  "config get") [ "$4 $5" = "--host gitlab.example.com" ] && echo glpat-mac ;;
+  "api --hostname") echo '{{"username":"jc"}}' ;;
+  "auth login") echo "stdin=$(cat)" >> {calls} ;;
+  *) echo "unexpected: $*" >&2; exit 1 ;;
+esac"#,
+            calls = calls.display()
+        ),
+    );
+    fake_tool(&bin, "gh", "exit 1");
+    let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    let path = format!("{}:{}", bin.display(), vars["PATH"]);
+    vars.insert("PATH".into(), path);
+    vars.insert("HOME".into(), home.to_string_lossy().into_owned());
+    vars.insert(
+        "GIT_CONFIG_GLOBAL".into(),
+        home.join(".gitconfig").to_string_lossy().into_owned(),
+    );
+    d.shell_env.set_vars(vars);
+
+    // Set to GitHub, the Mac hands no GitLab token, and asks glab nothing.
+    let (credentials, _) = chauffeurd::worker_credentials::gather(d).await;
+    assert!(credentials.gitlab.is_none());
+    assert!(!calls.exists());
+
+    // The worker, on GitHub, gets a GitLab token: it follows the Mac and signs glab in.
+    let installed = chauffeurd::worker_credentials::install(
+        d,
+        WorkerCredentials {
+            gitlab: Some(WorkerGithubToken {
+                host: "gitlab.example.com".into(),
+                token: "glpat-mac".into(),
+            }),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(installed.warnings.is_empty(), "{:?}", installed.warnings);
+    let settings = d.settings.get();
+    assert_eq!(
+        (settings.forge, settings.gitlab_host.as_str()),
+        (Forge::Gitlab, "gitlab.example.com")
+    );
+    let log = std::fs::read_to_string(&calls).unwrap();
+    assert!(
+        log.contains("api --hostname gitlab.example.com user token=glpat-mac"),
+        "{log}"
+    );
+    assert!(
+        log.contains("auth login --hostname gitlab.example.com --stdin"),
+        "{log}"
+    );
+    assert!(log.contains("stdin=glpat-mac"), "{log}");
+    let gitconfig = std::fs::read_to_string(home.join(".gitconfig")).unwrap();
+    assert!(gitconfig.contains("git@gitlab.example.com:"), "{gitconfig}");
+
+    // Set to GitLab, the Mac reads its own token from glab.
+    chauffeurd::preferences::set(
+        d,
+        SettingsUpdate {
+            workspaces: Some(WorkspaceDefaultsUpdate {
+                forge: Some(Forge::Gitlab),
+                gitlab_host: Some("gitlab.example.com".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let (credentials, warnings) = chauffeurd::worker_credentials::gather(d).await;
+    let gitlab = credentials.gitlab.expect("the Mac's GitLab token");
+    assert_eq!(
+        (gitlab.host.as_str(), gitlab.token.as_str()),
+        ("gitlab.example.com", "glpat-mac")
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+}
+
 /// The number of the PR the header shows for the workspace's own worktree of `repo`.
 async fn pr_number(d: &Arc<Daemon>, workspace: &str, repo: &str) -> Option<u64> {
     chauffeurd::prs::status(d, workspace)

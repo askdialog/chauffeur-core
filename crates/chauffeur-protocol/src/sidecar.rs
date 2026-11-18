@@ -698,6 +698,11 @@ pub struct SessionStartParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<String>>", optional)]
     pub always_allow: Vec<String>,
+    /// The GitLab's host on an installation set to GitLab: an exploration's or a design chat's
+    /// sandbox lets its commands reach it, as it lets them reach GitHub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub gitlab_host: Option<String>,
     // Daemon-owned dispatch intent, absent for legacy callers; never a transfer permit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

@@ -160,6 +160,9 @@ describe("starting", () => {
       // Plans come through the Write tool and the plan guard, which the sandbox does not cover.
       filesystem: { denyWrite: ["/workspaces/ws-1/.chauffeur"] },
     });
+    // On an installation set to GitLab, its host too, for `glab` reads.
+    const gitlab = (await started({ read_only: true, plans_dir: PLANS, gitlab_host: "gitlab.example.com" })).query;
+    expect(gitlab.options.sandbox?.network?.allowedDomains).toEqual(["github.com", "*.github.com", "*.githubusercontent.com", "gitlab.example.com"]);
     // Without the notes folder named (an older daemon), the rest holds.
     const older = (await started({ read_only: true, plans_dir: PLANS })).query;
     expect(older.options.sandbox?.enabled).toBe(true);

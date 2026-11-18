@@ -47,20 +47,25 @@ export const READ_ONLY_NO_PLANS_DISALLOWED_TOOLS = ["Edit", "Write", "MultiEdit"
 /** Where an exploration's shell commands may reach: GitHub, for `gh` reads, and nothing else. */
 export const READ_ONLY_ALLOWED_DOMAINS = ["github.com", "*.github.com", "*.githubusercontent.com"];
 
+/** GitHub's domains, and the GitLab's host on an installation set to GitLab, for `glab` reads. */
+export function readOnlyAllowedDomains(gitlabHost?: string): string[] {
+  return gitlabHost ? [...READ_ONLY_ALLOWED_DOMAINS, gitlabHost] : READ_ONLY_ALLOWED_DOMAINS;
+}
+
 /**
  * An exploration's Bash runs in Claude Code's OS sandbox (Seatbelt on macOS, bubblewrap on
  * Linux), the one thing that makes read-only hold whatever the command: writes stay inside the
  * workspace folder (the disposable checkouts; the clones' refs and the state folder are out of
  * reach) but out of its notes (`notesDir`, kept on archive: plans come through the Write tool and
  * the plan guard), and in the exploration's own temporary folder (`CLAUDE_CODE_TMPDIR`, from the
- * daemon); no Unix socket (so no way to the daemon), no network but GitHub, the Jev key withheld.
+ * daemon); no Unix socket (so no way to the daemon), no network but GitHub (and the GitLab on an installation set to it), the Jev key withheld.
  * A command that fails under the sandbox is never retried outside it, and a machine without the
  * sandbox's dependencies refuses the session rather than running unsandboxed. The read-only
  * guard (hooks.ts) still refuses git and GitHub writes by name, with a reason the agent can read.
  * What a command writes is removed afterwards: the checkouts and the temporary folder at archive,
  * and at promote the user discards the checkouts' leftovers or keeps the exploration.
  */
-export function readOnlySandbox(notesDir?: string): NonNullable<Options["sandbox"]> {
+export function readOnlySandbox(notesDir?: string, gitlabHost?: string): NonNullable<Options["sandbox"]> {
   return {
     enabled: true,
     failIfUnavailable: true,
@@ -69,7 +74,7 @@ export function readOnlySandbox(notesDir?: string): NonNullable<Options["sandbox
     // what it writes is removed afterwards (decided with Justin 2026-10-18).
     autoAllowBashIfSandboxed: false,
     network: {
-      allowedDomains: READ_ONLY_ALLOWED_DOMAINS,
+      allowedDomains: readOnlyAllowedDomains(gitlabHost),
       strictAllowlist: true,
       allowUnixSockets: [],
       allowAllUnixSockets: false,
@@ -121,9 +126,9 @@ export function notesReadRules(notesDir: string | undefined): { allow?: string[]
  * own folder (`cwd`). And the repos, which the session reads as additional directories, are denied
  * writing, so nothing a command does reaches the code.
  */
-export function designSandbox(repos: string[]): NonNullable<Options["sandbox"]> {
+export function designSandbox(repos: string[], gitlabHost?: string): NonNullable<Options["sandbox"]> {
   return {
-    ...readOnlySandbox(),
+    ...readOnlySandbox(undefined, gitlabHost),
     autoAllowBashIfSandboxed: true,
     filesystem: { denyWrite: [...repos] },
   };
@@ -213,13 +218,13 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
     options.permissionMode = "auto";
     options.allowDangerouslySkipPermissions = false;
     options.disallowedTools = DESIGN_DISALLOWED_TOOLS;
-    options.sandbox = designSandbox(params.additional_directories);
+    options.sandbox = designSandbox(params.additional_directories, params.gitlab_host);
     options.mcpServers = { [DESIGN_BROWSER]: designBrowser(params.design_dir) };
   } else if (params.read_only) {
     options.permissionMode = "plan";
     options.allowDangerouslySkipPermissions = false;
     options.disallowedTools = params.plans_dir ? READ_ONLY_DISALLOWED_TOOLS : READ_ONLY_NO_PLANS_DISALLOWED_TOOLS;
-    options.sandbox = readOnlySandbox(params.notes_dir);
+    options.sandbox = readOnlySandbox(params.notes_dir, params.gitlab_host);
   }
   if (params.model) options.model = params.model;
   if (params.effort) options.effort = effortLevel(params.effort);

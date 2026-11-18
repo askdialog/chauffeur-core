@@ -18,4 +18,8 @@ aws_config: string | null,
 /**
  * The AWS CLI's SSO token cache (`sso/cache/*.json`).
  */
-aws_sso_cache: Array<WorkerAwsSsoFile>, };
+aws_sso_cache: Array<WorkerAwsSsoFile>, 
+/**
+ * The token of the GitLab the Mac is set to, from its `glab`; none on a Mac set to GitHub.
+ */
+gitlab?: WorkerGithubToken, };

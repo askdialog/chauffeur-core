@@ -134,6 +134,10 @@ pub struct WorkerCredentials {
     pub aws_config: Option<String>,
     /// The AWS CLI's SSO token cache (`sso/cache/*.json`).
     pub aws_sso_cache: Vec<WorkerAwsSsoFile>,
+    /// The token of the GitLab the Mac is set to, from its `glab`; none on a Mac set to GitHub.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub gitlab: Option<WorkerGithubToken>,
 }
 
 /// Names the hosts and files only: the tokens stay out of any debug output.
@@ -145,6 +149,7 @@ impl std::fmt::Debug for WorkerCredentials {
                 &self.github.iter().map(|t| &t.host).collect::<Vec<_>>(),
             )
             .field("aws_config", &self.aws_config.is_some())
+            .field("gitlab", &self.gitlab.as_ref().map(|t| &t.host))
             .field(
                 "aws_sso_cache",
                 &self

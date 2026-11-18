@@ -1087,6 +1087,7 @@ impl ChatManager {
             always_allow: always_allowed(&d.store, &chat.id),
             // One level of delegation: a delegated chat answers its parent, it delegates nothing.
             delegate: chat.kind == ChatKind::Chat && chat.parent_chat.is_none(),
+            gitlab_host: d.gitlab.host(),
         };
         // A new session runs in the mode asked until its agent says otherwise, and reports its
         // own MCP servers.

@@ -1,4 +1,4 @@
-//! This Mac's GitHub and AWS SSO access, handed to a GCP worker on each send so that its user
+//! This Mac's GitHub (or GitLab, on a Mac set to it) and AWS SSO access, handed to a GCP worker on each send so that its user
 //! signs in to neither again there (docs/cloud-workers.md). The agents' logins are not copied:
 //! refreshing one machine's token would log the other out. The secrets are never logged, nor put
 //! in a result, an event or a transfer's log.
@@ -31,7 +31,7 @@ fn home(daemon: &Daemon) -> Option<PathBuf> {
 /// What this Mac's `gh` and AWS CLI can hand a worker, and what could not be read of them. A `gh`
 /// signed out or missing, and no AWS configuration, give nothing and say nothing: the worker's
 /// own check says gh is not signed in there.
-pub(crate) async fn gather(daemon: &Daemon) -> (WorkerCredentials, Vec<String>) {
+pub async fn gather(daemon: &Daemon) -> (WorkerCredentials, Vec<String>) {
     let mut warnings = Vec::new();
     let github = github_tokens(daemon).await;
     let (aws_config, aws_sso_cache) = match home(daemon).map(|home| read_aws(&home)) {
@@ -42,10 +42,23 @@ pub(crate) async fn gather(daemon: &Daemon) -> (WorkerCredentials, Vec<String>) 
         }
         None => Default::default(),
     };
+    let gitlab = match daemon.gitlab.host() {
+        None => None,
+        Some(host) => match daemon.gitlab.token().await {
+            Some((host, token)) => Some(WorkerGithubToken { host, token }),
+            None => {
+                warnings.push(format!(
+                    "Could not read this Mac's GitLab token for {host}: connect GitLab in Settings"
+                ));
+                None
+            }
+        },
+    };
     let credentials = WorkerCredentials {
         github,
         aws_config,
         aws_sso_cache,
+        gitlab,
     };
     (credentials, warnings)
 }
@@ -135,7 +148,7 @@ fn cache_name(name: &str) -> bool {
 /// On the worker: signs its `gh` in with each token and has `git` push through it, then writes the
 /// AWS files, owner-only, over the previous copies. A part that fails is a warning: the transfer
 /// goes on without it.
-pub(crate) async fn install(
+pub async fn install(
     daemon: &Daemon,
     credentials: WorkerCredentials,
 ) -> Result<WorkerCredentialsInstalled> {
@@ -156,6 +169,14 @@ pub(crate) async fn install(
             ));
         }
     }
+    if let Some(token) = &credentials.gitlab
+        && let Err(error) = install_gitlab(daemon, &home, token).await
+    {
+        warnings.push(format!(
+            "Could not sign glab in to {} on {machine} (a GitLab reachable only from your network, through a VPN, is out of a cloud worker's reach): {error:#}",
+            token.host
+        ));
+    }
     if let Err(error) = install_aws(&home, &credentials) {
         warnings.push(format!(
             "Could not copy this Mac's AWS sign-in to {machine}: {error:#}"
@@ -164,12 +185,7 @@ pub(crate) async fn install(
     Ok(WorkerCredentialsInstalled { warnings })
 }
 
-async fn install_github(
-    daemon: &Daemon,
-    home: &Path,
-    token: &WorkerGithubToken,
-) -> anyhow::Result<()> {
-    let host = &token.host;
+fn check_host_name(host: &str) -> anyhow::Result<()> {
     if host.is_empty()
         || !host
             .chars()
@@ -177,6 +193,16 @@ async fn install_github(
     {
         bail!("not a host name");
     }
+    Ok(())
+}
+
+async fn install_github(
+    daemon: &Daemon,
+    home: &Path,
+    token: &WorkerGithubToken,
+) -> anyhow::Result<()> {
+    let host = &token.host;
+    check_host_name(host)?;
     gh(
         daemon,
         &[
@@ -192,8 +218,27 @@ async fn install_github(
     )
     .await?;
     gh(daemon, &["auth", "setup-git", "--hostname", host], None).await?;
-    // The worktrees' `origin` keeps the Mac's URL, often SSH, and the worker has no SSH key for
-    // the host: its git goes through HTTPS, which gh signs.
+    https_instead_of_ssh(daemon, home, host).await
+}
+
+/// The worker follows the Mac set to GitLab, and its `glab` signs in with the Mac's token; git
+/// goes through HTTPS, which glab signs.
+async fn install_gitlab(
+    daemon: &Daemon,
+    home: &Path,
+    token: &WorkerGithubToken,
+) -> anyhow::Result<()> {
+    check_host_name(&token.host)?;
+    daemon
+        .gitlab
+        .connect_worker(&token.host, &token.token)
+        .await?;
+    https_instead_of_ssh(daemon, home, &token.host).await
+}
+
+/// The worktrees' `origin` keeps the Mac's URL, often SSH, and the worker has no SSH key for the
+/// host: its git goes through HTTPS instead.
+async fn https_instead_of_ssh(daemon: &Daemon, home: &Path, host: &str) -> anyhow::Result<()> {
     let https = format!("url.https://{host}/.insteadOf");
     let git = crate::git::Git::new(daemon.shell_env.clone());
     for ssh in [format!("git@{host}:"), format!("ssh://git@{host}/")] {
@@ -354,6 +399,7 @@ mod tests {
                 name: "a.json".into(),
                 contents: "new token".into(),
             }],
+            gitlab: None,
         };
 
         install_aws(home.path(), &credentials).unwrap();
@@ -417,10 +463,16 @@ mod tests {
                 name: "a.json".into(),
                 contents: "sso_secret".into(),
             }],
+            gitlab: Some(WorkerGithubToken {
+                host: "gitlab.example.com".into(),
+                token: "glpat_secret".into(),
+            }),
         };
         let debug = format!("{credentials:?}");
         assert!(
-            debug.contains("github.com") && debug.contains("a.json"),
+            debug.contains("github.com")
+                && debug.contains("a.json")
+                && debug.contains("gitlab.example.com"),
             "{debug}"
         );
         assert!(!debug.contains("secret"), "{debug}");
