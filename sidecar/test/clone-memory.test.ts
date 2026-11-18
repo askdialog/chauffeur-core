@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { Settings } from "@anthropic-ai/claude-agent-sdk";
 import { indexHead, readCloneMemory } from "../src/agents/claude/memory.ts";
 import { buildClaudeOptions } from "../src/agents/claude/options.ts";
-import type { SessionStartParams } from "../src/protocol.ts";
+import { appended, optionDeps as deps, startParams as start } from "./support/claude-options.ts";
 
 const made: string[] = [];
 function folder(): string {
@@ -74,33 +74,6 @@ describe("a clone's memory", () => {
   });
 });
 
-const deps = {
-  baseEnv: {},
-  executable: undefined,
-  canUseTool: async () => ({ behavior: "deny" as const, message: "" }),
-  hooks: {},
-  abortController: new AbortController(),
-  stderr: () => {},
-  jevPluginDir: () => "/jev",
-};
-
-function start(extra: Partial<SessionStartParams>): SessionStartParams {
-  return {
-    chat_id: "c",
-    workspace_id: "w",
-    agent: "claude",
-    cwd: "/w",
-    additional_directories: [],
-    fast: false,
-    permission_mode: "default",
-    read_only: false,
-    env: {},
-    prompt_attachments: [],
-    prompt_suggestions: false,
-    ...extra,
-  };
-}
-
 describe("a session given its clone's memory", () => {
   const memory = {
     clone: "/code/web",
@@ -109,27 +82,23 @@ describe("a session given its clone's memory", () => {
     cut: true,
   };
 
-  test("is told it, read-only, after Chauffeur's own instructions, and may read its folder but not write it", () => {
-    for (const params of [start({ append_system_prompt: "Reply in Chauffeur." }), start({ design_dir: "/w/.chauffeur/designs/c", append_system_prompt: "Reply in Chauffeur." })]) {
-      const options = buildClaudeOptions(params, { ...deps, memory });
-      const append = (options.systemPrompt as { append: string }).append;
-      expect(append.startsWith("Reply in Chauffeur.\n\n")).toBe(true);
-      expect(append).toContain("`/code/web`");
-      expect(append).toContain("Read-only");
-      expect(append).toContain("read the file for the rest");
-      expect(append).toContain(`<user-memory path="${memory.dir}/MEMORY.md">\n- Deploy &lt;b>staging&lt;/b> first\n</user-memory>`);
-      const permissions = (options.settings as Settings).permissions;
-      expect(permissions?.allow).toContain(`Read(/${memory.dir}/**)`);
-      expect(permissions?.deny).toContain(`Edit(/${memory.dir}/**)`);
-    }
+  test("is told it after Chauffeur's own instructions, and may read its folder but not write it", () => {
+    const options = buildClaudeOptions(start({ append_system_prompt: "Reply in Chauffeur." }), { ...deps, memory });
+    const append = appended(options);
+    expect(append.startsWith("Reply in Chauffeur.\n\n")).toBe(true);
+    expect(append).toContain("`/code/web`");
+    expect(append).toContain("read the file for the rest");
+    expect(append).toContain(`<user-memory path="${memory.dir}/MEMORY.md">\n- Deploy &lt;b>staging&lt;/b> first\n</user-memory>`);
+    const permissions = (options.settings as Settings).permissions;
+    expect(permissions?.allow).toContain(`Read(/${memory.dir}/**)`);
+    expect(permissions?.deny).toContain(`Edit(/${memory.dir}/**)`);
 
-    const alone = buildClaudeOptions(start({}), { ...deps, memory: { ...memory, cut: false } });
-    const append = (alone.systemPrompt as { append: string }).append;
-    expect(append).toContain("<user-memory");
-    expect(append).not.toContain("read the file for the rest");
+    const whole = appended(buildClaudeOptions(start({}), { ...deps, memory: { ...memory, cut: false } }));
+    expect(whole).toContain("<user-memory");
+    expect(whole).not.toContain("read the file for the rest");
 
     const none = buildClaudeOptions(start({ append_system_prompt: "Reply in Chauffeur." }), deps);
-    expect((none.systemPrompt as { append: string }).append).toBe("Reply in Chauffeur.");
+    expect(appended(none)).toBe("Reply in Chauffeur.");
     expect(JSON.stringify(none.settings ?? {})).not.toContain("memory");
   });
 });

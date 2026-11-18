@@ -4142,15 +4142,6 @@ impl ChatManager {
 /// The workspace's own worktree of each repo. Sessions start in the workspace folder, above them,
 /// and get these as additional directories: Claude Code then loads each repo's skills and
 /// commands, as it would starting in the repo.
-/// The clone of the workspace's first repo, as the workspace lists its repos.
-fn first_clone(store: &crate::store::Store, workspace: &str) -> Result<Option<String>> {
-    Ok(store
-        .worktrees_of(workspace)?
-        .into_iter()
-        .find(|w| w.origin == WorktreeOrigin::Workspace && !w.removed)
-        .map(|w| w.clone_path))
-}
-
 pub fn repo_dirs(workspace: &WorkspaceInfo) -> Vec<String> {
     workspace
         .worktrees
@@ -4158,6 +4149,15 @@ pub fn repo_dirs(workspace: &WorkspaceInfo) -> Vec<String> {
         .filter(|w| w.origin == WorktreeOrigin::Workspace && !w.removed)
         .map(|w| w.path.clone())
         .collect()
+}
+
+/// The clone of the workspace's first repo, as the workspace lists its repos.
+fn first_clone(store: &crate::store::Store, workspace: &str) -> Result<Option<String>> {
+    Ok(store
+        .worktrees_of(workspace)?
+        .into_iter()
+        .find(|w| w.origin == WorktreeOrigin::Workspace && !w.removed)
+        .map(|w| w.clone_path))
 }
 
 /// Whether a status change deserves the user's attention (an unread workspace): a turn ended or

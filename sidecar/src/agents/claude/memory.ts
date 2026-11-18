@@ -8,7 +8,10 @@ import { join } from "node:path";
 import { nativeHome } from "../context-capture.ts";
 import { claudeProjectKey } from "./context-bundle.ts";
 
-/** What Claude Code loads of a `MEMORY.md`: its first lines, then its first characters. */
+/**
+ * What Claude Code loads of a `MEMORY.md`: its first lines, then its first characters, counted as
+ * Claude Code counts them (a string's `length`; its docs round it to 25 KB).
+ */
 const INDEX_LINES = 200;
 const INDEX_CHARS = 25_000;
 
