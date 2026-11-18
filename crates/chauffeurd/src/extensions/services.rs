@@ -6,6 +6,7 @@ use crate::{
 };
 use chauffeur_protocol::extension_host::ExtensionHostCall;
 use chauffeur_protocol::extensions::ExtensionId;
+use chauffeur_protocol::model::AgentKind;
 use futures_util::future::BoxFuture;
 use rusqlite::{
     Connection, OptionalExtension,
@@ -226,11 +227,16 @@ impl Broker {
             }
             ExtensionHostCall::ChatList(params) => {
                 self.office()?;
-                crate::rpc::to_value(
-                    daemon
-                        .chats
-                        .list(&params.workspace, params.include_closed)?,
-                )
+                let mut chats = daemon
+                    .chats
+                    .list(&params.workspace, params.include_closed)?;
+                for chat in &mut chats {
+                    // Host API 1 engines and the Office presence protocol predate Vibe.
+                    if chat.agent == AgentKind::Vibe {
+                        chat.agent = AgentKind::Claude;
+                    }
+                }
+                crate::rpc::to_value(chats)
             }
             ExtensionHostCall::WorkspaceMoveHouse(params) => {
                 self.office()?;
@@ -588,6 +594,59 @@ mod tests {
             database
                 .credential(&uuid::Uuid::new_v4().to_string())
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn the_office_engine_can_read_a_workspace_with_a_vibe_chat() {
+        use super::super::process::Services;
+        let (_dir, daemon) = fixture();
+        let workspace = daemon
+            .workspaces
+            .create(
+                serde_json::from_value(json!({
+                    "name": "vibe",
+                    "no_repos": true,
+                    "chat_kind": "design",
+                    "explore": true
+                }))
+                .unwrap(),
+            )
+            .await
+            .unwrap()
+            .workspace;
+        let vibe = daemon
+            .chats
+            .create(
+                serde_json::from_value(json!({ "workspace": workspace.id, "agent": "vibe" }))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let office = Broker::open(
+            Arc::downgrade(&daemon),
+            ExtensionId::Office,
+            &daemon.paths.home.join("office"),
+        )
+        .unwrap();
+
+        let chats = office
+            .call(
+                "chat.list".into(),
+                json!({ "workspace": workspace.id, "include_closed": false }),
+            )
+            .await
+            .unwrap();
+        let published = chats
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|chat| chat["id"] == vibe.id)
+            .unwrap();
+        assert_eq!(published["agent"], "claude");
+        assert_eq!(
+            daemon.store.chat(&vibe.id).unwrap().unwrap().agent,
+            AgentKind::Vibe
         );
     }
 
