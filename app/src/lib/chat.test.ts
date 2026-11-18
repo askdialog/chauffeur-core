@@ -894,6 +894,8 @@ describe("delegated chats", () => {
     // The delegated chat's own agent, whatever the input says.
     expect(delegatedAgent(more, named)).toBe("claude");
     expect(delegatedAgent(more, null)).toBe("codex");
+    const vibe = (buildChatView([delegateCall("toolu_3", { agent: "vibe", prompt: "Fix it" })]).items[0]) as ToolItem;
+    expect(delegatedAgent(vibe, null)).toBe("vibe");
     // A chat the input names but that is not this chat's delegated chat is not shown as one.
     expect(delegatedChat(more, "elsewhere", chats)).toBeNull();
   });

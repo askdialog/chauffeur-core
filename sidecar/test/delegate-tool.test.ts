@@ -47,7 +47,7 @@ describe("delegate", () => {
     const host = new FakeHost();
     expect(await delegate(host, { agent: "claude", prompt: "  " })).toEqual({ text: "Say the task in `prompt`.", error: true });
     expect(await delegate(host, { agent: "gemini", prompt: "Review" })).toEqual({
-      text: "`agent` is codex or claude; leave it out for yours.",
+      text: "`agent` is codex, claude or vibe; leave it out for yours.",
       error: true,
     });
     expect(await delegate(host, { tier: "huge", prompt: "Review" })).toEqual({ text: "`tier` is fast, default or strongest.", error: true });

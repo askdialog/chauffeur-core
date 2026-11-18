@@ -670,7 +670,9 @@ export function DesignOnlyMode({ agent }: { agent: AgentKind }) {
       title={`${
         agent === "codex"
           ? "A design chat's Codex never asks to leave its sandbox"
-          : "A design chat's agent runs in auto mode (accepting edits where auto is unavailable)"
+          : agent === "vibe"
+            ? "A design chat's Vibe asks before each shell command"
+            : "A design chat's agent runs in auto mode (accepting edits where auto is unavailable)"
       }: it reads the repos and the notes, and writes screens in its own design folder only, never the code`}
       className="inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-line bg-raised px-1.5 text-[12px] text-muted"
       data-testid="design-only-mode"

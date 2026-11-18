@@ -173,3 +173,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Agents recap the user's work from their Chauffeur activity](activity-for-recaps.md) | 2026-11-18 | accepted |
 | [Database connections belong to Chauffeur, not to a workspace](database-connections-for-every-workspace.md) | 2026-11-18 | accepted |
 | [GitHub by default, a self-hosted GitLab when the installation is set to it](gitlab-as-the-forge.md) | 2026-11-18 | accepted |
+| [Mistral Vibe is a third agent, driven through ACP, on the user's Mistral plan](mistral-vibe-third-agent.md) | 2026-11-18 | accepted |

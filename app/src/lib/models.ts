@@ -11,7 +11,13 @@ export type ModelChoice = {
   fast: boolean;
 };
 
-export const AGENT_NAMES: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex" };
+export const AGENT_NAMES: Record<AgentKind, string> = { claude: "Claude Code", codex: "Codex", vibe: "Mistral Vibe" };
+
+/** Every agent, in the order the app lists them. */
+export const AGENTS: AgentKind[] = ["claude", "codex", "vibe"];
+
+/** The agents' short names, as a sentence names them ("Codex reads…"). */
+export const AGENT_SHORT_NAMES: Record<AgentKind, string> = { claude: "Claude", codex: "Codex", vibe: "Vibe" };
 
 const EFFORT_LABELS: Record<string, string> = {
   low: "Low",
@@ -99,7 +105,7 @@ export function isEntry(catalog: AgentModels[] | null, entry: LoadoutEntry, choi
 /** Until the user saves a loadout: each agent's default model at a sensible effort. */
 export function defaultLoadout(catalog: AgentModels[] | null): LoadoutEntry[] {
   const entries: LoadoutEntry[] = [];
-  for (const agent of ["claude", "codex"] as const) {
+  for (const agent of AGENTS) {
     const model = findModel(catalog, agent, null);
     if (!model) continue;
     const effort = model.default_effort ?? (model.efforts.includes("high") ? "high" : undefined);

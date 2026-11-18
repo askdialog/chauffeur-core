@@ -1,9 +1,28 @@
 import type { AgentKind } from "@chauffeur/protocol";
 import { useId } from "react";
 
-/** Claude Code's pixel mascot in terracotta; Codex's prompt in a blue cloud. */
+/** Claude Code's pixel mascot in terracotta; Codex's prompt in a blue cloud; Vibe's wave in orange. */
 export function AgentIcon({ agent, size = 14, className }: { agent: AgentKind; size?: number; className?: string }) {
-  return agent === "codex" ? <CodexIcon size={size} className={className} /> : <ClaudeIcon size={size} className={className} />;
+  if (agent === "codex") return <CodexIcon size={size} className={className} />;
+  if (agent === "vibe") return <VibeIcon size={size} className={className} />;
+  return <ClaudeIcon size={size} className={className} />;
+}
+
+/** Mistral Vibe: a wave on an orange tile (Chauffeur's own drawing, not Mistral's logo). */
+function VibeIcon({ size, className }: { size: number; className?: string | undefined }) {
+  const gradient = useId();
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" className={className} aria-hidden>
+      <defs>
+        <linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stopColor="#FFB547" />
+          <stop offset="1" stopColor="#FA500F" />
+        </linearGradient>
+      </defs>
+      <rect x="1" y="1" width="14" height="14" rx="3.5" fill={`url(#${gradient})`} />
+      <path d="M3.5 9.2c1.1-2.4 2.3-2.4 3.4 0s2.3 2.4 3.4 0 1.6-1.8 2.2-.9" fill="none" stroke="white" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 function ClaudeIcon({ size, className }: { size: number; className?: string | undefined }) {

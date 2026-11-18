@@ -953,7 +953,7 @@ export function delegatedChat(item: Pick<ToolItem, "toolUseId" | "input">, paren
 export function delegatedAgent(item: Pick<ToolItem, "input">, chat: ChatInfo | null): AgentKind {
   if (chat) return chat.agent;
   const input = item.input != null && typeof item.input === "object" && !Array.isArray(item.input) ? item.input : null;
-  return input?.agent === "codex" ? "codex" : "claude";
+  return input?.agent === "codex" || input?.agent === "vibe" ? input.agent : "claude";
 }
 
 /** Open permission requests and questions, oldest first. */

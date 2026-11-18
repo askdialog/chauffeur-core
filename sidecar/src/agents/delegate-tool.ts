@@ -17,7 +17,10 @@ export const DELEGATE = "delegate";
 /** The tool's name as the chat shows it, whatever the agent. */
 export const DELEGATE_TOOL = `mcp__${CHAUFFEUR_TOOLS}__${DELEGATE}`;
 
-export const DELEGATE_AGENTS = ["codex", "claude"] as const satisfies readonly AgentKind[];
+export const DELEGATE_AGENTS = ["codex", "claude", "vibe"] as const satisfies readonly AgentKind[];
+/** How an answer names the agent of the delegated chat. */
+const AGENT_NAMES: Record<AgentKind, string> = { claude: "Claude", codex: "Codex", vibe: "Vibe" };
+
 export const DELEGATE_TIERS = ["fast", "default", "strongest"] as const satisfies readonly DelegateTier[];
 
 export const DELEGATE_DESCRIPTION =
@@ -25,8 +28,8 @@ export const DELEGATE_DESCRIPTION =
   "answer its questions or talk to it there); the call waits until it has finished and returns its last message. " +
   "Delegate only what needs such a chat: a review or a second opinion (`review: true`), or a long or parallel piece " +
   "of work the user may want to follow; for a quick search or a small sub-task, use your own subagents when you have " +
-  "them. It runs on your own agent, except a review: that goes to the other agent (Codex from Claude, Claude from " +
-  "Codex), whose model reads the work with other blind spots. If that agent is not installed, signed out or out of its plan's " +
+  "them. It runs on your own agent, except a review: that goes to another agent (Codex from Claude, Claude from " +
+  "Codex or Mistral Vibe), whose model reads the work with other blind spots. If that agent is not installed, signed out or out of its plan's " +
   "limits, Chauffeur gives the task to the other one and says so. Pick the model with `tier` (`fast` for quick, " +
   "simple tasks; `default`; `strongest` for hard work) and, when the task needs it, `effort`. Name `agent` or " +
   "`model` only when the user asked for one. The delegated chat knows nothing of this conversation: say in " +
@@ -37,12 +40,12 @@ export const DELEGATE_DESCRIPTION =
 
 export const DELEGATE_INPUT = {
   prompt: "The task, self-contained: the delegated chat sees nothing else of this conversation.",
-  review: "A review or a second opinion: it goes to the other agent than yours.",
+  review: "A review or a second opinion: it goes to another agent than yours.",
   tier:
     "How strong a model the task needs: fast (quick, simple), default (your own model on your agent, the user's " +
     "default on the other), strongest (hard work). Default: default.",
   effort: "The model's reasoning effort, when the task needs another than its default: low, medium, high, xhigh, max (Codex also ultra).",
-  agent: "codex or claude, only when the user asked for that agent. Default: yours, or the other one for a review.",
+  agent: "codex, claude or vibe, only when the user asked for that agent. Default: yours, or another one for a review.",
   model: "A model id, only when the user asked for that model by name; it replaces `tier`.",
   chat: "The id of a delegated chat a previous call returned, to give it more work.",
 } as const;
@@ -91,7 +94,7 @@ export async function delegate(host: DelegateHost, input: unknown, options: Dele
   const prompt = text("prompt");
   const chat = text("chat") || null;
   if (!prompt) return { text: "Say the task in `prompt`.", error: true };
-  if (!chat && agent && !isAgent(agent)) return { text: "`agent` is codex or claude; leave it out for yours.", error: true };
+  if (!chat && agent && !isAgent(agent)) return { text: "`agent` is codex, claude or vibe; leave it out for yours.", error: true };
   if (!chat && tier && !isTier(tier)) return { text: "`tier` is fast, default or strongest.", error: true };
   if (options.signal?.aborted) return { text: "The call was withdrawn: no delegated chat was started.", error: true };
   let started: ToolDelegateStarted;
@@ -161,7 +164,7 @@ function isTier(value: string): value is DelegateTier {
 
 /** The delegated chat's answer as the agent reads it: who answered, how its turn ended, its message. */
 export function answer(result: ToolDelegateResult): ToolText {
-  const name = result.agent === "codex" ? "Codex" : "Claude";
+  const name = AGENT_NAMES[result.agent];
   const who = `${name} (delegated chat ${result.chat}${result.title ? `, "${result.title}"` : ""})`;
   const more = `Give it more work with delegate and chat "${result.chat}".`;
   const message = result.text?.trim() ? `\n\n${result.text.trim()}` : "";

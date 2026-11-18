@@ -529,6 +529,7 @@ pub async fn destination_check(
             let (name, login) = match agent {
                 AgentKind::Claude => ("Claude Code", "claude login"),
                 AgentKind::Codex => ("Codex", "codex login"),
+                AgentKind::Vibe => ("Mistral Vibe", "vibe --setup"),
             };
             match usage.iter().find(|u| u.agent == agent) {
                 Some(u) if u.account == AccountStatus::SignedIn => {}

@@ -6,7 +6,7 @@
 import type { RoutineSuggestion } from "@chauffeur/protocol";
 import { ChevronRight, ExternalLink, Repeat, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
-import { effectiveLoadout, initialChoice, type ModelChoice } from "@/lib/models";
+import { AGENT_SHORT_NAMES, effectiveLoadout, initialChoice, type ModelChoice } from "@/lib/models";
 import { scheduleText } from "@/lib/routines";
 import {
   createSuggestedRoutine,
@@ -106,7 +106,7 @@ function Dialog() {
           <div className="flex items-center gap-2 rounded-md border border-line bg-panel px-3 py-2 text-muted" data-testid="find-routines-running">
             <Spinner size={12} />
             <span>
-              {running.agent === "codex" ? "Codex" : "Claude"} reads {running.messages} of your messages of the last {running.days} days. This takes a
+              {AGENT_SHORT_NAMES[running.agent]} reads {running.messages} of your messages of the last {running.days} days. This takes a
               minute or two; you can close this window.
             </span>
           </div>

@@ -22,7 +22,7 @@ use crate::{Daemon, Result};
 const FRESH: Duration = Duration::from_secs(300);
 /// An agent that does not answer in this time is reported, not waited for.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
-pub(crate) const AGENTS: [AgentKind; 2] = [AgentKind::Claude, AgentKind::Codex];
+pub(crate) const AGENTS: [AgentKind; 3] = AgentKind::ALL;
 /// A plan window used this far leaves no room for a delegated chat's task.
 const SPENT_PERCENT: f64 = 95.0;
 

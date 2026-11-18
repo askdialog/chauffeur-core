@@ -6,3 +6,6 @@ export const CLAUDE_AGENT_SDK_VERSION = "0.3.325";
 
 /** The codex-cli the app-server types in src/agents/codex/generated were generated from. */
 export const CODEX_APP_SERVER_VERSION = "0.167.0";
+
+/** The Mistral Vibe (`vibe-acp`) Chauffeur was tried with; a session warns when another one runs. */
+export const VIBE_VERSION = "3.1.3";

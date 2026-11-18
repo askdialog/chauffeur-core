@@ -97,6 +97,12 @@ describe("changing the choice", () => {
 });
 
 describe("the loadout", () => {
+  test("defaults to Mistral Vibe's default model too when Vibe lists models", () => {
+    const large = model({ id: "mistral-large-4-0", resolved: "mistral-large-4-0", name: "Mistral Large 4", efforts: ["low", "medium", "high"], default_effort: "high", is_default: true });
+    expect(defaultLoadout([...CATALOG, { agent: "vibe", models: [large], error: null }]).map((entry) => entry.agent)).toEqual(["claude", "codex", "vibe"]);
+    expect(defaultLoadout([...CATALOG, { agent: "vibe", models: [], error: "not installed" }]).map((entry) => entry.agent)).toEqual(["claude", "codex"]);
+  });
+
   test("defaults to each agent's default model until one is saved", () => {
     expect(defaultLoadout(CATALOG)).toEqual([
       { agent: "claude", model: "opus", effort: "high", fast: false },

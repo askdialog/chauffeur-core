@@ -919,6 +919,8 @@ enum Reply {
 pub(crate) enum Agent {
     Claude,
     Codex,
+    /// Mistral Vibe.
+    Vibe,
 }
 
 impl From<Agent> for AgentKind {
@@ -926,6 +928,7 @@ impl From<Agent> for AgentKind {
         match agent {
             Agent::Claude => AgentKind::Claude,
             Agent::Codex => AgentKind::Codex,
+            Agent::Vibe => AgentKind::Vibe,
         }
     }
 }
@@ -2310,10 +2313,7 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
                     .agents
                     .iter()
                     .map(|usage| {
-                        let name = match usage.agent {
-                            AgentKind::Claude => "Claude Code",
-                            AgentKind::Codex => "Codex",
-                        };
+                        let name = usage.agent.display_name();
                         let windows = usage
                             .windows
                             .iter()

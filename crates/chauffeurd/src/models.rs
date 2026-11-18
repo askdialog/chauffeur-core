@@ -12,7 +12,6 @@ use chauffeur_protocol::sidecar::{
 use crate::{Daemon, Result};
 
 const TTL: Duration = Duration::from_secs(60 * 60);
-const AGENTS: [AgentKind; 2] = [AgentKind::Claude, AgentKind::Codex];
 const LOADOUT_KEY: &str = "loadout";
 
 #[derive(Default)]
@@ -23,11 +22,11 @@ pub struct ModelCatalog {
 
 impl ModelCatalog {
     pub async fn list(&self, daemon: &Arc<Daemon>, refresh: bool) -> Vec<AgentModels> {
-        let [claude, codex] = AGENTS.map(|agent| self.agent(daemon, agent, refresh));
-        let (claude, mut codex) = tokio::join!(claude, codex);
+        let [claude, codex, vibe] = AgentKind::ALL.map(|agent| self.agent(daemon, agent, refresh));
+        let (claude, mut codex, vibe) = tokio::join!(claude, codex, vibe);
         // Read from disk at each call, never cached: a pull or a delete shows at once.
         codex.models.extend(daemon.ollama.agent_models());
-        vec![claude, codex]
+        vec![claude, codex, vibe]
     }
 
     async fn agent(&self, daemon: &Arc<Daemon>, agent: AgentKind, refresh: bool) -> AgentModels {
@@ -81,6 +80,8 @@ pub fn tier_model(agent: AgentKind, tier: DelegateTier) -> Option<&'static str> 
         (AgentKind::Claude, DelegateTier::Strongest) => Some("opus"),
         (AgentKind::Codex, DelegateTier::Fast) => Some("gpt-6-luna"),
         (AgentKind::Codex, DelegateTier::Strongest) => Some("gpt-6-astra"),
+        (AgentKind::Vibe, DelegateTier::Fast) => Some("mistral-medium-latest"),
+        (AgentKind::Vibe, DelegateTier::Strongest) => Some("mistral-large-4-0"),
     }
 }
 

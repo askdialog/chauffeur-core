@@ -71,6 +71,7 @@ import { saveFiles } from "../saveFiles";
 import { canDownload, type Download as DownloadFile } from "@/lib/downloads";
 import { Badge, Button, cx, IconButton, Spinner } from "../ui";
 import { AgentIcon } from "../AgentIcon";
+import { AGENT_SHORT_NAMES } from "@/lib/models";
 
 export type Respond = (requestId: string, response: RequestResponse) => Promise<void>;
 
@@ -649,7 +650,7 @@ function DelegateCall({ item }: { item: ToolItem }) {
   const host = useContext(ChatHostContext);
   const child = parentId ? delegatedChat(item, parentId, Object.values(host.chats)) : null;
   const agent = delegatedAgent(item, child);
-  const name = agent === "codex" ? "Codex" : "Claude";
+  const name = AGENT_SHORT_NAMES[agent];
   const input = asObject(item.input);
   const prompt = typeof input?.prompt === "string" ? input.prompt.trim() : "";
   // The chat's title once it differs from the task it was named after (renamed, or titled by a model).

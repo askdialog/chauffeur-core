@@ -30,6 +30,7 @@ import {
 } from "@/lib/context";
 import { client } from "@/state/app";
 import { cx, Spinner, usePopoverPosition } from "../ui";
+import { AGENT_SHORT_NAMES } from "@/lib/models";
 
 const OPEN_DELAY_MS = 250;
 /** Long enough to move the pointer from the ring to the panel. */
@@ -291,7 +292,7 @@ function ContextPanel({
             ))}
           </div>
         ) : (
-          agent === "codex" && <span className="text-[11.5px] text-muted">Codex gives no breakdown, only the total against its window.</span>
+          agent !== "claude" && <span className="text-[11.5px] text-muted">{AGENT_SHORT_NAMES[agent]} gives no breakdown, only the total against its window.</span>
         )}
         {details && (
           <div className="flex flex-col gap-0.5 border-t border-line pt-1.5" data-testid="context-details">
@@ -323,8 +324,8 @@ function ContextPanel({
         )}
         <footer className="flex items-center gap-1.5 text-[11px] text-faint" data-testid="context-footer">
           <span>{readAtText(readAt) ?? ""}</span>
-          {agent === "codex" ? (
-            <span>· Codex gives no breakdown</span>
+          {agent !== "claude" ? (
+            <span>· {AGENT_SHORT_NAMES[agent]} gives no breakdown</span>
           ) : (
             live === false && <span className="text-muted">· last reading; the session is idle</span>
           )}

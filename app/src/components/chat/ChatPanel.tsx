@@ -1,6 +1,5 @@
 import type {
   LoadoutEntry,
-  AgentKind,
   ChatInfo,
   ConfigureChatParams,
   DesignBrief,
@@ -75,7 +74,7 @@ import {
 } from "@/state/app";
 import { CatalogContext, useCatalog, useRemoteCatalog, useWorkspaceCatalog } from "@/state/catalog";
 import { useWorkspaceSelector, type WorkspaceSession } from "@/state/session";
-import { AGENT_NAMES, designChoice, effectiveLoadout, initialChoice, loadoutIn, type ModelChoice } from "@/lib/models";
+import { AGENTS, AGENT_NAMES, designChoice, effectiveLoadout, initialChoice, loadoutIn, type ModelChoice } from "@/lib/models";
 import { ExploreModePicker } from "../ExploreModePicker";
 import { ModelPicker } from "../ModelPicker";
 import { PermissionPicker } from "../PermissionPicker";
@@ -324,7 +323,7 @@ function WorkspaceChats({ workspace, session, setup = null, onCloseShortcut, inU
 
   const tabMenu = (c: ChatInfo): MenuItem[] => {
     const why = actions.reason ?? undefined;
-    const other: AgentKind = c.agent === "claude" ? "codex" : "claude";
+    const others = AGENTS.filter((agent) => agent !== c.agent);
     return [
       {
         label: "Rename",
@@ -353,17 +352,17 @@ function WorkspaceChats({ workspace, session, setup = null, onCloseShortcut, inU
               hint: !actions.fork ? why : (forkRefusal(c) ?? "A new chat with this conversation so far: from there, each goes its own way"),
               onSelect: () => void forkChat(c.id),
             },
-            {
+            ...others.map((other, index) => ({
               label: `Fork into ${AGENT_NAMES[other]}`,
               icon: <GitFork size={13} />,
-              shortcut: "o",
+              ...(index === 0 ? { shortcut: "o" } : {}),
               disabled: !actions.fork || forkRefusal(c) !== null,
               hint: !actions.fork
                 ? why
                 : (forkRefusal(c) ??
                   `A new ${AGENT_NAMES[other]} chat that reads this conversation as text with its first message`),
               onSelect: () => void forkChat(c.id, undefined, other),
-            },
+            })),
             {
               label: "Design from this chat",
               icon: <PenTool size={13} />,
@@ -696,7 +695,7 @@ function ChatTab({
         <CornerDownRight size={11} className="shrink-0 text-faint" aria-label="Delegated chat" data-testid="subagent-chat-icon" />
       )}
       {renaming ? <TabRenameField chat={chat} label={label} onDone={onRenamed} /> : <span className="truncate">{label}</span>}
-      <span className="text-[10.5px] text-faint">{chat.agent === "codex" ? "codex" : ""}</span>
+      <span className="text-[10.5px] text-faint">{chat.agent === "claude" ? "" : chat.agent}</span>
       {suggested > 0 && (
         <Badge tone="attention" title={`${suggested} ${suggested === 1 ? "suggestion waits" : "suggestions wait"} for you`}>
           {suggested}

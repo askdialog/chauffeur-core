@@ -190,8 +190,9 @@ pub async fn set(d: &Arc<Daemon>, update: SettingsUpdate) -> Result<AppSettings>
         d.jev.update(&d.store, jev)?;
         // Idle chats take the change at their next message.
         if d.jev.session_params(&d.store) != before {
-            d.chats.restart_idle(AgentKind::Claude).await;
-            d.chats.restart_idle(AgentKind::Codex).await;
+            for agent in AgentKind::ALL {
+                d.chats.restart_idle(agent).await;
+            }
         }
     }
     if let Some(appearance) = update.appearance {
@@ -723,7 +724,7 @@ fn set_agent_and_port(d: &Daemon, update: &SettingsUpdate) -> Result<()> {
         && AgentKind::parse(agent).is_none()
     {
         return Err(Error::BadRequest(format!(
-            "\"{agent}\" is not an agent: claude or codex"
+            "\"{agent}\" is not an agent: claude, codex or vibe"
         )));
     }
     let model = update.default_model.as_ref().map(|m| m.trim().to_string());

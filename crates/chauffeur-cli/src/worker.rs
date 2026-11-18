@@ -212,10 +212,7 @@ pub async fn run(action: Action, client: &mut Client, json: bool) -> anyhow::Res
 }
 
 fn agent_name(agent: AgentKind) -> &'static str {
-    match agent {
-        AgentKind::Claude => "Claude Code",
-        AgentKind::Codex => "Codex",
-    }
+    agent.display_name()
 }
 
 /// Signs `agent` in on the worker, or each agent signed out there, one after the other.

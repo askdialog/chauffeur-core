@@ -90,6 +90,7 @@ const CONNECTORS: Record<AgentKind, BrokenConnector[]> = {
       chat: fixtureChat("c3", "Answer the support thread", "codex"),
     },
   ],
+  vibe: [],
 };
 
 /** Codex signed out: its token was refused in a chat. */

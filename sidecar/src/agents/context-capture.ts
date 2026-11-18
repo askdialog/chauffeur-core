@@ -59,6 +59,8 @@ export async function captureContext(
   const parent = dirname(output);
   if (await realpath(parent).catch(() => "") !== parent || !(await lstat(parent)).isDirectory()) throw unusable();
   let bundle: unknown;
+  // Vibe keeps its sessions in ~/.vibe/logs/session, which a transfer does not carry yet.
+  if (params.agent === "vibe") return { outcome: "blocked", reason: "Mistral Vibe chats do not move to another machine yet: keep this workspace on this computer" };
   try {
     if (params.agent === "claude") {
       const projects = join(await existing(nativeHome("claude", env)), "projects");

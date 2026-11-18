@@ -1075,7 +1075,7 @@ impl ChatManager {
                 design_dir.as_deref().map(|dir| (dir, chat.agent)),
                 brands.as_ref(),
                 self.subagent_notice(&chat).as_deref(),
-                // Codex keeps its plan natively; Claude, with Chauffeur's tool.
+                // Codex and Vibe keep their plan natively; Claude, with Chauffeur's tool.
                 (chat.agent == AgentKind::Claude && design_dir.is_none()).then_some(PLAN_NOTICE),
                 &d.settings.get(),
             ),
@@ -1139,10 +1139,11 @@ impl ChatManager {
     /// from the agent.
     pub async fn stop_task(&self, key: &str, task_id: &str) -> Result<ChatInfo> {
         let chat = self.resolve(key)?;
-        if chat.agent == AgentKind::Codex {
-            return Err(Error::BadRequest(
-                "Codex runs no task Chauffeur can stop: interrupt the chat instead".into(),
-            ));
+        if chat.agent != AgentKind::Claude {
+            return Err(Error::BadRequest(format!(
+                "{} runs no task Chauffeur can stop: interrupt the chat instead",
+                agent_name(chat.agent)
+            )));
         }
         let running = self
             .tasks
@@ -1376,10 +1377,11 @@ impl ChatManager {
     ) -> Result<SubagentMessagesResult> {
         let d = self.d();
         let chat = self.resolve(&params.chat)?;
-        if chat.agent == AgentKind::Codex {
-            return Err(Error::BadRequest(
-                "Codex runs no subagents with a conversation of their own".into(),
-            ));
+        if chat.agent != AgentKind::Claude {
+            return Err(Error::BadRequest(format!(
+                "{} runs no subagents with a conversation of their own",
+                agent_name(chat.agent)
+            )));
         }
         let tool_use_id = params.tool_use_id.filter(|id| !id.is_empty());
         let mut agent_id = params.agent_id.filter(|id| !id.is_empty());
@@ -4155,12 +4157,13 @@ pub fn stored_reading(
     agent: AgentKind,
     jev_threshold: Option<u8>,
 ) -> ContextUsage {
-    if let Some(threshold) = jev_threshold {
+    // Vibe compacts on its own (`/compact`); Jev does not compact its sessions yet.
+    if let Some(threshold) = jev_threshold.filter(|_| agent != AgentKind::Vibe) {
         usage.compaction = Some(ContextCompaction {
             by: CompactionBy::Jev,
             threshold_percent: f64::from(threshold),
         });
-    } else if agent == AgentKind::Codex {
+    } else if agent != AgentKind::Claude {
         usage.compaction = None;
     } else if usage
         .compaction
@@ -4282,16 +4285,18 @@ async fn delegate_choice(
         .agent
         .or(owner)
         .unwrap_or(if params.review == Some(true) {
-            other_agent(parent.agent)
+            reviewer(parent.agent)
         } else {
             parent.agent
         });
     let mut agent = asked;
     let mut notice = None;
     if let Some(why) = d.usage.spent(asked)
-        && d.usage.spent(other_agent(asked)).is_none()
+        && let Some(instead) = fallbacks(asked)
+            .into_iter()
+            .find(|other| d.usage.spent(*other).is_none())
     {
-        agent = other_agent(asked);
+        agent = instead;
         notice = Some(format!(
             "{} {why}: the task went to {} instead.",
             agent_name(asked),
@@ -4375,10 +4380,22 @@ fn model_owner(catalogs: &[AgentModels], model: &str) -> Option<AgentKind> {
         .map(|catalog| catalog.agent)
 }
 
-fn other_agent(agent: AgentKind) -> AgentKind {
+/// Who reviews an agent's work (`delegate` with `review`): Claude and Codex each other, Vibe's
+/// Claude. Vibe is never picked for a review (docs/adr/mistral-vibe-third-agent.md).
+fn reviewer(agent: AgentKind) -> AgentKind {
     match agent {
         AgentKind::Claude => AgentKind::Codex,
-        AgentKind::Codex => AgentKind::Claude,
+        AgentKind::Codex | AgentKind::Vibe => AgentKind::Claude,
+    }
+}
+
+/// The agents a task goes to, in order, when `agent` cannot work: never Vibe, which runs a
+/// delegated chat only when it is the parent's agent or the call names it.
+fn fallbacks(agent: AgentKind) -> Vec<AgentKind> {
+    match agent {
+        AgentKind::Claude => vec![AgentKind::Codex],
+        AgentKind::Codex => vec![AgentKind::Claude],
+        AgentKind::Vibe => vec![AgentKind::Claude, AgentKind::Codex],
     }
 }
 
@@ -4559,10 +4576,7 @@ fn system_prompt(
 }
 
 pub(crate) fn agent_name(agent: AgentKind) -> &'static str {
-    match agent {
-        AgentKind::Claude => "Claude Code",
-        AgentKind::Codex => "Codex",
-    }
+    agent.display_name()
 }
 
 /// What a fork into the other agent hands its agent before the user's message, until that agent
@@ -4586,6 +4600,7 @@ fn late_answer(result: &ToolDelegateResult) -> String {
     let name = match result.agent {
         AgentKind::Codex => "Codex",
         AgentKind::Claude => "Claude",
+        AgentKind::Vibe => "Vibe",
     };
     let titled = result
         .title
@@ -4639,6 +4654,7 @@ fn subagent_notice(parent_agent: Option<AgentKind>, parent_title: Option<&str>) 
     let agent = match parent_agent {
         Some(AgentKind::Claude) => "a Claude Code chat",
         Some(AgentKind::Codex) => "a Codex chat",
+        Some(AgentKind::Vibe) => "a Mistral Vibe chat",
         None => "a chat",
     };
     let titled = parent_title
@@ -4854,6 +4870,21 @@ pub(crate) fn moved_before(mut ids: Vec<String>, id: &str, before: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reviews_go_to_claude_or_codex_never_to_vibe() {
+        assert_eq!(reviewer(AgentKind::Claude), AgentKind::Codex);
+        assert_eq!(reviewer(AgentKind::Codex), AgentKind::Claude);
+        assert_eq!(reviewer(AgentKind::Vibe), AgentKind::Claude);
+        for agent in AgentKind::ALL {
+            assert!(!fallbacks(agent).contains(&AgentKind::Vibe));
+            assert!(!fallbacks(agent).contains(&agent));
+        }
+        assert_eq!(
+            fallbacks(AgentKind::Vibe),
+            vec![AgentKind::Claude, AgentKind::Codex]
+        );
+    }
 
     #[test]
     fn agents_link_pull_requests_on_github_and_merge_requests_on_gitlab() {

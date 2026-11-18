@@ -48,7 +48,7 @@ import { drafts } from "@/lib/drafts";
 import { basename, buildIndex, type FileIndex } from "@/lib/files";
 import { workspaceName } from "@/lib/format";
 import { appendDraft, type PageScreen } from "@/lib/designHandoff";
-import { AGENT_NAMES, effectiveLoadout, initialChoice, type ModelChoice } from "@/lib/models";
+import { AGENT_SHORT_NAMES, AGENT_NAMES, effectiveLoadout, initialChoice, type ModelChoice } from "@/lib/models";
 import { notify, openExternal, resolveConnection, setAppZoom, setMenuKeys, setTrayAttention, windowFocused } from "@/lib/native";
 import { stepZoom, storedZoom, ZOOM_KEY } from "@/lib/appZoom";
 import { clampSidebarWidth, SIDEBAR_WIDTH_KEY, storedSidebarWidth } from "@/lib/sidebarWidth";
@@ -1459,7 +1459,7 @@ function onChatUpserted(chat: ChatInfo) {
   if (!attention) return;
   const focused = windowFocused();
   if (!focused) {
-    const what = attentionText(attention, chat.agent === "codex" ? "Codex" : "Claude");
+    const what = attentionText(attention, AGENT_SHORT_NAMES[chat.agent]);
     void notify(workspace?.slug ?? "Chauffeur", chat.title ? `${what}: ${chat.title}` : what);
     playNotificationSound().catch(() => {});
   }

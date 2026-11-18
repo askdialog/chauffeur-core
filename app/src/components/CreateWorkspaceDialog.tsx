@@ -38,7 +38,7 @@ import {
   upsertWorkspace,
   useApp,
 } from "@/state/app";
-import { designChoice, effectiveLoadout, initialChoice, type ModelChoice } from "@/lib/models";
+import { AGENT_SHORT_NAMES, designChoice, effectiveLoadout, initialChoice, type ModelChoice } from "@/lib/models";
 import { toImageInputs } from "@/lib/images";
 import { fixNote } from "@/lib/reviews";
 import {
@@ -279,7 +279,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
       }
       // A creation that fails later reopens this form, filled in, with the error.
       rememberCreation(id, draft);
-      void recordReviewFix(workspaceName(result.workspace), choice.agent === "codex" ? "Codex" : "Claude");
+      void recordReviewFix(workspaceName(result.workspace), AGENT_SHORT_NAMES[choice.agent]);
       if (useApp.getState().officeShown && !designChat) {
         // From the Office, the user stays there: the workspace's island appears with its first
         // robot, its chat beside the scene. Without a first prompt, that chat waits for one.

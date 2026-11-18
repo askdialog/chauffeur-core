@@ -1295,6 +1295,30 @@ assert not asked, asked'
   test "$(heads design-codex)" = "$BEFORE"
   c archive design-codex --force >/dev/null
 fi
+if [ -n "${VIBE:-}" ]; then
+  # Needs Mistral Vibe installed and signed in (`uv tool install mistral-vibe`, then `vibe --setup`
+  # or Chauffeur's Sign in). Its sessions land in the user's real ~/.vibe, as Claude's transcripts do.
+  echo "== 5v. a Mistral Vibe chat answers, on the user's Mistral plan"
+  c usage --refresh >/dev/null
+  c --json usage | python3 -c '
+import sys,json
+vibe = next(a for a in json.load(sys.stdin)["agents"] if a["agent"] == "vibe")
+print(vibe["plan"], vibe["windows"])
+assert vibe["account"] == "signed_in" and vibe["windows"] and vibe["windows"][0]["label"].startswith("month"), vibe'
+  c new --name vibe-one >/dev/null
+  c chat vibe-one --agent vibe --prompt "Reply with the single word pong and nothing else." >/dev/null
+  c wait vibe-one --timeout 240 | tee "$T/vibe1.txt"
+  grep -qiE '^pong\.?$' "$T/vibe1.txt"
+  c --json chats vibe-one | python3 -c '
+import sys,json; chats=json.load(sys.stdin)["chats"]
+assert chats[0]["agent"] == "vibe" and chats[0]["agent_session_id"], chats'
+  echo "== 5v1. a Vibe chat resumes its session with its context after the daemon restarts"
+  c daemon stop >/dev/null
+  c daemon start >/dev/null
+  c send vibe-one "Which single word did you reply just before? Reply with that word only." >/dev/null
+  c --json wait vibe-one --timeout 240 | python3 -c 'import sys,json; t=json.load(sys.stdin)["last_text"]; print(t); assert "pong" in (t or "").lower(), t'
+  c archive vibe-one --force >/dev/null
+fi
 if [ -n "${OLLAMA:-}" ]; then
   # Needs Ollama installed and the model on disk (`chauffeur ollama pull qwen3.8`); no Codex login.
   # A local model takes up to a minute to load and read Codex's prompt.

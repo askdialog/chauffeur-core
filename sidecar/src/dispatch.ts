@@ -195,7 +195,7 @@ export function createDispatcher(
   };
 }
 
-const AGENTS: readonly AgentKind[] = ["claude", "codex"];
+const AGENTS: readonly AgentKind[] = ["claude", "codex", "vibe"];
 const PERMISSION_MODES: readonly PermissionMode[] = ["auto", "default", "accept_edits", "plan", "bypass_permissions"];
 
 function directories(value: unknown): string[] {

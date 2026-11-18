@@ -220,13 +220,20 @@ pub enum AgentKind {
     #[default]
     Claude,
     Codex,
+    /// Mistral Vibe, driven through ACP (`vibe-acp`) on the user's Mistral plan (see
+    /// docs/adr/mistral-vibe-third-agent.md).
+    Vibe,
 }
 
 impl AgentKind {
+    /// Every agent, in the order the app and the CLI list them.
+    pub const ALL: [AgentKind; 3] = [AgentKind::Claude, AgentKind::Codex, AgentKind::Vibe];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::Vibe => "vibe",
         }
     }
 
@@ -234,7 +241,17 @@ impl AgentKind {
         match value {
             "claude" => Some(Self::Claude),
             "codex" => Some(Self::Codex),
+            "vibe" => Some(Self::Vibe),
             _ => None,
+        }
+    }
+
+    /// The agent's name as the user knows it.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude Code",
+            Self::Codex => "Codex",
+            Self::Vibe => "Mistral Vibe",
         }
     }
 }

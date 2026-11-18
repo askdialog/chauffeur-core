@@ -128,6 +128,8 @@ describe("the sidecar over JSON-RPC", () => {
     const response = await call("agent.models", { agent: "claude" });
     expect((response?.result as { models: AgentModel[] }).models.map((m) => m.name)).toEqual(["Opus 5.5"]);
     expect((await call("agent.models", { agent: "codex" }))?.error).toMatchObject({ code: 503 });
+    // Vibe is an agent the sidecar knows, not here: unavailable rather than refused.
+    expect((await call("agent.models", { agent: "vibe" }))?.error).toMatchObject({ code: 503 });
     expect((await call("agent.models", { agent: "gemini" }))?.error).toMatchObject({ code: -32602 });
   });
 

@@ -79,12 +79,12 @@ pub fn copy(from: &Path, to: &Path) -> crate::Result<()> {
 /// What a design chat's agent is told, after Claude Code's own prompt. `headless-browser` is the
 /// MCP server the sidecar gives every design chat (`DESIGN_BROWSER`).
 pub fn system_prompt(dir: &str, agent: AgentKind) -> String {
-    // Claude's Artifact tool publishes to claude.ai; Codex has none.
+    // Claude's Artifact tool publishes to claude.ai; Codex and Vibe have none.
     let artifact = match agent {
         AgentKind::Claude => {
             " Publish a screen to claude.ai with the Artifact tool only when the user asks for it."
         }
-        AgentKind::Codex => "",
+        AgentKind::Codex | AgentKind::Vibe => "",
     };
     format!(
         "This chat is a Chauffeur design chat: you design screens, you never write or change code.\n\
@@ -226,7 +226,7 @@ mod tests {
 
     #[test]
     fn the_agent_checks_its_renders_without_a_window_and_shows_one_only_on_purpose() {
-        for agent in [AgentKind::Claude, AgentKind::Codex] {
+        for agent in AgentKind::ALL {
             let prompt = system_prompt("/w/.chauffeur/designs/c1", agent);
             assert!(prompt.contains("use the headless-browser MCP tools: they open no window"));
             assert!(prompt.contains("Open a browser the user sees"));

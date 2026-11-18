@@ -31,8 +31,11 @@ import { McpConnectButton } from "./McpConnectButton";
 import { Button, cx } from "./ui";
 
 const POLL_MS = 120_000;
-/** The windows shown in the row, one column each; the others are in the panel. */
-const COLUMNS = ["5h", "7d"];
+/**
+ * The windows shown in the row, one column each (the first label a plan has); the others are in
+ * the panel. Vibe's monthly budget (`month`, `month (pay-as-you-go)`) takes the long column.
+ */
+const COLUMNS = [["5h"], ["7d", "month", "month (pay-as-you-go)"]];
 const OPEN_DELAY_MS = 250;
 /** Long enough to move the pointer from the row to the panel. */
 const CLOSE_DELAY_MS = 200;
@@ -47,7 +50,10 @@ export function UsageMeter() {
   const connectingMcp = useApp((s) => s.connectingMcp);
   const [now, setNow] = useState(Date.now());
   const [reading, setReading] = useState(false);
-  const connectors = useMemo(() => ({ claude: brokenConnectors(broken, "claude", connectingMcp), codex: brokenConnectors(broken, "codex", connectingMcp) }), [broken, connectingMcp]);
+  const connectors = useMemo(
+    () => ({ claude: brokenConnectors(broken, "claude", connectingMcp), codex: brokenConnectors(broken, "codex", connectingMcp), vibe: brokenConnectors(broken, "vibe", connectingMcp) }),
+    [broken, connectingMcp],
+  );
   useEffect(() => setNow(Date.now()), [agents]);
 
   const load = useCallback((refresh = false) => {
@@ -91,7 +97,7 @@ function openChat(chat: ChatInfo) {
   setTab(chat.workspace_id, "chat");
 }
 
-const NO_CONNECTORS: Record<AgentKind, BrokenConnector[]> = { claude: [], codex: [] };
+const NO_CONNECTORS: Record<AgentKind, BrokenConnector[]> = { claude: [], codex: [], vibe: [] };
 
 /** The row and its panel, fed by `UsageMeter` (or a dev fixture). */
 export function UsageMeterView({
@@ -229,9 +235,9 @@ function AgentRow({ usage, now, broken }: { usage: AgentUsage; now: number; brok
   return (
     <div className="flex items-center gap-2">
       <AgentIcon agent={usage.agent} size={12} className={cx("shrink-0", usage.error && "opacity-50")} />
-      {COLUMNS.map((label) => {
-        const w = usage.windows.find((candidate) => candidate.label === label);
-        return w ? <Window key={label} window={w} now={now} /> : <span key={label} className="flex-1" />;
+      {COLUMNS.map((labels) => {
+        const w = usage.windows.find((candidate) => labels.includes(candidate.label));
+        return w ? <Window key={labels[0]} window={w} now={now} /> : <span key={labels[0]} className="flex-1" />;
       })}
       {broken > 0 && (
         <span
@@ -255,7 +261,7 @@ function Window({ window, now }: { window: UsageWindow; now: number }) {
   const used = Math.max(0, Math.min(100, window.used_percent));
   return (
     <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[10.5px] tabular-nums">
-      <span className="shrink-0 text-faint">{window.label.split(" ")[0]}</span>
+      <span className="shrink-0 text-faint">{window.label.startsWith("month") ? "mo" : window.label.split(" ")[0]}</span>
       <span className="h-1 min-w-6 flex-1 overflow-hidden rounded-full bg-line">
         <span className={cx("block h-full rounded-full", TONE[tone])} style={{ width: `${used}%` }} />
       </span>

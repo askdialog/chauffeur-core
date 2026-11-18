@@ -3,6 +3,7 @@
 
 import { ClaudeAgent } from "./agents/claude/agent.ts";
 import { CodexAgent } from "./agents/codex/agent.ts";
+import { VibeAgent } from "./agents/vibe/agent.ts";
 import { createSidecar } from "./app.ts";
 import { createLogger } from "./log.ts";
 import { SIDECAR_VERSION } from "./version.ts";
@@ -16,7 +17,7 @@ console.debug = console.error;
 
 const log = createLogger();
 const sidecar = createSidecar({
-  agents: [new ClaudeAgent(), new CodexAgent({}, log.child("codex"))],
+  agents: [new ClaudeAgent(), new CodexAgent({}, log.child("codex")), new VibeAgent({}, log.child("vibe"))],
   write: (line) => {
     process.stdout.write(line);
   },
