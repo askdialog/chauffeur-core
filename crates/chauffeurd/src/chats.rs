@@ -4531,6 +4531,7 @@ fn system_prompt(
         (!workspace.explore && design.is_none()).then(|| DOCUMENT_NOTICE.to_string()),
         (!workspace.explore && design.is_none())
             .then(|| DECK_NOTICE.to_string()),
+        (!workspace.explore && design.is_none()).then(|| ACTIVITY_NOTICE.to_string()),
         brands.map(crate::brands::notice),
         subagent.map(str::to_string),
         plan.map(str::to_string),
@@ -4632,6 +4633,10 @@ fn subagent_notice(parent_agent: Option<AgentKind>, parent_title: Option<&str>) 
         "This chat is a delegated chat: another agent of this Chauffeur workspace, {agent}{titled}, started it with its delegate tool and gave it its task. You work in the same folders as that agent. The user sees this chat, and may answer your questions or write to you here. At the end of each turn, your last message goes back to that agent as the answer to its task: make it complete and self-contained (what you did, what you found, what is left to do), never a pointer to earlier messages."
     )
 }
+
+/// A recap of the user's own work reads their Chauffeur activity first
+/// (docs/adr/activity-for-recaps.md): git and GitHub alone miss the chats.
+const ACTIVITY_NOTICE: &str = "When the user asks for a recap of their own work over a period (what they did since yesterday morning or since Tuesday 9:00, this week, for a daily or a 1-1), start from `chauffeur activity --since <when>` (a local date such as 2026-11-10, a local time such as '2026-11-10 09:00', or a span back from now such as 36h; `--until` ends the period earlier; `--json` gives the messages and answers whole): it lists every Chauffeur workspace and chat they wrote in during the period, archived ones included, with their messages and each chat's last answer. Then add their pull requests, commits and tickets (gh, git, Linear), and say which sources you read.";
 
 /// Claude's plan, counted into the chat's progress (plan_progress.rs), which the user follows in
 /// the Office.

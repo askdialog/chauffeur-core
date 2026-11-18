@@ -148,6 +148,15 @@ c --json routine run Triage | python3 -c 'import sys,json; r=json.load(sys.stdin
 c routine activate Triage | grep -q "(active, next run "
 c routine history Triage | grep -q "^run .* by hand, v2"
 c routine pause Triage | grep -q "(paused)"
+# Activity: the user's messages of a period, a routine's own (its refining chat, its runs) left out.
+c --json activity --since 1h | python3 -c '
+import sys, json
+r = json.load(sys.stdin)
+messages = [m["text"] for w in r["workspaces"] for chat in w["chats"] for m in chat["messages"]]
+assert messages == ["Triage the new tickets"], r
+assert r["workspaces"][0]["path"].endswith("/e2e-routine-src"), r'
+c activity --since 1h | grep -q "^- .*  Triage the new tickets$"
+if c activity --since yesterday 2>/dev/null; then echo "an unreadable time was taken"; exit 1; fi
 c routine rm Triage | grep -q "its workspace stays"
 echo "== a brief read from standard input keeps its backticks and \$ as written"
 c new --name e2e-stdin-brief --prompt - >/dev/null <<'EOF'

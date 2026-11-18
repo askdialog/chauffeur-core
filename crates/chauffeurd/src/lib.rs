@@ -9,6 +9,7 @@ pub const BUILD: &str = match option_env!("CHAUFFEUR_BUILD") {
 };
 
 pub mod access;
+pub mod activity;
 pub mod attachments;
 pub mod brands;
 pub mod canvas;

@@ -2672,6 +2672,7 @@ async fn both_agents_receive_chauffeur_reply_and_design_instructions() {
                 assert!(start["params"]["read_only"].as_bool().unwrap(), "{start}");
                 assert!(prompt.contains("Design from this chat"), "{start}");
                 assert!(!prompt.contains("chauffeur --json chat"), "{start}");
+                assert!(!prompt.contains("chauffeur activity"), "{start}");
             } else {
                 let command = format!(
                     "chauffeur --json chat {} --design --from {} --agent {}",
@@ -2685,6 +2686,10 @@ async fn both_agents_receive_chauffeur_reply_and_design_instructions() {
                     "{start}"
                 );
                 assert!(prompt.contains("does not start the designer"), "{start}");
+                assert!(
+                    prompt.contains("start from `chauffeur activity --since <when>`"),
+                    "{start}"
+                );
             }
         }
     }
@@ -20492,4 +20497,131 @@ async fn brands_are_made_in_a_workspace_the_user_never_sees() {
     assert_ne!(moved.id, old.id);
     assert_eq!(moved.workspace_id, acme.workspace_id);
     assert_eq!(moved.brand.as_deref(), Some("globex"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn activity_lists_what_the_user_wrote_in_the_window_and_where_each_chat_stood() {
+    use chauffeur_protocol::activity::ActivityParams;
+    use chauffeur_protocol::events::ChatEvent;
+    use chauffeurd::activity;
+    let f = fixture(49700);
+    let d = &f.daemon;
+    d.chats
+        .sidecar
+        .use_binary(fake_sidecar(&f.root, &f.root.join("sidecar.log")));
+    let since = chauffeurd::store::now();
+    let mut chats = Vec::new();
+    for prompt in [
+        "Fais moi un récap de l'hallucination sur Aime",
+        "Compare the Toyota traces",
+    ] {
+        let created = d
+            .workspaces
+            .create(CreateWorkspaceParams {
+                repos: vec!["repo-a".into()],
+                prompt: Some(prompt.into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        chats.push(created.chat.unwrap());
+    }
+    // A child workspace's prompt was written by the agent that started it, not by the user.
+    let parent = chats[0].workspace_id.clone();
+    d.workspaces
+        .create(CreateWorkspaceParams {
+            repos: vec!["repo-a".into()],
+            prompt: Some("Implement DAT-1 as the parent asked".into()),
+            parent: Some(parent.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    d.chats.on_event(
+        &chats[0].id,
+        ChatEvent::AssistantText {
+            message_id: "m:0".into(),
+            text: "A subagent's text".into(),
+            parent_tool_use_id: Some("toolu_a".into()),
+        },
+    );
+    d.chats.on_event(
+        &chats[0].id,
+        ChatEvent::AssistantText {
+            message_id: "m:1".into(),
+            text: "The cache served an answer from October 28.".into(),
+            parent_tool_use_id: None,
+        },
+    );
+    d.workspaces
+        .archive(&chats[1].workspace_id, true)
+        .await
+        .unwrap();
+
+    let result = activity::list(
+        &d.store,
+        ActivityParams {
+            since: since.clone(),
+            until: None,
+        },
+    )
+    .unwrap();
+    let names: Vec<_> = result.workspaces.iter().map(|w| w.id.as_str()).collect();
+    assert_eq!(
+        names,
+        [parent.as_str(), chats[1].workspace_id.as_str()],
+        "the user's two workspaces, by first message, the archived one included, not the child"
+    );
+    let first = &result.workspaces[0];
+    assert_eq!(first.repos, ["repo-a"]);
+    assert_eq!(first.chats.len(), 1);
+    let chat = &first.chats[0];
+    assert_eq!(chat.id, chats[0].id);
+    assert_eq!(
+        chat.messages
+            .iter()
+            .map(|m| m.text.as_str())
+            .collect::<Vec<_>>(),
+        ["Fais moi un récap de l'hallucination sur Aime"]
+    );
+    assert_eq!(
+        chat.last_answer.as_ref().map(|a| a.text.as_str()),
+        Some("The cache served an answer from October 28.")
+    );
+    assert!(result.workspaces[1].archived_at.is_some());
+    assert!(result.workspaces[1].chats[0].last_answer.is_none());
+
+    // A window that ends before the messages holds none of them.
+    let before = activity::list(
+        &d.store,
+        ActivityParams {
+            since: "2026-01-01T00:00:00+01:00".into(),
+            until: Some(since.clone()),
+        },
+    )
+    .unwrap();
+    assert!(before.workspaces.is_empty());
+    assert_eq!(before.since, "2025-12-31T23:00:00.000Z");
+
+    let backwards = activity::list(
+        &d.store,
+        ActivityParams {
+            since: since.clone(),
+            until: Some("2026-01-01T00:00:00Z".into()),
+        },
+    )
+    .unwrap_err();
+    assert!(
+        backwards.to_string().contains("must come before"),
+        "{backwards}"
+    );
+    let unreadable = activity::list(
+        &d.store,
+        ActivityParams {
+            since: "yesterday".into(),
+            until: None,
+        },
+    )
+    .unwrap_err();
+    assert!(unreadable.to_string().contains("RFC 3339"), "{unreadable}");
 }

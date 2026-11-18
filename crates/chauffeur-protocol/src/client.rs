@@ -458,6 +458,14 @@ methods! {
         #[relay(Local)]
         ReviewsFollowUp(crate::reviews::ReviewFollowUpParams) -> crate::reviews::ReviewsInfo,
 
+        /// The user's activity between two instants, every workspace included, archived ones
+        /// too: the workspaces and chats they wrote in, their messages and each chat's last
+        /// answer. Leaves out what an agent wrote (delegated chats, child workspaces), routines
+        /// and reviews. For an agent recapping the user's work.
+        #[serde(rename = "activity.list")]
+        #[access(Any)]
+        #[relay(Local)]
+        ActivityList(crate::activity::ActivityParams) -> crate::activity::ActivityResult,
         /// Find routines as it stands: the analysis under way and the suggestions waiting.
         #[serde(rename = "routine.suggestions")]
         #[access(Any)]

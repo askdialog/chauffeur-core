@@ -838,7 +838,7 @@ fn rfc3339(time: DateTime<Utc>) -> String {
 }
 
 /// At most `max` characters, an ellipsis marking a cut.
-fn cut(text: &str, max: usize) -> String {
+pub(crate) fn cut(text: &str, max: usize) -> String {
     match text.char_indices().nth(max) {
         Some((at, _)) => format!("{}…", text[..at].trim_end()),
         None => text.to_string(),
@@ -846,7 +846,7 @@ fn cut(text: &str, max: usize) -> String {
 }
 
 /// The message as typed: pasted text stands as a mark, the rest trimmed.
-fn clean(text: &str) -> String {
+pub(crate) fn clean(text: &str) -> String {
     static PASTED: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?s)<pasted_content[^>]*>.*?</pasted_content>").expect("a valid pattern")
     });

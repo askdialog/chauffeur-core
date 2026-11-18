@@ -21,6 +21,7 @@
 pub mod methods;
 
 pub mod access;
+pub mod activity;
 pub mod client;
 pub mod cloud_archive;
 pub mod cloud_backup;

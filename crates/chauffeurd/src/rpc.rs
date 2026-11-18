@@ -289,6 +289,7 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         | ClientCall::RoutineFind(_)
         | ClientCall::RoutineSuggestionCreate(_)
         | ClientCall::RoutineSuggestionSet(_)) => handle_routine(daemon, call).await,
+        ClientCall::ActivityList(params) => to_value(crate::activity::list(&daemon.store, params)?),
         ClientCall::ReviewsInfo(_) => to_value(crate::reviews::info(daemon)?),
         ClientCall::ReviewsRefresh(_) => to_value(crate::reviews::refresh(daemon)?),
         ClientCall::ReviewsFollowUp(params) => to_value(crate::reviews::follow_up(daemon, params)?),

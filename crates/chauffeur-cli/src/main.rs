@@ -1,5 +1,6 @@
 //! `chauffeur`: every action of the app, from a terminal or from an agent.
 
+mod activity;
 mod client;
 mod cloud;
 mod daemon_guard;
@@ -431,6 +432,18 @@ enum Command {
         request_id: String,
         #[command(subcommand)]
         answer: Reply,
+    },
+    /// Your own activity over a time window, every workspace included, archived ones too: the
+    /// workspaces and chats you wrote in, your messages and each chat's last answer. What an
+    /// agent reads to recap your work ("what did I do since yesterday morning").
+    Activity {
+        /// The start: 2026-11-10, 2026-11-10 09:00 (local time), an RFC 3339 instant, or a span
+        /// back from now such as 36h or 3d.
+        #[arg(long)]
+        since: String,
+        /// The end, excluded, in the same forms; now by default.
+        #[arg(long)]
+        until: Option<String>,
     },
     /// Chats of a workspace: its open ones, the closed ones too with --all.
     Chats {
@@ -1806,6 +1819,9 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
                 }))
                 .await?;
             print_or(json, &result, || render::chat_line(&result));
+        }
+        Command::Activity { since, until } => {
+            activity::run(&mut client, since, until, json).await?
         }
         Command::Chats { workspace, all } => {
             let result: ChatsResult = client

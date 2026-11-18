@@ -816,7 +816,7 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
 
 /// A chat event's `type`, as `events_by_chat_type` indexes it: a query uses that index only when
 /// it spells the expression the same way.
-const EVENT_TYPE: &str =
+pub(crate) const EVENT_TYPE: &str =
     "(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.event.event.type') END)";
 
 /// Envelopes from `(seq, payload)` rows.

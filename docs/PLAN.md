@@ -103,6 +103,10 @@ Find routines (story 57, 2026-11-09, [decision](adr/find-routines.md)): `routine
 `routine_suggestion_messages` tables, schedules every N days, the sidebar's Find routines button
 and Suggestions entry, the modal and its cards, `chauffeur routine find|suggestions|suggestion`.
 
+Activity for recaps (story 58, 2026-11-18, [decision](adr/activity-for-recaps.md)): `activity.list`,
+`chauffeur activity --since|--until`, and shared session instructions that start a recap of the
+user's own work from it, then pull requests, commits and tickets.
+
 Pull request links (stage 3/7, 2026-10-29): shared session instructions ask Claude Code and Codex
 to link PR mentions to their actual URL, including tables and summaries, in workspaces and explorations.
 
