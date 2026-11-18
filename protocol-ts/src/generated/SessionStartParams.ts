@@ -45,16 +45,11 @@ notes_dir?: string,
  */
 brands_dir?: string, 
 /**
- * The clone of the workspace's first repo, given to a Claude chat: its session reads the
- * Claude Code auto memory kept for that clone, read-only
- * (docs/adr/claude-memory-per-repo.md).
+ * The clones of the workspace's repos, the first asked first, given to a Claude chat: its
+ * session starts with the first one's Claude Code memory and is pointed at the others', all
+ * read-only (docs/adr/claude-memory-per-repo.md).
  */
-memory_clone?: string, 
-/**
- * The clones of the workspace's other repos, given to a Claude chat: its session is pointed
- * at their Claude Code memories, read-only, to read when the work touches them.
- */
-other_memory_clones?: Array<string>, 
+memory_clones?: Array<string>, 
 /**
  * Resume this agent session instead of starting a new one.
  */

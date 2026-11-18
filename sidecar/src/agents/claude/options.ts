@@ -16,7 +16,7 @@ import { RpcError } from "../../rpc/peer.ts";
 import { SIDECAR_VERSION } from "../../version.ts";
 import type { Hooks } from "./hooks.ts";
 import { USER_JEV_PLUGIN } from "./jev.ts";
-import { type CloneMemory, memoryPrompt, otherMemoriesPrompt } from "./memory.ts";
+import { type CloneMemories, memoryPrompt, otherMemoriesPrompt } from "./memory.ts";
 import { DELEGATE_TOOL } from "../delegate-tool.ts";
 import { DESIGN_BROWSER, designBrowserCommand } from "../design-browser.ts";
 import { ADD_REPO_TOOL, CHAUFFEUR_TOOLS, LIST_REPOS_TOOL, UPDATE_PLAN_TOOL } from "../repo-tools.ts";
@@ -177,10 +177,8 @@ export interface OptionDeps {
   jevPluginDir: () => string;
   /** Chauffeur's own tools (the repo tools, `delegate`), for every chat but a design chat's. */
   repoTools?: McpSdkServerConfigWithInstance;
-  /** The user's memory of the workspace's first repo, read from its clone for this session. */
-  memory?: CloneMemory;
-  /** The user's memories of the workspace's other repos, which the session is pointed at. */
-  otherMemories?: CloneMemory[];
+  /** The user's memories of the workspace's repos, read from their clones for this session. */
+  memories?: CloneMemories;
 }
 
 /**
@@ -268,7 +266,8 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
   // asking, though it sits outside the working directories; never written from a workspace.
   // And the other repos' memory folders it is pointed at: granted here, as Claude Code ignores the
   // allow rules of a folder never trusted, as a workspace is.
-  for (const { dir } of [...(deps.memory ? [deps.memory] : []), ...(deps.otherMemories ?? [])]) {
+  const { first, others = [] } = deps.memories ?? {};
+  for (const { dir } of [...(first ? [first] : []), ...others]) {
     addRules(settings, "allow", folderRules("Read", dir));
     addRules(settings, "deny", folderRules("Edit", dir));
   }
@@ -281,10 +280,9 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
   }
   if (Object.keys(settings).length > 0) options.settings = settings;
   if (params.resume_session_id) options.resume = params.resume_session_id;
-  const others = deps.otherMemories ?? [];
   const append = [
     params.append_system_prompt,
-    deps.memory && memoryPrompt(deps.memory),
+    first && memoryPrompt(first),
     others.length > 0 && otherMemoriesPrompt(others),
   ]
     .filter(Boolean)

@@ -1044,7 +1044,6 @@ impl ChatManager {
         }
         crate::ollama::codex_env(&d.paths.home, chat.agent, chat.model.as_deref(), &mut env)?;
         let brands = crate::brands::of_chat(&d, &chat);
-        let clones = workspace_clones(&d.store, &workspace.id)?;
         let params = SessionStartParams {
             launch_id: None,
             chat_id: chat.id.clone(),
@@ -1068,12 +1067,8 @@ impl ChatManager {
                     .into_owned()
             }),
             brands_dir: brands.as_ref().map(|b| b.root.clone()),
-            memory_clone: match chat.agent {
-                AgentKind::Claude => clones.first().cloned(),
-                AgentKind::Codex | AgentKind::Vibe => None,
-            },
-            other_memory_clones: match chat.agent {
-                AgentKind::Claude => clones.iter().skip(1).cloned().collect(),
+            memory_clones: match chat.agent {
+                AgentKind::Claude => workspace_clones(&d.store, &workspace.id)?,
                 AgentKind::Codex | AgentKind::Vibe => Vec::new(),
             },
             resume_session_id: chat.agent_session_id.clone(),

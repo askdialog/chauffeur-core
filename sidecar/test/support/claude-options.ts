@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import type { OptionDeps } from "../../src/agents/claude/options.ts";
 import type { SessionStartParams } from "../../src/protocol.ts";
@@ -35,4 +36,9 @@ export function startParams(extra: Partial<SessionStartParams>): SessionStartPar
 export function appended(options: Options): string {
   const prompt = options.systemPrompt;
   return typeof prompt === "object" && prompt !== null && "append" in prompt ? (prompt.append ?? "") : "";
+}
+
+/** Where Claude Code keeps a short path's memory under `config`: every character but a letter or digit as `-`. */
+export function memoryDir(config: string, clone: string): string {
+  return join(config, "projects", clone.replace(/[^a-zA-Z0-9]/g, "-"), "memory");
 }

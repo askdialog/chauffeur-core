@@ -256,15 +256,15 @@ export function parseStartParams(params: unknown): SessionStartParams {
     prompt_suggestions: optionalBoolean(p, "prompt_suggestions") ?? false,
   };
   if (optionalBoolean(p, "delegate")) start.delegate = true;
-  for (const key of ["model", "effort", "plans_dir", "design_dir", "notes_dir", "brands_dir", "memory_clone", "resume_session_id", "append_system_prompt", "prompt", "gitlab_host"] as const) {
+  for (const key of ["model", "effort", "plans_dir", "design_dir", "notes_dir", "brands_dir", "resume_session_id", "append_system_prompt", "prompt", "gitlab_host"] as const) {
     const value = optionalString(p, key);
     if (value !== undefined) start[key] = value;
   }
   if (p.jev !== undefined && p.jev !== null) start.jev = jevParams(p.jev);
   const always = strings(p.always_allow, "always_allow");
   if (always.length > 0) start.always_allow = always;
-  const others = strings(p.other_memory_clones, "other_memory_clones");
-  if (others.length > 0) start.other_memory_clones = others;
+  const clones = strings(p.memory_clones, "memory_clones");
+  if (clones.length > 0) start.memory_clones = clones;
   return start;
 }
 

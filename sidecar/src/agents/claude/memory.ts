@@ -5,7 +5,6 @@
 
 import { open, realpath } from "node:fs/promises";
 import { join } from "node:path";
-import type { SessionStartParams } from "../../protocol.ts";
 import { nativeHome } from "../context-capture.ts";
 import { claudeProjectKey } from "./context-bundle.ts";
 
@@ -75,13 +74,9 @@ export interface CloneMemories {
   others: CloneMemory[];
 }
 
-/** The memories of the session's clones, read side by side; a clone without one left out. */
-export async function readCloneMemories(
-  params: Pick<SessionStartParams, "memory_clone" | "other_memory_clones">,
-  env: Record<string, string | undefined>,
-): Promise<CloneMemories> {
-  const read = (clone: string | undefined) => (clone ? readCloneMemory(clone, env) : Promise.resolve(undefined));
-  const [first, ...others] = await Promise.all([params.memory_clone, ...(params.other_memory_clones ?? [])].map(read));
+/** The memories of `clones` (the first one's loaded), read side by side; a clone without one left out. */
+export async function readCloneMemories(clones: string[], env: Record<string, string | undefined>): Promise<CloneMemories> {
+  const [first, ...others] = await Promise.all(clones.map((clone) => readCloneMemory(clone, env)));
   return { first, others: others.filter((memory) => memory !== undefined) };
 }
 

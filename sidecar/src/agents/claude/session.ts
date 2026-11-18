@@ -182,15 +182,12 @@ export class ClaudeSession implements AgentSession {
         : plans
           ? { kind: "plans", dir: plans, cwd }
           : undefined;
-      // The daemon gives other clones only with the first one.
-      const memories = this.params.memory_clone
-        ? await readCloneMemories(this.params, { ...this.deps.baseEnv, ...this.params.env })
-        : { others: [] };
+      const clones = this.params.memory_clones ?? [];
+      const memories = clones.length > 0 ? await readCloneMemories(clones, { ...this.deps.baseEnv, ...this.params.env }) : undefined;
       // Stopped while the memory was read: no agent is started for a stopped session.
       if (this.state !== "starting") throw new RpcError(ErrorCode.UNAVAILABLE, "the session was stopped while starting");
       const options = buildClaudeOptions(this.params, {
-        memory: memories.first,
-        otherMemories: memories.others,
+        memories,
         baseEnv: this.deps.baseEnv,
         executable: this.deps.resolveExecutable(),
         canUseTool: claudeCanUseTool(

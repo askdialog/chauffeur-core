@@ -230,12 +230,12 @@ describe("the sidecar over JSON-RPC", () => {
 
   test("passes the clones whose memory the session reads on, and checks them", async () => {
     const { call, agent } = sidecar();
-    const other_memory_clones = ["/code/api", "/code/docs"];
-    expect((await call("session.start", { ...START, memory_clone: "/code/web", other_memory_clones }))?.error).toBeUndefined();
-    expect(agent.sessions[0]?.params).toMatchObject({ memory_clone: "/code/web", other_memory_clones });
+    const memory_clones = ["/code/web", "/code/api"];
+    expect((await call("session.start", { ...START, memory_clones }))?.error).toBeUndefined();
+    expect(agent.sessions[0]?.params.memory_clones).toEqual(memory_clones);
     expect((await call("session.start", { ...START, chat_id: "c2" }))?.error).toBeUndefined();
-    expect(agent.sessions[1]?.params.other_memory_clones).toBeUndefined();
-    expect((await call("session.start", { ...START, chat_id: "c3", other_memory_clones: [1] }))?.error).toMatchObject({ code: -32602 });
+    expect(agent.sessions[1]?.params.memory_clones).toBeUndefined();
+    expect((await call("session.start", { ...START, chat_id: "c3", memory_clones: [1] }))?.error).toMatchObject({ code: -32602 });
   });
 
   test("passes on whether the agent gets the delegate tool, and checks it", async () => {

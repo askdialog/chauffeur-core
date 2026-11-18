@@ -2925,16 +2925,14 @@ async fn claude_sessions_are_given_their_repos_clones_to_read_their_memories_the
                 })
                 .unwrap();
             // The first repo's memory is loaded, the others' pointed at.
-            let (first, others) = (
-                &start["params"]["memory_clone"],
-                &start["params"]["other_memory_clones"],
-            );
+            let clones = &start["params"]["memory_clones"];
             match agent {
-                AgentKind::Claude => {
-                    assert_eq!(first, &serde_json::json!(clone(asked[0])), "{start}");
-                    assert_eq!(others, &serde_json::json!([clone(asked[1])]), "{start}");
-                }
-                _ => assert!(first.is_null() && others.is_null(), "{start}"),
+                AgentKind::Claude => assert_eq!(
+                    clones,
+                    &serde_json::json!([clone(asked[0]), clone(asked[1])]),
+                    "{start}"
+                ),
+                _ => assert!(clones.is_null(), "{start}"),
             }
         }
     }
