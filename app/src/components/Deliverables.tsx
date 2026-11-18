@@ -18,10 +18,11 @@ export function Deliverables({ workspaceId, chat, revision, children }: { worksp
   return (
     <DeliverableContext.Provider value={setDocument}>
       <div className="@container flex min-h-0 min-w-0 flex-1">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col @min-[850px]:flex-row">
-          <div className={`${expanded && document ? "hidden" : "flex"} min-h-0 min-w-0 flex-1 flex-col`}>{children}</div>
+        {/* The reader always opens on the right, as in Claude's and ChatGPT's apps; too narrow for both, it covers the chat. */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-row">
+          <div className={`${expanded && document ? "hidden" : document ? "hidden @min-[560px]:flex" : "flex"} min-h-0 min-w-0 flex-1 flex-col`}>{children}</div>
           {document && (
-            <div className={`${expanded ? "flex-1" : "h-1/2 @min-[850px]:h-auto @min-[850px]:w-[56%]"} flex min-h-0 min-w-0 flex-col border-l border-line bg-panel`}>
+            <div className={`${expanded ? "flex-1" : "w-full @min-[560px]:w-1/2 @min-[850px]:w-[56%]"} flex min-h-0 min-w-0 shrink-0 flex-col border-l border-line bg-panel`}>
               {document.kind === "deck" ? (
                 <DeckReader
                   key={document.path}
