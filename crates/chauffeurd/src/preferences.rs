@@ -5,9 +5,9 @@
 use std::sync::Arc;
 
 use chauffeur_protocol::client::{
-    AppSettings, Appearance, AppearanceUpdate, KeyboardSettings, KeyboardUpdate, LinearSettings,
-    NotificationSettings, PowerSettings, PowerUpdate, RepoSetting, SearchUpdate, SettingsUpdate,
-    WorkspaceDefaults, WorkspaceDefaultsUpdate,
+    AppSettings, Appearance, AppearanceUpdate, Forge, KeyboardSettings, KeyboardUpdate,
+    LinearSettings, NotificationSettings, PowerSettings, PowerUpdate, RepoSetting, SearchUpdate,
+    SettingsUpdate, WorkspaceDefaults, WorkspaceDefaultsUpdate,
 };
 use chauffeur_protocol::model::{AgentKind, KeepAwake};
 
@@ -42,6 +42,8 @@ pub async fn get(d: &Arc<Daemon>) -> Result<AppSettings> {
             clone_roots: settings.clone_roots.clone(),
             github_org: settings.github_org.clone(),
             github_sources: settings.github_sources,
+            forge: settings.forge,
+            gitlab_host: settings.gitlab_host.clone(),
             port_range_start: settings.port_range_start,
             port_block_size: settings.port_block_size,
             archive_script_timeout_secs: settings.archive_script_timeout_secs.min(u32::MAX.into())
@@ -358,6 +360,9 @@ const TEMPLATE: &str = r#"# Chauffeur's settings. The app's Settings (⌘,) chan
 # Also list the repos of every other owner your GitHub account reaches (yours, your other
 # organizations', the ones you collaborate on).
 # github_sources = true
+# The forge Chauffeur goes through: "github", or "gitlab" with your GitLab's host.
+# forge = "github"
+# gitlab_host = ""
 # default_repos = []
 # clone_roots = []
 
@@ -522,7 +527,29 @@ fn set_workspace_limits(d: &Daemon, update: &WorkspaceDefaultsUpdate) -> Result<
         .map(|repos| check_repos(repos))
         .transpose()?;
     let sources = update.github_sources;
-    if numbers.is_empty() && org.is_none() && repos.is_none() && sources.is_none() {
+    let gitlab_host = update
+        .gitlab_host
+        .as_deref()
+        .map(crate::gitlab::check_host)
+        .transpose()?;
+    if update.forge == Some(Forge::Gitlab)
+        && gitlab_host
+            .as_deref()
+            .unwrap_or(&d.settings.get().gitlab_host)
+            .is_empty()
+    {
+        return Err(Error::BadRequest(
+            "GitLab needs its host: gitlab.example.com".into(),
+        ));
+    }
+    let forge = update.forge;
+    if numbers.is_empty()
+        && org.is_none()
+        && repos.is_none()
+        && sources.is_none()
+        && forge.is_none()
+        && gitlab_host.is_none()
+    {
         return Ok(());
     }
     d.settings
@@ -536,6 +563,15 @@ fn set_workspace_limits(d: &Daemon, update: &WorkspaceDefaultsUpdate) -> Result<
             }
             if let Some(sources) = sources {
                 doc["github_sources"] = toml_edit::value(sources);
+            }
+            if let Some(forge) = forge {
+                doc["forge"] = toml_edit::value(match forge {
+                    Forge::Github => "github",
+                    Forge::Gitlab => "gitlab",
+                });
+            }
+            if let Some(host) = &gitlab_host {
+                doc["gitlab_host"] = toml_edit::value(host.as_str());
             }
             if let Some(repos) = &repos {
                 set_repo_tables(doc, repos);

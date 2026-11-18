@@ -3,7 +3,7 @@ import { Plus, Telescope, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CreateWorkspaceDialog } from "./components/CreateWorkspaceDialog";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { GithubSetup } from "./components/GithubSetup";
+import { ForgeSetup } from "./components/ForgeSetup";
 import { QuickSwitcher } from "./components/QuickSwitcher";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { FindRoutinesDialog } from "./components/FindRoutinesDialog";
@@ -82,7 +82,7 @@ export function App() {
           <EmptyState title={!loaded ? (connected ? "Loading workspaces…" : "Workspaces unavailable while disconnected") : firstRun ? "Welcome to Chauffeur" : "No workspace selected"}>
             {loaded && (
               <div className="flex flex-col items-center gap-3">
-                <GithubSetup />
+                <ForgeSetup />
                 <span>A workspace is one worktree per repo on one branch, with its chats, terminals and scripts.</span>
                 <div className="flex items-center gap-2">
                   <Button variant="primary" onClick={() => openCreate()}>

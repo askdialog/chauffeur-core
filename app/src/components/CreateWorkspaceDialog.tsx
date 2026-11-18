@@ -60,7 +60,7 @@ import { ModelPicker } from "./ModelPicker";
 import { DEFAULT_PERMISSION_MODE } from "@/lib/permissions";
 import { PermissionPicker } from "./PermissionPicker";
 import { StateDot, useTicketSearch } from "./TicketSearch";
-import { GithubSetup } from "./GithubSetup";
+import { ForgeSetup } from "./ForgeSetup";
 import { ClaudeArtifactImport } from "./ClaudeArtifactImport";
 import { RepoPopover } from "./RepoPicker";
 import { useWorkspaceRepoSelection } from "./useWorkspaceRepoSelection";
@@ -418,7 +418,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
           </div>
         )}
 
-        {!parentId && <GithubSetup compact localReposSelected={selection.length > 0 && selection.every((key) => repos?.some((repo) => repo.key === key && !!repo.clone_path))} />}
+        {!parentId && <ForgeSetup compact localReposSelected={selection.length > 0 && selection.every((key) => repos?.some((repo) => repo.key === key && !!repo.clone_path))} />}
 
         <fieldset disabled={creating} className="min-w-0 space-y-3 disabled:opacity-60">
           {shareLink !== "" || (importing && kind !== "design") ? (

@@ -57,6 +57,7 @@ pub mod find_routines;
 pub mod genconfig;
 pub mod git;
 pub mod github;
+pub mod gitlab;
 pub mod google;
 pub mod identity;
 pub mod idle;
@@ -180,6 +181,7 @@ pub struct Daemon {
     pub ollama: ollama::Ollama,
     /// GitHub through `gh`, Chauffeur's own when the user has none.
     pub github: github::Github,
+    pub gitlab: gitlab::Gitlab,
     /// Search of every workspace, by keywords and by meaning.
     pub search: search::Search,
     pub usage: usage::Usage,
@@ -261,6 +263,7 @@ impl Daemon {
             models: models::ModelCatalog::default(),
             ollama: ollama::Ollama::new(weak.clone()),
             github: github::Github::new(weak.clone()),
+            gitlab: gitlab::Gitlab::new(weak.clone()),
             usage: usage::Usage::default(),
             updates: update::Updates::new(),
             shares: Arc::new(share::Shares::new(

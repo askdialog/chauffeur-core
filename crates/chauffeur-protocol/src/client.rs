@@ -1359,6 +1359,25 @@ methods! {
         #[access(User)]
         #[relay(Local)]
         GithubDisconnect(EmptyParams) -> EmptyParams,
+        /// The GitLab an installation set to it goes through: its host, `glab` found or not, the
+        /// account it is signed in to, and a connection under way.
+        #[serde(rename = "gitlab.status")]
+        #[access(Any)]
+        #[relay(Local)]
+        GitlabStatus(EmptyParams) -> GitlabStatus,
+        /// Signs `glab` in to the GitLab of the settings with a personal access token, installing
+        /// Chauffeur's own `glab` first when none is found, and lets git push over HTTPS through
+        /// it; returns at once, `gitlab.status` follows it. Refused unless the installation is set
+        /// to GitLab, and while one runs. The token goes to `glab` only.
+        #[serde(rename = "gitlab.connect")]
+        #[access(User)]
+        #[relay(Local)]
+        GitlabConnect(GitlabConnectParams) -> EmptyParams,
+        /// Signs `glab` out of the GitLab of the settings.
+        #[serde(rename = "gitlab.disconnect")]
+        #[access(User)]
+        #[relay(Local)]
+        GitlabDisconnect(EmptyParams) -> EmptyParams,
         /// Opens Apple's installer of the command line developer tools, which bring git (macOS);
         /// `github.status` says once git is there. Refused elsewhere, with the command to run.
         #[serde(rename = "git.install")]
@@ -3840,6 +3859,13 @@ pub struct WorkspaceDefaults {
     /// The repos of every other owner the GitHub account reaches are listed too.
     #[serde(default)]
     pub github_sources: bool,
+    /// The forge the installation goes through: GitHub unless set to a GitLab
+    /// (docs/adr/gitlab-as-the-forge.md).
+    #[serde(default)]
+    pub forge: Forge,
+    /// The GitLab's host (`gitlab.example.com`) when `forge` is GitLab; empty otherwise.
+    #[serde(default)]
+    pub gitlab_host: String,
     /// First port handed out to workspaces, and ports per workspace.
     pub port_range_start: u16,
     pub port_block_size: u16,
@@ -4243,6 +4269,11 @@ pub struct WorkspaceDefaultsUpdate {
     #[serde(default)]
     pub github_sources: Option<bool>,
     #[serde(default)]
+    pub forge: Option<Forge>,
+    /// Required with `forge` GitLab, unless one is set already.
+    #[serde(default)]
+    pub gitlab_host: Option<String>,
+    #[serde(default)]
     pub port_range_start: Option<u16>,
     #[serde(default)]
     pub port_block_size: Option<u16>,
@@ -4504,6 +4535,80 @@ pub struct GithubStatus {
     pub organization: String,
     /// The connection under way, or the last one that failed.
     pub connecting: Option<GithubConnecting>,
+}
+
+/// The forge an installation goes through (docs/adr/gitlab-as-the-forge.md).
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum Forge {
+    #[default]
+    Github,
+    Gitlab,
+}
+
+impl Forge {
+    /// What a change proposed for merging is called on this forge, in short.
+    pub fn change_request(self) -> &'static str {
+        match self {
+            Forge::Github => "PR",
+            Forge::Gitlab => "MR",
+        }
+    }
+}
+
+/// The GitLab an installation set to it goes through (`gitlab.status`).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[ts(export)]
+pub struct GitlabStatus {
+    /// The installation is set to GitLab; nothing else applies otherwise.
+    pub enabled: bool,
+    /// The GitLab's host, the settings' `gitlab_host`.
+    pub host: String,
+    /// The `glab` executable found; none until `gitlab.connect` installs Chauffeur's own.
+    pub glab: Option<String>,
+    /// The executable is Chauffeur's own copy.
+    pub own: bool,
+    /// The version of `glab` Chauffeur installs.
+    pub version: String,
+    /// The size of its download on this system; none where Chauffeur cannot install it.
+    #[ts(type = "number | null")]
+    pub download_size: Option<u64>,
+    /// The GitLab account `glab` is signed in to on that host.
+    pub account: Option<String>,
+    /// The connection under way, or the last one that failed.
+    pub connecting: Option<GitlabConnecting>,
+}
+
+/// A connection to GitLab under way (`gitlab.connect`).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[ts(export)]
+pub struct GitlabConnecting {
+    /// `downloading`, `checking`, `unpacking` (Chauffeur's own `glab`) or `signing_in`.
+    pub phase: String,
+    /// Bytes downloaded and to download while `downloading`; 0 otherwise.
+    #[ts(type = "number")]
+    pub completed: u64,
+    #[ts(type = "number")]
+    pub total: u64,
+    /// Why it failed; the connection is over.
+    pub error: Option<String>,
+}
+
+/// `gitlab.connect`: a personal access token of the account, with the `api` and
+/// `write_repository` scopes. Never written nor logged: its `Debug` hides it.
+#[derive(Serialize, Deserialize, TS, Clone, PartialEq)]
+#[ts(export)]
+pub struct GitlabConnectParams {
+    pub token: String,
+}
+
+impl std::fmt::Debug for GitlabConnectParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GitlabConnectParams")
+            .field("token", &"…")
+            .finish()
+    }
 }
 
 /// A connection to GitHub under way (`github.connect`).

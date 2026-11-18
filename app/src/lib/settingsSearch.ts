@@ -25,6 +25,7 @@ export const SETTINGS_OPTIONS: readonly SettingsOption[] = [
   { section: "workspaces", label: "Default repositories", target: "default-repos", keywords: "repos new workspace"  },
   { section: "workspaces", label: "Branch prefix", target: "branch-prefix", keywords: "git"  },
   { section: "workspaces", label: "Folders with your clones", target: "clone-roots", keywords: "repositories directory"  },
+  { section: "github", label: "GitLab host", target: "gitlab-host", keywords: "forge gitlab self-hosted merge requests mr"  },
   { section: "workspaces", label: "Main GitHub organization", target: "github-org", keywords: "repos"  },
   { section: "workspaces", label: "GitHub repository sources", target: "github-sources", keywords: "account repos"  },
   { section: "workspaces", label: "Repositories elsewhere", target: "repo-table", keywords: "repos default branch"  },

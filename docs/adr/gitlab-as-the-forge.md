@@ -22,7 +22,9 @@ Decided with Justin 2026-11-18:
 - Chauffeur reaches GitLab through `glab`, GitLab's CLI, as it reaches GitHub through `gh`: the
   user's own when on the PATH, else one Chauffeur installs. `glab` is installed only when the
   installation is set to GitLab, never for a GitHub one. The token stays in `glab`; Chauffeur never
-  reads or stores it.
+  stores it.
+- The words follow the forge connected: "pull request" and "PR" with GitHub, "merge request" and
+  "MR" with GitLab, wherever Chauffeur names them (the app, the CLI, what the agents are told).
 
 ## Consequences
 
@@ -32,6 +34,11 @@ Decided with Justin 2026-11-18:
   clone's `origin` (a GitLab path may hold subgroups: `group/subgroup/project`, not `owner/name`),
   merge requests in the header (list, state, pipelines as checks, approvals as the review decision,
   merge, stacked requests), the branches deleted on archive, the search's merge requests.
+- Signing in takes a personal access token the user pastes (scopes `api` and `write_repository`):
+  GitLab's sign-in in the browser needs an application registered on each self-hosted instance,
+  which Chauffeur cannot count on. The daemon hands the token to `glab auth login --stdin`, which
+  keeps it in the system's keyring and lets git push over HTTPS through it; the token is never
+  written, logged or sent back by Chauffeur.
 - `glab` is pinned and checked like `gh` and Ollama: a version and its SHA-256 written in the daemon,
   unpacked into the state folder, last on the PATH of everything Chauffeur starts.
 - Explorations and design chats allow the GitLab host on the network in place of GitHub's, and their

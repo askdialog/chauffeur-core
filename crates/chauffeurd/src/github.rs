@@ -443,7 +443,7 @@ fn one_time_code(line: &str) -> Option<String> {
         .then(|| code.into())
 }
 
-fn last_line(output: &[u8]) -> String {
+pub(crate) fn last_line(output: &[u8]) -> String {
     String::from_utf8_lossy(output)
         .lines()
         .rfind(|line| !line.trim().is_empty())
@@ -546,13 +546,13 @@ async fn git_found(env: &BTreeMap<String, String>) -> bool {
 }
 
 /// The first executable `name` on the environment's PATH.
-fn find(env: &BTreeMap<String, String>, name: &str) -> Option<PathBuf> {
+pub(crate) fn find(env: &BTreeMap<String, String>, name: &str) -> Option<PathBuf> {
     std::env::split_paths(env.get("PATH")?)
         .map(|dir| dir.join(name))
         .find(|path| is_executable(path))
 }
 
-fn is_executable(path: &Path) -> bool {
+pub(crate) fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path)
         .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)

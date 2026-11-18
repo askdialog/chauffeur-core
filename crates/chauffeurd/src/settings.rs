@@ -22,6 +22,11 @@ pub struct UserSettings {
     /// Also list the repos of every other owner the GitHub account reaches: its own, its other
     /// organizations', the ones it collaborates on. False: only `github_org`'s.
     pub github_sources: bool,
+    /// The forge the installation goes through: GitHub unless set to a GitLab
+    /// (docs/adr/gitlab-as-the-forge.md).
+    pub forge: chauffeur_protocol::client::Forge,
+    /// The GitLab's host when `forge` is GitLab: `gitlab.example.com`, no scheme nor path.
+    pub gitlab_host: String,
     /// Repos preselected for a new workspace.
     pub default_repos: Vec<String>,
     /// Preferred display order; unlisted repos follow in automatic order.
@@ -420,6 +425,8 @@ impl Default for UserSettings {
             daily_review: Default::default(),
             github_org: String::new(),
             github_sources: true,
+            forge: Default::default(),
+            gitlab_host: String::new(),
             default_repos: Vec::new(),
             repo_order: Vec::new(),
             branch_prefix: String::new(),

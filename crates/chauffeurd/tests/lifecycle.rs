@@ -8,8 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chauffeur_protocol::client::{
-    AddWorktreeParams, ConfigureChatParams, CreateChatParams, CreateWorkspaceParams, SearchFilters,
-    SearchResult,
+    AddWorktreeParams, ConfigureChatParams, CreateChatParams, CreateWorkspaceParams, Forge,
+    SearchFilters, SearchResult,
 };
 use chauffeur_protocol::events::{Event, WorkspaceEvent};
 use chauffeur_protocol::model::{AgentKind, LoadoutEntry, WorkspaceState, WorktreeOrigin};
@@ -1977,6 +1977,60 @@ async fn every_key_of_settings_toml_is_in_the_settings_window() {
         }))
         .await
     );
+
+    // GitHub by default; GitLab only with its host (docs/adr/gitlab-as-the-forge.md).
+    assert_eq!(settings.workspaces.forge, Forge::Github);
+    for update in [
+        WorkspaceDefaultsUpdate {
+            forge: Some(Forge::Gitlab),
+            ..Default::default()
+        },
+        WorkspaceDefaultsUpdate {
+            gitlab_host: Some("gitlab.example.com/group".into()),
+            ..Default::default()
+        },
+    ] {
+        assert!(refused(limits(update)).await);
+    }
+    let gitlab = chauffeurd::preferences::set(
+        d,
+        limits(WorkspaceDefaultsUpdate {
+            forge: Some(Forge::Gitlab),
+            gitlab_host: Some("https://GitLab.Example.com/".into()),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        (
+            gitlab.workspaces.forge,
+            gitlab.workspaces.gitlab_host.as_str()
+        ),
+        (Forge::Gitlab, "gitlab.example.com")
+    );
+    let text = std::fs::read_to_string(d.settings.path()).unwrap();
+    assert!(
+        text.contains("forge = \"gitlab\"")
+            && text.contains("gitlab_host = \"gitlab.example.com\""),
+        "{text}"
+    );
+    let status = d.gitlab.status().await;
+    assert!(
+        status.enabled && status.host == "gitlab.example.com",
+        "{status:?}"
+    );
+    chauffeurd::preferences::set(
+        d,
+        limits(WorkspaceDefaultsUpdate {
+            forge: Some(Forge::Github),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(!d.gitlab.status().await.enabled);
+    assert!(d.gitlab.connect("glpat-x".into()).is_err());
     assert!(
         refused(limits(WorkspaceDefaultsUpdate {
             repos: Some(vec![RepoSetting {

@@ -8,9 +8,9 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 
 use chauffeur_protocol::client::{
-    ContextUsageResult, EnvReloadResult, GithubConnecting, GithubStatus, JevSettings,
-    OllamaInstalling, OllamaPull, OllamaRunning, OllamaStatus, OpenRequest, ProcessInfo,
-    SubagentMessagesResult,
+    ContextUsageResult, EnvReloadResult, GithubConnecting, GithubStatus, GitlabConnecting,
+    GitlabStatus, JevSettings, OllamaInstalling, OllamaPull, OllamaRunning, OllamaStatus,
+    OpenRequest, ProcessInfo, SubagentMessagesResult,
 };
 use chauffeur_protocol::events::{
     ChatEvent, CompactionBy, ContextCategoryKind, Event, EventEnvelope, RegistryEvent, TaskKind,
@@ -231,6 +231,53 @@ pub fn github_connecting(step: &GithubConnecting) -> String {
         ),
         ("configuring", _) => "letting git push through GitHub CLI".into(),
         _ => "connecting GitHub".into(),
+    }
+}
+
+pub fn gitlab(status: &GitlabStatus) -> String {
+    if !status.enabled {
+        return "Chauffeur goes through GitHub: `chauffeur gitlab login --host <host>` sets it to a GitLab".into();
+    }
+    let mut out = match (&status.account, &status.glab) {
+        (Some(username), Some(glab)) => {
+            let whose = if status.own {
+                "Chauffeur's own GitLab CLI"
+            } else {
+                glab
+            };
+            format!(
+                "GitLab {}: connected as {username}, through {whose}",
+                status.host
+            )
+        }
+        (Some(username), None) => format!("GitLab {}: connected as {username}", status.host),
+        (None, _) => format!(
+            "GitLab {}: not connected, `chauffeur gitlab login` connects it",
+            status.host
+        ),
+    };
+    if let Some(step) = &status.connecting {
+        out.push_str(&format!("\n  {}", gitlab_connecting(step)));
+    }
+    sanitize_terminal(&out).into_owned()
+}
+
+/// A connection under way: installing GitLab CLI by tenths, then signing in.
+pub fn gitlab_connecting(step: &GitlabConnecting) -> String {
+    if let Some(error) = &step.error {
+        return format!("connecting GitLab failed: {error}");
+    }
+    match step.phase.as_str() {
+        "downloading" if step.total > 0 => format!(
+            "installing GitLab CLI: downloading {}% of {} MB",
+            step.completed * 10 / step.total * 10,
+            step.total / 1_000_000
+        ),
+        "downloading" | "checking" | "unpacking" => {
+            format!("installing GitLab CLI: {}", step.phase)
+        }
+        "signing_in" => "signing in with the token".into(),
+        _ => "connecting GitLab".into(),
     }
 }
 

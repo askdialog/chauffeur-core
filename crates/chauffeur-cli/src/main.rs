@@ -613,6 +613,13 @@ enum Command {
         #[command(subcommand)]
         action: Option<GithubAction>,
     },
+    /// GitLab, for an installation set to a GitLab in place of GitHub: the account Chauffeur
+    /// reaches it with; connect one with a personal access token (installing GitLab CLI when
+    /// missing) or disconnect it.
+    Gitlab {
+        #[command(subcommand)]
+        action: Option<GitlabAction>,
+    },
     /// Ollama, which serves the local models: its state and models; download or delete one.
     Ollama {
         #[command(subcommand)]
@@ -700,6 +707,22 @@ enum EnvAction {
     /// daemon started): what starts afterwards gets it, and idle chats whose MCP servers failed
     /// start again with it.
     Reload,
+}
+
+#[derive(Subcommand)]
+enum GitlabAction {
+    /// The GitLab the installation is set to, and the account connected.
+    Status,
+    /// Connect a GitLab account with a personal access token (scopes `api` and
+    /// `write_repository`), read from standard input or asked for without echo; GitLab CLI is
+    /// installed first when missing, and git pushes over HTTPS through it.
+    Login {
+        /// Set the installation to this GitLab first (`gitlab.example.com`).
+        #[arg(long)]
+        host: Option<String>,
+    },
+    /// Disconnect the GitLab account.
+    Logout,
 }
 
 #[derive(Subcommand)]
@@ -2317,6 +2340,62 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
                     .join("\n")
             });
         }
+        Command::Gitlab { action } => match action.unwrap_or(GitlabAction::Status) {
+            GitlabAction::Status => {
+                let status: GitlabStatus = client
+                    .call(ClientCall::GitlabStatus(EmptyParams {}))
+                    .await?;
+                print_or(json, &status, || render::gitlab(&status));
+            }
+            GitlabAction::Login { host } => {
+                if let Some(host) = host {
+                    let _: AppSettings = client
+                        .call(ClientCall::SettingsSet(Box::new(SettingsUpdate {
+                            workspaces: Some(WorkspaceDefaultsUpdate {
+                                forge: Some(Forge::Gitlab),
+                                gitlab_host: Some(host),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        })))
+                        .await?;
+                }
+                let token = read_secret("GitLab personal access token: ")?;
+                let _: EmptyParams = client
+                    .call(ClientCall::GitlabConnect(GitlabConnectParams { token }))
+                    .await?;
+                let mut shown = String::new();
+                let status = loop {
+                    let status: GitlabStatus = client
+                        .call(ClientCall::GitlabStatus(EmptyParams {}))
+                        .await?;
+                    let Some(step) = status.connecting.as_ref().filter(|s| s.error.is_none())
+                    else {
+                        break status;
+                    };
+                    let line = render::gitlab_connecting(step);
+                    if !json && line != shown {
+                        eprintln!("{}", render::sanitize_terminal(&line));
+                        shown = line;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                };
+                if let Some(error) = status
+                    .connecting
+                    .as_ref()
+                    .and_then(|step| step.error.as_deref())
+                {
+                    anyhow::bail!("could not connect GitLab: {error}");
+                }
+                print_or(json, &status, || render::gitlab(&status));
+            }
+            GitlabAction::Logout => {
+                let done: EmptyParams = client
+                    .call(ClientCall::GitlabDisconnect(EmptyParams {}))
+                    .await?;
+                print_or(json, &done, || "GitLab is disconnected".into());
+            }
+        },
         Command::Github { action } => match action.unwrap_or(GithubAction::Status) {
             GithubAction::Status => {
                 let status: GithubStatus = client
@@ -2992,6 +3071,33 @@ fn text_or_stdin(text: String) -> anyhow::Result<String> {
         "the message read from standard input is empty"
     );
     Ok(read)
+}
+
+/// A secret read from standard input: asked for without echo on a terminal, else its first line.
+fn read_secret(prompt: &str) -> anyhow::Result<String> {
+    use std::io::{BufRead, IsTerminal, Write};
+    let terminal = std::io::stdin().is_terminal();
+    let stty = |arg: &str| {
+        std::process::Command::new("stty")
+            .arg(arg)
+            .stdin(std::process::Stdio::inherit())
+            .status()
+    };
+    if terminal {
+        eprint!("{prompt}");
+        std::io::stderr().flush()?;
+        stty("-echo")?;
+    }
+    let mut secret = String::new();
+    let read = std::io::stdin().lock().read_line(&mut secret);
+    if terminal {
+        let _ = stty("echo");
+        eprintln!();
+    }
+    read.context("could not read the token")?;
+    let secret = secret.trim().to_string();
+    anyhow::ensure!(!secret.is_empty(), "no token given");
+    Ok(secret)
 }
 
 /// Asks a yes/no question on the terminal; refuses (rather than guesses) when nobody is there to

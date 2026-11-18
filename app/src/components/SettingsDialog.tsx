@@ -2,11 +2,14 @@
 // ~/.chauffeur/settings.toml (keeping its comments), the API keys to the Keychain, and applies them
 // at once; the rest of settings.toml opens in the editor from General.
 
-import type { AppSettings, ErrorReports, KeepAwake, OllamaPull, Palette, RepoSetting, SearchStatus, SettingsUpdate, ShortcutId, UpdateStatus } from "@chauffeur/protocol";
+import type { AppSettings, ErrorReports, Forge, KeepAwake, OllamaPull, Palette, RepoSetting, SearchStatus, SettingsUpdate, ShortcutId, UpdateStatus } from "@chauffeur/protocol";
 import { ArrowRightLeft, Bell, CircleUser, Bot, Coffee, Cpu, ExternalLink, FileText, FolderGit2, GitBranch, Info, Keyboard, KeyRound, Layers, Palette as PaletteIcon, Play, Plus, Power, Package, Search, Settings2, Smartphone, Type, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { effectiveLoadout, type ModelChoice } from "@/lib/models";
 import { GithubSetup } from "./GithubSetup";
+import { GitlabSetup } from "./GitlabSetup";
+import { forgeName } from "@/lib/forge";
+import { refreshGitlab } from "@/state/gitlab";
 import { LocalModelsSettings } from "./LocalModelsSettings";
 import { TransferSettings } from "./TransferSettings";
 import { WorkerSettings } from "./WorkerSettings";
@@ -59,7 +62,7 @@ const SECTIONS: Array<{ id: Section; label: string; icon: ReactNode }> = [
   { id: "slack", label: "Slack", icon: <Layers size={13} /> },
   { id: "mobile", label: "Mobile", icon: <Smartphone size={13} /> },
   { id: "general", label: "General", icon: <Settings2 size={13} /> },
-  { id: "github", label: "GitHub", icon: <GitBranch size={13} /> },
+  { id: "github", label: "GitHub / GitLab", icon: <GitBranch size={13} /> },
   { id: "appearance", label: "Appearance", icon: <Type size={13} /> },
   { id: "keyboard", label: "Keyboard", icon: <Keyboard size={13} /> },
   { id: "notifications", label: "Notifications", icon: <Bell size={13} /> },
@@ -246,12 +249,7 @@ export function SettingsDialog() {
                 {section === "slack" && member && <SlackSettings />}
                 {section === "mobile" && <MobileSettings />}
                 {section === "general" && <General settings={settings} update={update} busy={busy} onError={setError} />}
-                {section === "github" && (
-                  <>
-                    <Heading title="GitHub">Chauffeur creates workspaces from your GitHub repositories and opens their pull requests with your account. Git pushes through it too: no SSH key needed.</Heading>
-                    <GithubSetup manage />
-                  </>
-                )}
+                {section === "github" && <ForgeSection settings={settings} update={update} busy={busy} />}
                 {section === "appearance" && <AppearanceSection settings={settings} update={update} busy={busy} />}
                 {section === "keyboard" && <KeyboardSection settings={settings} update={update} busy={busy} />}
                 {section === "notifications" && <Notifications settings={settings} update={update} busy={busy} />}
@@ -277,6 +275,66 @@ export function SettingsDialog() {
 }
 
 type SectionProps = { settings: AppSettings; update: Update; busy: boolean };
+
+/** GitHub by default, or a self-hosted GitLab the whole installation goes through
+ *  (docs/adr/gitlab-as-the-forge.md). */
+function ForgeSection({ settings, update, busy }: SectionProps) {
+  const w = settings.workspaces;
+  const [choosing, setChoosing] = useState<Forge>(w.forge);
+  const [host, setHost] = useState(w.gitlab_host);
+  useEffect(() => setChoosing(w.forge), [w.forge]);
+  useEffect(() => setHost(w.gitlab_host), [w.gitlab_host]);
+  const useGitlab = () => {
+    if (host.trim()) void update({ workspaces: { forge: "gitlab", gitlab_host: host.trim() } }).then(() => refreshGitlab());
+  };
+  const useGithub = () => {
+    setChoosing("github");
+    if (w.forge !== "github") void update({ workspaces: { forge: "github" } }).then(() => refreshGitlab());
+  };
+  const gitlab = choosing === "gitlab";
+  return (
+    <>
+      <Heading title={forgeName(w.forge)}>
+        {gitlab
+          ? "Chauffeur creates workspaces from your GitLab repositories and opens their merge requests with your account. Git pushes through it too: no SSH key needed."
+          : "Chauffeur creates workspaces from your GitHub repositories and opens their pull requests with your account. Git pushes through it too: no SSH key needed."}
+      </Heading>
+      <Field label="Where your code lives" hint="GitHub unless your team hosts its own GitLab">
+        <div className="flex gap-1.5" role="radiogroup">
+          <Button size="sm" variant={gitlab ? "secondary" : "primary"} disabled={busy} aria-checked={!gitlab} role="radio" onClick={useGithub} data-testid="forge-github">
+            GitHub
+          </Button>
+          <Button size="sm" variant={gitlab ? "primary" : "secondary"} disabled={busy} aria-checked={gitlab} role="radio" onClick={() => setChoosing("gitlab")} data-testid="forge-gitlab">
+            GitLab
+          </Button>
+        </div>
+      </Field>
+      {gitlab && (
+        <Field label="GitLab host" hint="its address, such as gitlab.example.com">
+          <div className="flex gap-2">
+            <input
+              value={host}
+              onChange={(event) => setHost(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") useGitlab();
+              }}
+              placeholder="gitlab.example.com"
+              spellCheck={false}
+              className={cx(inputClass, "flex-1 font-mono")}
+              data-testid="gitlab-host"
+            />
+            {(w.forge !== "gitlab" || host.trim() !== w.gitlab_host) && (
+              <Button variant="primary" disabled={busy || !host.trim()} onClick={useGitlab} data-testid="use-gitlab">
+                Use this GitLab
+              </Button>
+            )}
+          </div>
+        </Field>
+      )}
+      {w.forge === "gitlab" ? <GitlabSetup manage /> : !gitlab && <GithubSetup manage />}
+    </>
+  );
+}
 
 function General({ settings, update, busy, onError }: SectionProps & { onError: (error: string | null) => void }) {
   const [opening, setOpening] = useState(false);

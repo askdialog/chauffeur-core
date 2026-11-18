@@ -169,6 +169,8 @@ import type { FilesSearchParams } from "./FilesSearchParams";
 import type { FilesSearchResult } from "./FilesSearchResult";
 import type { FoldSectionParams } from "./FoldSectionParams";
 import type { GithubStatus } from "./GithubStatus";
+import type { GitlabConnectParams } from "./GitlabConnectParams";
+import type { GitlabStatus } from "./GitlabStatus";
 import type { HelloParams } from "./HelloParams";
 import type { HelloResult } from "./HelloResult";
 import type { HistoryParams } from "./HistoryParams";
@@ -647,6 +649,9 @@ export type ClientMethods = {
   "github.connect": [EmptyParams, EmptyParams];
   "github.cancel": [EmptyParams, EmptyParams];
   "github.disconnect": [EmptyParams, EmptyParams];
+  "gitlab.status": [EmptyParams, GitlabStatus];
+  "gitlab.connect": [GitlabConnectParams, EmptyParams];
+  "gitlab.disconnect": [EmptyParams, EmptyParams];
   "git.install": [EmptyParams, EmptyParams];
   "env.reload": [EmptyParams, EnvReloadResult];
   "daemon.shutdown": [EmptyParams, EmptyParams];
@@ -1045,6 +1050,9 @@ export const METHOD_NAMES = [
   "github.connect",
   "github.cancel",
   "github.disconnect",
+  "gitlab.status",
+  "gitlab.connect",
+  "gitlab.disconnect",
   "git.install",
   "env.reload",
   "daemon.shutdown",

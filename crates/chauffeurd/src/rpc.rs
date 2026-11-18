@@ -949,6 +949,15 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
             daemon.github.disconnect().await?;
             to_value(EmptyParams {})
         }
+        ClientCall::GitlabStatus(_) => to_value(daemon.gitlab.status().await),
+        ClientCall::GitlabConnect(params) => {
+            daemon.gitlab.connect(params.token)?;
+            to_value(EmptyParams {})
+        }
+        ClientCall::GitlabDisconnect(_) => {
+            daemon.gitlab.disconnect().await?;
+            to_value(EmptyParams {})
+        }
         ClientCall::GitInstall(_) => {
             crate::github::install_git()?;
             to_value(EmptyParams {})
