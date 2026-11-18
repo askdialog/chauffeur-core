@@ -29,7 +29,7 @@ Once we have seen what agents put in their workspace's memory, a new ADR can ope
 
 ## Consequences
 
-- It ships in steps: the first repo's memory in the system prompt first, then the other repos' paths, then the setting that turns it off.
+- It shipped in steps: the first repo's memory in the system prompt first, then the other repos' paths, then the setting that turns it off.
 - Every workspace starts with what the user, their terminal and VS Code taught Claude about the repo, always current since it is read again at every session.
 - The clone's memory is meant to change only through the terminal or VS Code: a Chauffeur agent is told not to write it and cannot with its edit tools.
 - What agents learn stays in their workspace's memory and is not read again after archiving, as today.
