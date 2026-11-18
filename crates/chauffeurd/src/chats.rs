@@ -1071,6 +1071,13 @@ impl ChatManager {
                 AgentKind::Claude => workspace_clones(&d.store, &workspace.id)?,
                 AgentKind::Codex | AgentKind::Vibe => Vec::new(),
             },
+            local_allow: match chat.agent {
+                AgentKind::Claude => crate::genconfig::local_allow_rules(
+                    std::path::Path::new(&workspace.path),
+                    &d.workspaces.config_repos(&workspace.id)?,
+                ),
+                AgentKind::Codex | AgentKind::Vibe => Vec::new(),
+            },
             resume_session_id: chat.agent_session_id.clone(),
             env,
             append_system_prompt: system_prompt(

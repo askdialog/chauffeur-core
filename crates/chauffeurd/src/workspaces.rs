@@ -1938,14 +1938,13 @@ impl WorkspaceManager {
         Ok(())
     }
 
-    /// Rewrites CLAUDE.md, AGENTS.md, `.claude/settings.json` and `.mcp.json` at the root.
-    pub fn regenerate_config(&self, workspace_id: &str) -> Result<()> {
+    /// The workspace's repos as its generated config reads them: their worktrees, clones and whether
+    /// each clone's local Claude settings are read.
+    pub fn config_repos(&self, workspace_id: &str) -> Result<Vec<genconfig::RepoEntry>> {
         let d = self.d();
-        let row = self.row(workspace_id)?;
         let settings = d.settings.get();
-        let repos: Vec<genconfig::RepoEntry> = d
-            .store
-            .worktrees_of(&row.id)?
+        Ok(d.store
+            .worktrees_of(workspace_id)?
             .into_iter()
             .filter(|w| !w.removed && w.origin == WorktreeOrigin::Workspace)
             .map(|w| genconfig::RepoEntry {
@@ -1955,7 +1954,14 @@ impl WorkspaceManager {
                 clone_path: Some(PathBuf::from(w.clone_path)),
                 base_branch: w.base_branch,
             })
-            .collect();
+            .collect())
+    }
+
+    /// Rewrites CLAUDE.md, AGENTS.md, `.claude/settings.json` and `.mcp.json` at the root.
+    pub fn regenerate_config(&self, workspace_id: &str) -> Result<()> {
+        let d = self.d();
+        let row = self.row(workspace_id)?;
+        let repos = self.config_repos(&row.id)?;
         let block = d.store.port_block(&row.id)?;
         let parent_slug = match &row.parent_id {
             Some(parent) => d.store.find_workspace(parent)?.map(|p| p.slug),

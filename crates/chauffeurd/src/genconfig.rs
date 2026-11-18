@@ -358,6 +358,62 @@ fn merged_settings(config: &WorkspaceConfig, notices: &mut Vec<LocalSettingsNoti
     Value::Object(out)
 }
 
+/// The allow rules of each repo's `.claude/settings.local.json` (the clone's when the worktree has
+/// none and the user did not turn it off), as the merge keeps them (anchored at the repo, those
+/// naming the clone left out), with each path made absolute. The user wrote them, and Claude Code
+/// ignores the allow rules of a folder never trusted, as a workspace is: the sidecar grants them as
+/// flag settings, where a `/` path would be read from elsewhere than the workspace.
+pub fn local_allow_rules(root: &Path, repos: &[RepoEntry]) -> Vec<String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut rules = Vec::new();
+    for repo in repos {
+        let [_, (file, _)] = settings_files(repo);
+        let Some(settings) = read_json(&file) else {
+            continue;
+        };
+        let folder = repo
+            .path
+            .strip_prefix(root)
+            .ok()
+            .map(|folder| folder.display().to_string())
+            .filter(|folder| !folder.is_empty());
+        let clone_paths = repo
+            .clone_path
+            .as_deref()
+            .map(|clone| clone_spellings(clone, home.as_deref()))
+            .unwrap_or_default();
+        for rule in settings["permissions"]["allow"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            let Some(text) = rule.as_str() else {
+                continue;
+            };
+            if names_path(text, &clone_paths) {
+                continue;
+            }
+            let anchored = folder.as_deref().map_or_else(
+                || rule.clone(),
+                |folder| anchor_rule_at_repo(rule, "allow", folder),
+            );
+            let Some(anchored) = anchored.as_str() else {
+                continue;
+            };
+            let absolute = match anchored.split_once("(/") {
+                Some((tool, path)) if !path.starts_with('/') => {
+                    format!("{tool}(/{}/{path}", root.display())
+                }
+                _ => anchored.to_string(),
+            };
+            if !rules.contains(&absolute) {
+                rules.push(absolute);
+            }
+        }
+    }
+    rules
+}
+
 /// Claude Code resolves the path of a `Read(…)` or `Edit(…)` rule (the only rules with paths)
 /// from the session's working directory: a `/src/**` path is anchored there. A path without a
 /// leading `/` (`./` aside) is read as in a `.gitignore`: anchored there too when a `/` is left
@@ -964,6 +1020,52 @@ mod tests {
         std::fs::write(worktree.join(".claude/settings.json"), "{\"permissions\":").unwrap();
         let (_, notices) = generate(root.path(), &repos);
         assert!(notices.is_empty(), "{notices:?}");
+    }
+
+    #[test]
+    fn the_users_local_allow_rules_are_given_with_absolute_paths_the_repos_own_are_not() {
+        let root = tempfile::tempdir().unwrap();
+        let clone = tempfile::tempdir().unwrap();
+        let worktree = root.path().join("web");
+        let c = clone.path().display();
+        claude_file(
+            &worktree,
+            "settings.json",
+            r#"{"permissions":{"allow":["Bash(committed)"]}}"#,
+        );
+        claude_file(
+            clone.path(),
+            "settings.local.json",
+            &format!(
+                r#"{{"permissions":{{"allow":["Bash(make)","Edit(/src/**)","Edit(*.md)","Read(~/notes/**)","Edit(/{c}/**)"],
+                    "deny":["Edit(/secrets/**)"]}}}}"#
+            ),
+        );
+        let mut repos = [RepoEntry {
+            clone_path: Some(clone.path().to_path_buf()),
+            read_clone_local_settings: true,
+            ..repo("web", &worktree)
+        }];
+        let r = root.path().display();
+        assert_eq!(
+            local_allow_rules(root.path(), &repos),
+            [
+                "Bash(make)".to_string(),
+                format!("Edit(/{r}/web/src/**)"),
+                format!("Edit(/{r}/web/**/*.md)"),
+                "Read(~/notes/**)".to_string(),
+            ]
+        );
+
+        // The worktree's own local file wins, and is read even with the clone's turned off.
+        claude_file(
+            &worktree,
+            "settings.local.json",
+            r#"{"permissions":{"allow":["Bash(lint)"]}}"#,
+        );
+        assert_eq!(local_allow_rules(root.path(), &repos), ["Bash(lint)"]);
+        repos[0].read_clone_local_settings = false;
+        assert_eq!(local_allow_rules(root.path(), &repos), ["Bash(lint)"]);
     }
 
     #[test]

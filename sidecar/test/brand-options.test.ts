@@ -11,3 +11,12 @@ describe("a chat's brands", () => {
     expect((plain.settings as Settings | undefined)?.permissions?.allow ?? []).not.toContainEqual(expect.stringContaining("brands"));
   });
 });
+
+describe("the user's local allow rules", () => {
+  test("are granted as flag settings, never in a design chat, which starts outside the workspace", () => {
+    const local_allow = ["Bash(make)", "Edit(//ws/web/src/**)"];
+    const allow = (params: Parameters<typeof start>[0]) => (buildClaudeOptions(start(params), deps).settings as Settings | undefined)?.permissions?.allow ?? [];
+    expect(allow({ local_allow })).toEqual(expect.arrayContaining(local_allow));
+    expect(allow({ local_allow, design_dir: "/w/.chauffeur/designs/c" })).not.toContain("Bash(make)");
+  });
+});

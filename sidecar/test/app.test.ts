@@ -238,6 +238,16 @@ describe("the sidecar over JSON-RPC", () => {
     expect((await call("session.start", { ...START, chat_id: "c3", memory_clones: [1] }))?.error).toMatchObject({ code: -32602 });
   });
 
+  test("passes the user's local allow rules on, and checks them", async () => {
+    const { call, agent } = sidecar();
+    const local_allow = ["Bash(make)", "Edit(//ws/web/src/**)"];
+    expect((await call("session.start", { ...START, local_allow }))?.error).toBeUndefined();
+    expect(agent.sessions[0]?.params.local_allow).toEqual(local_allow);
+    expect((await call("session.start", { ...START, chat_id: "c2" }))?.error).toBeUndefined();
+    expect(agent.sessions[1]?.params.local_allow).toBeUndefined();
+    expect((await call("session.start", { ...START, chat_id: "c3", local_allow: [1] }))?.error).toMatchObject({ code: -32602 });
+  });
+
   test("passes on whether the agent gets the delegate tool, and checks it", async () => {
     const { call, agent } = sidecar();
     expect((await call("session.start", { ...START, delegate: true }))?.error).toBeUndefined();

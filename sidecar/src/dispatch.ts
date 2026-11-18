@@ -265,6 +265,8 @@ export function parseStartParams(params: unknown): SessionStartParams {
   if (always.length > 0) start.always_allow = always;
   const clones = strings(p.memory_clones, "memory_clones");
   if (clones.length > 0) start.memory_clones = clones;
+  const local = strings(p.local_allow, "local_allow");
+  if (local.length > 0) start.local_allow = local;
   return start;
 }
 

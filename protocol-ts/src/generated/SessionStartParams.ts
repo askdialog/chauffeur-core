@@ -51,6 +51,12 @@ brands_dir?: string,
  */
 memory_clones?: Array<string>, 
 /**
+ * The allow rules of the workspace's repos' local Claude settings (the user's own, the clone's
+ * when a worktree has none), with absolute paths, given to a Claude chat: Claude Code ignores
+ * the allow rules of a folder never trusted, as a workspace is, so they come as flag settings.
+ */
+local_allow?: Array<string>, 
+/**
  * Resume this agent session instead of starting a new one.
  */
 resume_session_id?: string, 
