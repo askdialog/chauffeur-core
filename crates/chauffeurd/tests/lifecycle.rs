@@ -2367,6 +2367,109 @@ async fn an_exploration_has_a_temporary_folder_of_its_own_until_archive_or_promo
     assert!(!tmp.exists());
 }
 
+/// The clone-settings notices of `workspace`, oldest first.
+fn clone_settings_notices(d: &Daemon, workspace: &str) -> Vec<String> {
+    d.store
+        .events_after(
+            0,
+            &EventFilter {
+                workspaces: vec![workspace.to_string()],
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| match e.event {
+            Event::Workspace {
+                event: WorkspaceEvent::Warning { message },
+                ..
+            } if message.contains("settings.local.json") => Some(message),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_a_clones_local_settings_add_is_announced_once_per_change_across_restarts() {
+    let f = fixture(47390);
+    let d = f.daemon.clone();
+    let clone = PathBuf::from(d.settings.get().repos["repo-b"].path.clone().unwrap());
+    let local = |permissions: &str| {
+        std::fs::create_dir_all(clone.join(".claude")).unwrap();
+        std::fs::write(
+            clone.join(".claude/settings.local.json"),
+            format!(
+                r#"{{"hooks":{{"PostToolUse":[{{"matcher":"Edit","hooks":[{{"type":"command","command":"pnpm lint"}}]}}]}},
+                    "permissions":{permissions}}}"#
+            ),
+        )
+        .unwrap();
+    };
+    local(&format!(
+        r#"{{"allow":["Bash(make)","Edit(/{}/**)"],"deny":["Edit(/secrets/**)"]}}"#,
+        clone.display()
+    ));
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("clone-notice".into()),
+            repos: vec!["repo-b".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let id = ws.workspace.id.clone();
+    assert_eq!(ws.workspace.state, WorkspaceState::Ready);
+
+    let notices = clone_settings_notices(&d, &id);
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    for part in [
+        "repo-b",
+        "allow `Bash(make)`",
+        "deny `Edit(/secrets/**)`",
+        "PostToolUse `pnpm lint`",
+        &format!("`Edit(/{}/**)`", clone.display()),
+        "clone_local_claude_settings",
+    ] {
+        assert!(notices[0].contains(part), "no {part} in {}", notices[0]);
+    }
+
+    // The same contribution: nothing new, again and again.
+    d.workspaces.regenerate_config(&id).unwrap();
+    d.workspaces.regenerate_config(&id).unwrap();
+    assert_eq!(clone_settings_notices(&d, &id).len(), 1);
+
+    // A changed one: a new notice, listing what it now adds.
+    local(r#"{"allow":["Bash(make)"],"ask":["Bash(git push *)"]}"#);
+    d.workspaces.regenerate_config(&id).unwrap();
+    let notices = clone_settings_notices(&d, &id);
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    assert!(
+        notices[1].contains("ask `Bash(git push *)`"),
+        "{}",
+        notices[1]
+    );
+    assert!(!notices[1].contains("Edit(/secrets/**)"), "{}", notices[1]);
+
+    // The next daemon remembers what was announced.
+    let Fixture {
+        _dir,
+        root: _root,
+        daemon,
+    } = f;
+    drop(d);
+    eventually("the daemon to be released", || {
+        Arc::strong_count(&daemon) == 1
+    })
+    .await;
+    let paths = daemon.paths.clone();
+    drop(daemon);
+    let next = Daemon::open(paths).unwrap();
+    next.workspaces.regenerate_config(&id).unwrap();
+    assert_eq!(clone_settings_notices(&next, &id).len(), 2);
+    next.shutdown.cancel();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn workspaces_are_moved_in_the_sidebar() {
     let f = fixture(47280);

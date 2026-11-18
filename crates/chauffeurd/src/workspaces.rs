@@ -41,6 +41,8 @@ pub struct WorkspaceManager {
 /// How long a new workspace's worktrees wait for its name before keeping the generated one; the
 /// repos are fetched meanwhile.
 const NAMING_WAIT: Duration = Duration::from_secs(15);
+/// `kv` key prefix of the last local-settings notice said, by workspace and repo.
+const LOCAL_SETTINGS_NOTICE_KEY: &str = "local-settings-notice:";
 /// A fetch this recent is not repeated.
 const FETCH_FRESH: Duration = Duration::from_secs(20);
 /// How long a change of tickets waits for Linear.
@@ -1958,7 +1960,7 @@ impl WorkspaceManager {
             None => None,
         };
         let cli = cli_path();
-        let warnings = genconfig::write(&genconfig::WorkspaceConfig {
+        let written = genconfig::write(&genconfig::WorkspaceConfig {
             slug: &row.slug,
             branch: &row.branch,
             root: Path::new(&row.path),
@@ -1970,10 +1972,42 @@ impl WorkspaceManager {
             cli: &cli,
             explore: row.explore,
         })?;
-        for warning in warnings {
+        for warning in written.warnings {
             self.warn(&row.id, warning);
         }
+        self.announce_local_settings(&row.id, &repos, &written.notices);
         Ok(())
+    }
+
+    /// Says each repo's local-settings notice the first time, then again only when it changes:
+    /// what was last said is kept per workspace and repo in the store, across restarts. A store
+    /// error says it again rather than never.
+    fn announce_local_settings(
+        &self,
+        workspace: &str,
+        repos: &[genconfig::RepoEntry],
+        notices: &[genconfig::LocalSettingsNotice],
+    ) {
+        let store = &self.d().store;
+        for repo in repos {
+            let key = format!("{LOCAL_SETTINGS_NOTICE_KEY}{workspace}:{}", repo.repo);
+            let said = store.kv_get(&key).unwrap_or_else(|error| {
+                tracing::warn!(%error, key, "could not read the last local-settings notice");
+                None
+            });
+            let result = match notices.iter().find(|notice| notice.repo == repo.repo) {
+                Some(notice) if said.as_deref() == Some(notice.message.as_str()) => Ok(()),
+                Some(notice) => {
+                    self.warn(workspace, notice.message.clone());
+                    store.kv_set(&key, &notice.message)
+                }
+                None if said.is_some() => store.kv_delete(&key),
+                None => Ok(()),
+            };
+            if let Err(error) = result {
+                tracing::warn!(%error, key, "could not keep the local-settings notice");
+            }
+        }
     }
 
     /// A repo's settings, the user's `[repos.<name>.scripts]` included.

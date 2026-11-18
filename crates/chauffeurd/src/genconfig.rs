@@ -40,9 +40,26 @@ pub struct WorkspaceConfig<'a> {
     pub explore: bool,
 }
 
-/// Writes every generated file; returns warnings worth showing (e.g. clashing MCP servers).
-pub fn write(config: &WorkspaceConfig) -> anyhow::Result<Vec<String>> {
+/// What writing the generated files has to say.
+#[derive(Debug, Default)]
+pub struct Written {
+    /// Worth showing at every write (e.g. clashing MCP servers).
+    pub warnings: Vec<String>,
+    /// Per repo, what its local settings bring to the workspace: worth showing once, and again
+    /// only when it changes.
+    pub notices: Vec<LocalSettingsNotice>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct LocalSettingsNotice {
+    pub repo: String,
+    pub message: String,
+}
+
+/// Writes every generated file.
+pub fn write(config: &WorkspaceConfig) -> anyhow::Result<Written> {
     let mut warnings = Vec::new();
+    let mut notices = Vec::new();
     for planted in [
         ".claude",
         ".claude/settings.json",
@@ -55,7 +72,7 @@ pub fn write(config: &WorkspaceConfig) -> anyhow::Result<Vec<String>> {
     std::fs::create_dir_all(config.root.join(".claude"))?;
     std::fs::write(config.root.join("CLAUDE.md"), claude_md(config))?;
     std::fs::write(config.root.join("AGENTS.md"), agents_md(config))?;
-    let settings = merged_settings(config, &mut warnings)?;
+    let settings = merged_settings(config, &mut notices)?;
     std::fs::write(
         config.root.join(".claude/settings.json"),
         serde_json::to_string_pretty(&settings)? + "\n",
@@ -67,7 +84,7 @@ pub fn write(config: &WorkspaceConfig) -> anyhow::Result<Vec<String>> {
     } else if mcp_path.exists() {
         std::fs::remove_file(&mcp_path)?;
     }
-    Ok(warnings)
+    Ok(Written { warnings, notices })
 }
 
 /// An agent could replace a generated file (or `.claude`) by a symlink to one of the user's, which
@@ -206,7 +223,10 @@ pub fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
-fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyhow::Result<Value> {
+fn merged_settings(
+    config: &WorkspaceConfig,
+    notices: &mut Vec<LocalSettingsNotice>,
+) -> anyhow::Result<Value> {
     let cli = shell_quote(&config.cli.to_string_lossy());
     let mut hooks: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     hooks.entry("SessionStart".into()).or_default().push(json!({
@@ -231,13 +251,21 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
             .as_deref()
             .map(|clone| clone_spellings(clone, home.as_deref()))
             .unwrap_or_default();
+        let mut report = LocalSettingsReport::default();
         for file in settings_files(repo) {
             let Some(settings) = read_json(&file) else {
                 continue;
             };
+            let from_clone = !file.starts_with(&repo.path);
+            if from_clone {
+                report.clone_file = Some(file.clone());
+            }
             if let Some(events) = settings.get("hooks").and_then(Value::as_object) {
                 for (event, groups) in events {
                     for group in groups.as_array().into_iter().flatten() {
+                        if from_clone {
+                            report.add_hooks(event, group);
+                        }
                         hooks
                             .entry(event.clone())
                             .or_default()
@@ -275,14 +303,11 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
                             && let Some(text) = rule.as_str()
                             && names_path(text, &clone_paths)
                         {
-                            warnings.push(format!(
-                                "{}: left out `{text}` from {}: it names the clone, and workspace \
-                                 agents work in its worktree; write it relative to the repo \
-                                 (`Edit(/src/**)`) to have it in workspaces",
-                                repo.repo,
-                                file.display()
-                            ));
+                            report.left_out.push((text.to_string(), file.clone()));
                             continue;
+                        }
+                        if from_clone && let Some(text) = rule.as_str() {
+                            report.rules.push((key, text.to_string()));
                         }
                         let rule = folder.as_deref().map_or_else(
                             || rule.clone(),
@@ -294,6 +319,12 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
                     }
                 }
             }
+        }
+        if let Some(message) = report.message(&repo.repo) {
+            notices.push(LocalSettingsNotice {
+                repo: repo.repo.clone(),
+                message,
+            });
         }
     }
     let mut out = Map::new();
@@ -367,6 +398,111 @@ fn anchor_rule_at_repo(rule: &Value, kind: &str, folder: &str) -> Value {
         (false, false, _) => format!("{folder}/**/{path}"),
     };
     json!(format!("{tool}({rewritten})"))
+}
+
+/// What a repo's local settings bring to a workspace: the rules and hooks of its clone's
+/// `.claude/settings.local.json` when that file stands in for the worktree's, and the allow rules
+/// left out because they name the clone.
+#[derive(Default)]
+struct LocalSettingsReport {
+    clone_file: Option<PathBuf>,
+    /// `(allow | ask | deny, rule as written)`.
+    rules: Vec<(&'static str, String)>,
+    /// `(event, command)`.
+    hooks: Vec<(String, String)>,
+    /// `(rule as written, file)`.
+    left_out: Vec<(String, PathBuf)>,
+}
+
+impl LocalSettingsReport {
+    fn add_hooks(&mut self, event: &str, group: &Value) {
+        for hook in group
+            .get("hooks")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let what = hook
+                .get("command")
+                .or_else(|| hook.get("type"))
+                .and_then(Value::as_str)
+                .unwrap_or("?");
+            self.hooks.push((event.to_string(), what.to_string()));
+        }
+    }
+
+    /// The notice, none when there is nothing to tell.
+    fn message(&self, repo: &str) -> Option<String> {
+        let quoted = |items: &mut dyn Iterator<Item = &String>| {
+            items
+                .map(|item| format!("`{item}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let mut sentences = Vec::new();
+        if let Some(file) = &self.clone_file {
+            let mut added = Vec::new();
+            for kind in ["allow", "ask", "deny"] {
+                let rules = quoted(
+                    &mut self
+                        .rules
+                        .iter()
+                        .filter(|(k, _)| *k == kind)
+                        .map(|(_, rule)| rule),
+                );
+                if !rules.is_empty() {
+                    added.push(format!("{kind} {rules}"));
+                }
+            }
+            let mut events: BTreeMap<&str, Vec<&String>> = BTreeMap::new();
+            for (event, what) in &self.hooks {
+                events.entry(event).or_default().push(what);
+            }
+            for (event, whats) in events {
+                added.push(format!(
+                    "hooks on {event} {}",
+                    quoted(&mut whats.into_iter())
+                ));
+            }
+            if !added.is_empty() {
+                sentences.push(format!(
+                    "its clone's {} applies in this workspace: {}",
+                    file.display(),
+                    added.join("; ")
+                ));
+            }
+        }
+        let mut files: Vec<&PathBuf> = self.left_out.iter().map(|(_, file)| file).collect();
+        files.dedup();
+        for file in files {
+            let rules = quoted(
+                &mut self
+                    .left_out
+                    .iter()
+                    .filter(|(_, f)| f == file)
+                    .map(|(rule, _)| rule),
+            );
+            let from = if sentences.is_empty() || self.clone_file.as_ref() != Some(file) {
+                file.display().to_string()
+            } else {
+                "it".to_string()
+            };
+            sentences.push(format!(
+                "left out from {from}, as naming the clone (workspace agents work in its \
+                 worktree; written relative to the repo, `Edit(/src/**)`, a rule applies): {rules}"
+            ));
+        }
+        if sentences.is_empty() {
+            return None;
+        }
+        if self.clone_file.is_some() {
+            sentences.push(format!(
+                "`clone_local_claude_settings = false` under `[repos.{repo}]` in Chauffeur's \
+                 settings.toml leaves the clone's file out"
+            ));
+        }
+        Some(format!("{repo}: {}.", sentences.join(". ")))
+    }
 }
 
 /// A repo's settings files: its `.claude/settings.json`, and its `.claude/settings.local.json`,
@@ -645,8 +781,9 @@ mod tests {
         std::fs::write(folder.join(".claude").join(file), settings).unwrap();
     }
 
+    /// The generated settings, and the local-settings notices.
     fn generate(root: &Path, repos: &[RepoEntry]) -> (Value, Vec<String>) {
-        let warnings = write(&WorkspaceConfig {
+        let written = write(&WorkspaceConfig {
             slug: "xyz-1-x",
             branch: "alice/xyz-1-x",
             root,
@@ -659,11 +796,13 @@ mod tests {
             explore: false,
         })
         .unwrap();
+        assert!(written.warnings.is_empty(), "{:?}", written.warnings);
         let settings = serde_json::from_str(
             &std::fs::read_to_string(root.join(".claude/settings.json")).unwrap(),
         )
         .unwrap();
-        (settings, warnings)
+        let notices = written.notices.into_iter().map(|n| n.message).collect();
+        (settings, notices)
     }
 
     #[test]
@@ -692,7 +831,7 @@ mod tests {
             base_branch: "main".into(),
         }];
 
-        let (settings, warnings) = generate(root.path(), &repos);
+        let (settings, notices) = generate(root.path(), &repos);
 
         let hook = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
             .as_str()
@@ -710,13 +849,13 @@ mod tests {
             permissions["deny"],
             json!([format!("Edit(/{c}/secrets/**)"), "Edit(/web/secrets/**)"])
         );
-        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert_eq!(notices.len(), 1, "{notices:?}");
         for rule in [format!("Edit(/{c}/**)"), format!("Bash(cd {c} && make)")] {
             assert!(
-                warnings
+                notices
                     .iter()
                     .any(|w| w.contains("web") && w.contains(&rule)),
-                "no warning for {rule}: {warnings:?}"
+                "no warning for {rule}: {notices:?}"
             );
         }
         assert_eq!(
@@ -744,10 +883,10 @@ mod tests {
             base_branch: "main".into(),
         }];
 
-        let (settings, warnings) = generate(root.path(), &repos);
+        let (settings, notices) = generate(root.path(), &repos);
 
         assert_eq!(settings.get("permissions"), None, "{settings}");
-        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(notices.is_empty(), "{notices:?}");
 
         // A copy in the worktree (`.worktreeinclude`) is the worktree's own: still read, and its
         // allow rules naming the clone still left out.
@@ -759,9 +898,9 @@ mod tests {
                 clone.path().display()
             ),
         );
-        let (settings, warnings) = generate(root.path(), &repos);
+        let (settings, notices) = generate(root.path(), &repos);
         assert_eq!(settings["permissions"]["allow"], json!(["Bash(make)"]));
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(notices.len(), 1, "{notices:?}");
     }
 
     #[test]
@@ -791,10 +930,10 @@ mod tests {
             base_branch: "main".into(),
         }];
 
-        let (settings, warnings) = generate(root.path(), &repos);
+        let (settings, notices) = generate(root.path(), &repos);
 
         assert_eq!(settings["permissions"]["allow"], json!(["Bash(make)"]));
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(notices.len(), 1, "{notices:?}");
     }
 
     #[test]
