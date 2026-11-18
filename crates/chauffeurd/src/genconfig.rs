@@ -42,7 +42,7 @@ pub struct WorkspaceConfig<'a> {
 
 /// What writing the generated files has to say.
 #[derive(Debug, Default)]
-pub struct Written {
+pub struct WriteOutcome {
     /// Worth showing at every write (e.g. clashing MCP servers).
     pub warnings: Vec<String>,
     /// Per repo, what its local settings bring to the workspace: worth showing once, and again
@@ -57,7 +57,7 @@ pub struct LocalSettingsNotice {
 }
 
 /// Writes every generated file.
-pub fn write(config: &WorkspaceConfig) -> anyhow::Result<Written> {
+pub fn write(config: &WorkspaceConfig) -> anyhow::Result<WriteOutcome> {
     let mut warnings = Vec::new();
     let mut notices = Vec::new();
     for planted in [
@@ -84,7 +84,7 @@ pub fn write(config: &WorkspaceConfig) -> anyhow::Result<Written> {
     } else if mcp_path.exists() {
         std::fs::remove_file(&mcp_path)?;
     }
-    Ok(Written { warnings, notices })
+    Ok(WriteOutcome { warnings, notices })
 }
 
 /// An agent could replace a generated file (or `.claude`) by a symlink to one of the user's, which
@@ -252,11 +252,10 @@ fn merged_settings(
             .map(|clone| clone_spellings(clone, home.as_deref()))
             .unwrap_or_default();
         let mut report = LocalSettingsReport::default();
-        for file in settings_files(repo) {
+        for (file, from_clone) in settings_files(repo) {
             let Some(settings) = read_json(&file) else {
                 continue;
             };
-            let from_clone = !file.starts_with(&repo.path);
             if from_clone {
                 report.clone_file = Some(file.clone());
             }
@@ -281,6 +280,12 @@ fn merged_settings(
                     for (name, value) in map {
                         let keep = target.get(name).and_then(Value::as_bool) == Some(true);
                         if !keep {
+                            if from_clone
+                                && key == "enabledPlugins"
+                                && value.as_bool() == Some(true)
+                            {
+                                report.plugins.push(name.clone());
+                            }
                             target.insert(name.clone(), value.clone());
                         }
                     }
@@ -303,18 +308,22 @@ fn merged_settings(
                             && let Some(text) = rule.as_str()
                             && names_path(text, &clone_paths)
                         {
-                            report.left_out.push((text.to_string(), file.clone()));
+                            report
+                                .left_out
+                                .entry(file.clone())
+                                .or_default()
+                                .push(text.to_string());
                             continue;
                         }
-                        if from_clone && let Some(text) = rule.as_str() {
-                            report.rules.push((key, text.to_string()));
-                        }
-                        let rule = folder.as_deref().map_or_else(
+                        let anchored = folder.as_deref().map_or_else(
                             || rule.clone(),
                             |folder| anchor_rule_at_repo(rule, key, folder),
                         );
-                        if !list.contains(&rule) {
-                            list.push(rule);
+                        if !list.contains(&anchored) {
+                            if from_clone && let Some(text) = rule.as_str() {
+                                report.rules.entry(key).or_default().push(text.to_string());
+                            }
+                            list.push(anchored);
                         }
                     }
                 }
@@ -400,18 +409,20 @@ fn anchor_rule_at_repo(rule: &Value, kind: &str, folder: &str) -> Value {
     json!(format!("{tool}({rewritten})"))
 }
 
-/// What a repo's local settings bring to a workspace: the rules and hooks of its clone's
-/// `.claude/settings.local.json` when that file stands in for the worktree's, and the allow rules
-/// left out because they name the clone.
+/// What a repo's local settings bring to a workspace: what its clone's
+/// `.claude/settings.local.json` adds when that file stands in for the worktree's, and the allow
+/// rules left out because they name the clone.
 #[derive(Default)]
 struct LocalSettingsReport {
     clone_file: Option<PathBuf>,
-    /// `(allow | ask | deny, rule as written)`.
-    rules: Vec<(&'static str, String)>,
-    /// `(event, command)`.
-    hooks: Vec<(String, String)>,
-    /// `(rule as written, file)`.
-    left_out: Vec<(String, PathBuf)>,
+    /// Rules as written, by kind (`allow`, `ask`, `deny`: the map's order), those the repo's
+    /// other file did not grant already.
+    rules: BTreeMap<&'static str, Vec<String>>,
+    /// Hook commands (or types), by event.
+    hooks: BTreeMap<String, Vec<String>>,
+    plugins: Vec<String>,
+    /// Allow rules as written, by file.
+    left_out: BTreeMap<PathBuf, Vec<String>>,
 }
 
 impl LocalSettingsReport {
@@ -424,45 +435,32 @@ impl LocalSettingsReport {
         {
             let what = hook
                 .get("command")
-                .or_else(|| hook.get("type"))
                 .and_then(Value::as_str)
+                .or_else(|| hook.get("type").and_then(Value::as_str))
                 .unwrap_or("?");
-            self.hooks.push((event.to_string(), what.to_string()));
+            self.hooks
+                .entry(event.to_string())
+                .or_default()
+                .push(what.to_string());
         }
     }
 
     /// The notice, none when there is nothing to tell.
     fn message(&self, repo: &str) -> Option<String> {
-        let quoted = |items: &mut dyn Iterator<Item = &String>| {
-            items
-                .map(|item| format!("`{item}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
         let mut sentences = Vec::new();
         if let Some(file) = &self.clone_file {
-            let mut added = Vec::new();
-            for kind in ["allow", "ask", "deny"] {
-                let rules = quoted(
-                    &mut self
-                        .rules
-                        .iter()
-                        .filter(|(k, _)| *k == kind)
-                        .map(|(_, rule)| rule),
-                );
-                if !rules.is_empty() {
-                    added.push(format!("{kind} {rules}"));
-                }
-            }
-            let mut events: BTreeMap<&str, Vec<&String>> = BTreeMap::new();
-            for (event, what) in &self.hooks {
-                events.entry(event).or_default().push(what);
-            }
-            for (event, whats) in events {
-                added.push(format!(
-                    "hooks on {event} {}",
-                    quoted(&mut whats.into_iter())
-                ));
+            let mut added: Vec<String> = self
+                .rules
+                .iter()
+                .map(|(kind, rules)| format!("{kind} {}", quoted(rules)))
+                .collect();
+            added.extend(
+                self.hooks
+                    .iter()
+                    .map(|(event, whats)| format!("hooks on {event} {}", quoted(whats))),
+            );
+            if !self.plugins.is_empty() {
+                added.push(format!("plugins {}", quoted(&self.plugins)));
             }
             if !added.is_empty() {
                 sentences.push(format!(
@@ -472,24 +470,12 @@ impl LocalSettingsReport {
                 ));
             }
         }
-        let mut files: Vec<&PathBuf> = self.left_out.iter().map(|(_, file)| file).collect();
-        files.dedup();
-        for file in files {
-            let rules = quoted(
-                &mut self
-                    .left_out
-                    .iter()
-                    .filter(|(_, f)| f == file)
-                    .map(|(rule, _)| rule),
-            );
-            let from = if sentences.is_empty() || self.clone_file.as_ref() != Some(file) {
-                file.display().to_string()
-            } else {
-                "it".to_string()
-            };
+        for (file, rules) in &self.left_out {
             sentences.push(format!(
-                "left out from {from}, as naming the clone (workspace agents work in its \
-                 worktree; written relative to the repo, `Edit(/src/**)`, a rule applies): {rules}"
+                "Left out from {}, as naming the clone (workspace agents work in its worktree; \
+                 written relative to the repo, `Edit(/src/**)`, a rule applies): {}",
+                file.display(),
+                quoted(rules)
             ));
         }
         if sentences.is_empty() {
@@ -497,26 +483,36 @@ impl LocalSettingsReport {
         }
         if self.clone_file.is_some() {
             sentences.push(format!(
-                "`clone_local_claude_settings = false` under `[repos.{repo}]` in Chauffeur's \
-                 settings.toml leaves the clone's file out"
+                "`clone_local_claude_settings = false` under `[repos.{}]` in Chauffeur's \
+                 settings.toml leaves the clone's file out",
+                toml_edit::Key::new(repo).display_repr()
             ));
         }
         Some(format!("{repo}: {}.", sentences.join(". ")))
     }
 }
 
-/// A repo's settings files: its `.claude/settings.json`, and its `.claude/settings.local.json`,
+fn quoted(items: &[String]) -> String {
+    items
+        .iter()
+        .map(|item| format!("`{item}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A repo's settings files, each said whether it is the clone's: its `.claude/settings.json`, and
+/// its `.claude/settings.local.json`,
 /// the clone's when the worktree has none and the user did not turn it off (the file is
 /// gitignored, and Claude Code itself reads it from the main checkout in a worktree).
-fn settings_files(repo: &RepoEntry) -> [PathBuf; 2] {
+fn settings_files(repo: &RepoEntry) -> [(PathBuf, bool); 2] {
     let local = repo.path.join(".claude/settings.local.json");
     let local = match &repo.clone_path {
         Some(clone) if repo.read_clone_local_settings && !local.exists() => {
-            clone.join(".claude/settings.local.json")
+            (clone.join(".claude/settings.local.json"), true)
         }
-        _ => local,
+        _ => (local, false),
     };
-    [repo.path.join(".claude/settings.json"), local]
+    [(repo.path.join(".claude/settings.json"), false), local]
 }
 
 /// How a rule can name the clone: its path as stored and resolved, and from the home folder
@@ -855,7 +851,7 @@ mod tests {
                 notices
                     .iter()
                     .any(|w| w.contains("web") && w.contains(&rule)),
-                "no warning for {rule}: {notices:?}"
+                "no notice for {rule}: {notices:?}"
             );
         }
         assert_eq!(
@@ -934,6 +930,61 @@ mod tests {
 
         assert_eq!(settings["permissions"]["allow"], json!(["Bash(make)"]));
         assert_eq!(notices.len(), 1, "{notices:?}");
+    }
+
+    #[test]
+    fn a_clones_notice_lists_only_what_it_adds_and_names_each_file() {
+        let root = tempfile::tempdir().unwrap();
+        let clone = tempfile::tempdir().unwrap();
+        let worktree = root.path().join("next.js");
+        let c = clone.path().display();
+        claude_file(
+            &worktree,
+            "settings.json",
+            &format!(r#"{{"permissions":{{"allow":["Bash(make)","Edit(/{c}/**)"]}}}}"#),
+        );
+        claude_file(
+            clone.path(),
+            "settings.local.json",
+            &format!(
+                r#"{{"enabledPlugins":{{"mine@x":true,"off@x":false}},
+                    "permissions":{{"allow":["Bash(make)","Bash(lint)","Bash(cd {c} && x)"]}}}}"#
+            ),
+        );
+        let repos = [RepoEntry {
+            repo: "next.js".into(),
+            path: worktree.clone(),
+            clone_path: Some(clone.path().to_path_buf()),
+            read_clone_local_settings: true,
+            base_branch: "main".into(),
+        }];
+
+        let (_, notices) = generate(root.path(), &repos);
+
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        let notice = &notices[0];
+        let clone_file = clone.path().join(".claude/settings.local.json");
+        assert!(
+            notice.contains(&format!(
+                "its clone's {} applies in this workspace: allow `Bash(lint)`; plugins `mine@x`.",
+                clone_file.display()
+            )),
+            "{notice}"
+        );
+        for (file, rule) in [
+            (
+                worktree.join(".claude/settings.json"),
+                format!("`Edit(/{c}/**)`"),
+            ),
+            (clone_file, format!("`Bash(cd {c} && x)`")),
+        ] {
+            let sentence = notice
+                .split(". ")
+                .find(|s| s.contains(&format!("Left out from {}", file.display())))
+                .unwrap_or_else(|| panic!("nothing left out from {}: {notice}", file.display()));
+            assert!(sentence.ends_with(&rule), "{sentence}");
+        }
+        assert!(notice.contains(r#"`[repos."next.js"]`"#), "{notice}");
     }
 
     #[test]

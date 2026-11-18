@@ -1980,8 +1980,9 @@ impl WorkspaceManager {
     }
 
     /// Says each repo's local-settings notice the first time, then again only when it changes:
-    /// what was last said is kept per workspace and repo in the store, across restarts. A store
-    /// error says it again rather than never.
+    /// what was last said is kept per workspace and repo in the store, across restarts, even while
+    /// a repo has nothing to say (a clone's file caught mid-write would otherwise be said again).
+    /// A store error says it again rather than never.
     fn announce_local_settings(
         &self,
         workspace: &str,
@@ -1995,16 +1996,14 @@ impl WorkspaceManager {
                 tracing::warn!(%error, key, "could not read the last local-settings notice");
                 None
             });
-            let result = match notices.iter().find(|notice| notice.repo == repo.repo) {
-                Some(notice) if said.as_deref() == Some(notice.message.as_str()) => Ok(()),
-                Some(notice) => {
-                    self.warn(workspace, notice.message.clone());
-                    store.kv_set(&key, &notice.message)
-                }
-                None if said.is_some() => store.kv_delete(&key),
-                None => Ok(()),
+            let Some(notice) = notices.iter().find(|notice| notice.repo == repo.repo) else {
+                continue;
             };
-            if let Err(error) = result {
+            if said.as_deref() == Some(notice.message.as_str()) {
+                continue;
+            }
+            self.warn(workspace, notice.message.clone());
+            if let Err(error) = store.kv_set(&key, &notice.message) {
                 tracing::warn!(%error, key, "could not keep the local-settings notice");
             }
         }

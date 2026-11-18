@@ -2367,8 +2367,8 @@ async fn an_exploration_has_a_temporary_folder_of_its_own_until_archive_or_promo
     assert!(!tmp.exists());
 }
 
-/// The clone-settings notices of `workspace`, oldest first.
-fn clone_settings_notices(d: &Daemon, workspace: &str) -> Vec<String> {
+/// The warnings of `workspace`, oldest first.
+fn workspace_warnings(d: &Daemon, workspace: &str) -> Vec<String> {
     d.store
         .events_after(
             0,
@@ -2383,10 +2383,17 @@ fn clone_settings_notices(d: &Daemon, workspace: &str) -> Vec<String> {
             Event::Workspace {
                 event: WorkspaceEvent::Warning { message },
                 ..
-            } if message.contains("settings.local.json") => Some(message),
+            } => Some(message),
             _ => None,
         })
         .collect()
+}
+
+/// The clone-settings notices of `workspace`, oldest first.
+fn clone_settings_notices(d: &Daemon, workspace: &str) -> Vec<String> {
+    let mut warnings = workspace_warnings(d, workspace);
+    warnings.retain(|warning| warning.contains("settings.local.json"));
+    warnings
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2450,6 +2457,15 @@ async fn what_a_clones_local_settings_add_is_announced_once_per_change_across_re
         notices[1]
     );
     assert!(!notices[1].contains("Edit(/secrets/**)"), "{}", notices[1]);
+
+    // A file read at a bad moment (here gone) and back unchanged is not news.
+    let file = clone.join(".claude/settings.local.json");
+    let text = std::fs::read_to_string(&file).unwrap();
+    std::fs::remove_file(&file).unwrap();
+    d.workspaces.regenerate_config(&id).unwrap();
+    std::fs::write(&file, text).unwrap();
+    d.workspaces.regenerate_config(&id).unwrap();
+    assert_eq!(clone_settings_notices(&d, &id).len(), 2);
 
     // The next daemon remembers what was announced.
     let Fixture {
@@ -4874,25 +4890,7 @@ async fn archiving_asks_docker_only_for_tracked_compose_files_and_never_waits_on
         std::fs::read_to_string(&calls).unwrap(),
         "compose ls --all --format json\ncompose -p shop-db down --volumes --remove-orphans\n"
     );
-    let warnings: Vec<String> = d
-        .store
-        .events_after(
-            0,
-            &EventFilter {
-                workspaces: vec![ws.id.clone()],
-                ..Default::default()
-            },
-        )
-        .unwrap()
-        .into_iter()
-        .filter_map(|e| match e.event {
-            Event::Workspace {
-                event: WorkspaceEvent::Warning { message },
-                ..
-            } => Some(message),
-            _ => None,
-        })
-        .collect();
+    let warnings = workspace_warnings(d, &ws.id);
     assert!(
         warnings
             .iter()

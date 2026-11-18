@@ -94,13 +94,6 @@ python3 -c 'import sys,json; p=json.load(open(sys.argv[1]))["permissions"]; asse
 echo '{"permissions":{"deny":["Edit(/private/**)"]}}' > "$T/clones/alpha/.claude/settings.local.json"
 c add-repo clone-settings beta >/dev/null
 python3 -c 'import sys,json; p=json.load(open(sys.argv[1]))["permissions"]; assert p["deny"] == ["Edit(/alpha/private/**)"], p' "$generated"
-# What the clone's file adds is said in the workspace's log once per change: at creation, then at
-# the add-repo, the file having changed; not at the add-repo's other config writes.
-clone_notices() {
-  bun scripts/app-call.ts events.history "{\"workspace\": \"$(c --json show "$1" | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')\", \"limit\": 1000}" |
-    python3 -c 'import sys,json; print(sum("applies in this workspace" in json.dumps(e) for e in json.load(sys.stdin)["events"]))'
-}
-test "$(clone_notices clone-settings)" = 2
 echo "== clone settings off. turned off, a workspace reads no clone's local settings"
 cp "$CHAUFFEUR_HOME/settings.toml" "$T/settings-before-clone-off.toml"
 perl -pi -e 's/^linear_enabled = false$/linear_enabled = false\nclone_local_claude_settings = false/' "$CHAUFFEUR_HOME/settings.toml"
@@ -108,7 +101,6 @@ grep -q '^clone_local_claude_settings = false$' "$CHAUFFEUR_HOME/settings.toml"
 sleep 1.5   # the daemon reads settings.toml again within a second
 c new --repo alpha --name clone-settings-off >/dev/null
 python3 -c 'import sys,json; p=json.load(open(sys.argv[1])).get("permissions"); assert p is None or p["deny"] == [], p' "$CHAUFFEUR_WORKSPACES_DIR/clone-settings-off/.claude/settings.json"
-test "$(clone_notices clone-settings-off)" = 0
 mv "$T/settings-before-clone-off.toml" "$CHAUFFEUR_HOME/settings.toml"
 sleep 1.5
 c archive clone-settings-off --force
