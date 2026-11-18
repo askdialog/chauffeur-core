@@ -1522,6 +1522,25 @@ impl Store {
         Ok(())
     }
 
+    /// Dates `ids`' worktrees one millisecond apart from `start`, in that order: a workspace lists
+    /// its worktrees by date.
+    pub fn date_worktrees_in_order(
+        &self,
+        ids: &[&str],
+        start: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
+        self.with(|c| {
+            for (i, id) in ids.iter().enumerate() {
+                let at = start + chrono::Duration::milliseconds(i as i64);
+                c.execute(
+                    "UPDATE worktrees SET created_at = ?2 WHERE id = ?1",
+                    params![id, at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
     pub fn set_worktree_removed(
         &self,
         id: &str,

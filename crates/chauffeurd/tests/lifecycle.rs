@@ -2869,27 +2869,28 @@ async fn both_agents_receive_chauffeur_reply_and_design_instructions() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn claude_sessions_are_given_the_first_repos_clone_to_read_its_memory() {
+async fn claude_sessions_are_given_the_clone_of_the_repo_asked_first_to_read_its_memory() {
     use chauffeur_protocol::model::ChatKind;
 
     let f = fixture(47430);
     let d = &f.daemon;
     let log = f.root.join("sidecar.log");
     d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
-    for explore in [false, true] {
+    for (explore, asked) in [(false, ["repo-b", "repo-a"]), (true, ["repo-a", "repo-b"])] {
         let ws = d
             .workspaces
             .create(CreateWorkspaceParams {
-                repos: vec!["repo-b".into(), "repo-a".into()],
+                repos: asked.map(String::from).to_vec(),
                 explore,
                 ..Default::default()
             })
             .await
             .unwrap()
             .workspace;
-        // The first repo as the workspace lists it.
-        let first = &ws.worktrees[0].repo;
-        let clone = d.settings.get().repos[first].path.clone().unwrap();
+        // Listed, and its memory read, in the order asked, though made side by side.
+        let listed: Vec<&str> = ws.worktrees.iter().map(|w| w.repo.as_str()).collect();
+        assert_eq!(listed, asked);
+        let clone = d.settings.get().repos[asked[0]].path.clone().unwrap();
         for (agent, kind) in [
             (AgentKind::Claude, ChatKind::Chat),
             (AgentKind::Claude, ChatKind::Design),

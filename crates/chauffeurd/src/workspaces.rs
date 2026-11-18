@@ -1631,9 +1631,11 @@ impl WorkspaceManager {
             )
         }))
         .await;
-        for result in results {
-            result?;
-        }
+        let made = results.into_iter().collect::<Result<Vec<_>>>()?;
+        // Made side by side, they finish in any order: listed (the app, CLAUDE.md, the repo whose
+        // memory chats read) in the order asked.
+        let ids: Vec<&str> = made.iter().map(|w| w.id.as_str()).collect();
+        d.store.date_worktrees_in_order(&ids, chrono::Utc::now())?;
         self.regenerate_config(&row.id)?;
         Ok(())
     }
