@@ -41,6 +41,11 @@ forge: Forge,
  */
 gitlab_host: string, 
 /**
+ * On GitLab, the main group (`team` or `team/sub`): its projects are named without their
+ * namespace, as `github_org`'s repos are on GitHub; empty: none.
+ */
+gitlab_group: string, 
+/**
  * First port handed out to workspaces, and ports per workspace.
  */
 port_range_start: number, port_block_size: number, 

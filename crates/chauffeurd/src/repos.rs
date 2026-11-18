@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
-use chauffeur_protocol::client::CreateRepoParams;
+use chauffeur_protocol::client::{CreateRepoParams, Forge};
 use chauffeur_protocol::model::RepoInfo;
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -21,6 +21,7 @@ use crate::shellenv::ShellEnv;
 use crate::store::{CachedRepo, Store};
 use crate::{Error, Result};
 
+mod gitlab;
 mod picker;
 
 const REFRESHED_AT: &str = "repos_refreshed_at";
@@ -91,21 +92,46 @@ impl RepoRegistry {
     /// The pickable repos (`list`), with when GitHub last listed them and why it could not.
     pub async fn listing(&self, refresh: bool, env: &ShellEnv) -> Result<RepoListing> {
         let settings = self.settings.get();
-        let main = settings.github_org.as_str();
+        let main = main_owner(&settings);
+        let listed = !main.is_empty() || settings.github_sources;
+        let listed_for = match settings.forge {
+            Forge::Github => format!("{}|{}", main.to_lowercase(), settings.github_sources),
+            Forge::Gitlab => format!(
+                "gitlab|{}|{}|{}",
+                settings.gitlab_host,
+                main.to_lowercase(),
+                settings.github_sources
+            ),
+        };
+        let was = self.store.kv_get(LISTED_FOR)?;
+        let changed = was.as_ref().is_some_and(|was| *was != listed_for);
+        // Another forge, or another GitLab: what was listed there is not to be picked here, even
+        // while the new listing fails.
+        if changed
+            && [was.as_deref().unwrap_or(""), listed_for.as_str()]
+                .iter()
+                .any(|scope| scope.starts_with("gitlab|"))
+        {
+            self.store.replace_repos_cache(&[])?;
+            self.store.kv_delete(REFRESHED_AT)?;
+            self.store.kv_set(LISTED_FOR, &listed_for)?;
+            self.picker.clear();
+        }
         let cached = self.cached(&settings)?;
         let stale = self
             .store
             .kv_get(REFRESHED_AT)?
             .and_then(|at| chrono::DateTime::parse_from_rfc3339(&at).ok())
             .is_none_or(|at| chrono::Utc::now().signed_duration_since(at).num_hours() >= 24);
-        let listed = !main.is_empty() || settings.github_sources;
-        let listed_for = format!("{}|{}", main.to_lowercase(), settings.github_sources);
-        let changed = self
-            .store
-            .kv_get(LISTED_FOR)?
-            .is_some_and(|was| was != listed_for);
         if listed && (refresh || stale || changed || cached.is_empty()) {
-            match fetch_repos(main, settings.github_sources, env).await {
+            let fetched = match settings.forge {
+                Forge::Github => fetch_repos(main, settings.github_sources, env).await,
+                Forge::Gitlab => {
+                    gitlab::fetch_repos(&settings.gitlab_host, main, settings.github_sources, env)
+                        .await
+                }
+            };
+            match fetched {
                 Ok(repos) => {
                     self.store.replace_repos_cache(&repos)?;
                     self.store.kv_set(REFRESHED_AT, &crate::store::now())?;
@@ -114,7 +140,7 @@ impl RepoRegistry {
                     *self.github_error.lock().unwrap() = None;
                 }
                 Err(error) => {
-                    tracing::warn!(%error, "could not list the GitHub repos");
+                    tracing::warn!(%error, "could not list the forge's repos");
                     *self.github_error.lock().unwrap() = Some(format!("{error:#}"));
                 }
             }
@@ -135,7 +161,7 @@ impl RepoRegistry {
         cached: Vec<CachedRepo>,
         settings: &UserSettings,
     ) -> Result<RepoListing> {
-        let listed = !settings.github_org.is_empty() || settings.github_sources;
+        let listed = !main_owner(settings).is_empty() || settings.github_sources;
         let last_use = self.store.last_use_by_clone()?;
         let mut by_key: BTreeMap<String, RepoInfo> = BTreeMap::new();
         for repo in cached {
@@ -185,8 +211,8 @@ impl RepoRegistry {
             let entry = by_key.entry(name.clone()).or_insert_with(|| RepoInfo {
                 name: name.clone(),
                 key: name.clone(),
-                full_name: format!("{}/{}", settings.github_org, name),
-                owner: settings.github_org.clone(),
+                full_name: format!("{}/{}", main_owner(settings), name),
+                owner: main_owner(settings).to_string(),
                 owner_is_org: false,
                 private: false,
                 local: false,
@@ -206,10 +232,10 @@ impl RepoRegistry {
             }
         }
         for key in &settings.default_repos {
-            let Ok((owner, name)) = parse_repo_ref(key) else {
+            let Ok((owner, name)) = parse_repo_ref(settings.forge, key) else {
                 continue;
             };
-            let owner = owner.unwrap_or(&settings.github_org);
+            let owner = owner.unwrap_or(main_owner(settings));
             let info = self.repo_info(
                 CachedRepo {
                     name: name.to_string(),
@@ -306,10 +332,16 @@ impl RepoRegistry {
         account: Option<&str>,
         env: &ShellEnv,
     ) -> Result<RepoInfo> {
-        validate_owner(&params.owner)?;
+        let settings = self.settings.get();
+        if settings.forge == Forge::Gitlab {
+            return Err(Error::BadRequest(
+                "Chauffeur creates repos on GitHub only: create the project on your GitLab, then pick it"
+                    .into(),
+            ));
+        }
+        validate_owner(Forge::Github, &params.owner)?;
         validate_repo_name(&params.name)?;
         let full_name = format!("{}/{}", params.owner, params.name);
-        let settings = self.settings.get();
         if self
             .cached(&settings)?
             .iter()
@@ -367,7 +399,7 @@ impl RepoRegistry {
     ) -> Result<std::collections::HashSet<String>> {
         let settings = self.settings.get();
         let known = self.known_names()?;
-        if !known.is_empty() || settings.github_org.is_empty() {
+        if !known.is_empty() || main_owner(&settings).is_empty() {
             return Ok(known);
         }
         self.list(false, env).await?;
@@ -398,8 +430,9 @@ impl RepoRegistry {
 
     /// An existing local clone of a repo as a request names it (`name` or `owner/name`).
     pub fn existing_clone(&self, reference: &str) -> Option<PathBuf> {
-        let (owner, name) = parse_repo_ref(reference).ok()?;
-        match owner.filter(|owner| !is_main(&self.settings.get(), owner)) {
+        let settings = self.settings.get();
+        let (owner, name) = parse_repo_ref(settings.forge, reference).ok()?;
+        match owner.filter(|owner| !is_main(&settings, owner)) {
             Some(owner) => self.find_owned_clone(owner, name),
             None => self.find_clone(name),
         }
@@ -409,21 +442,22 @@ impl RepoRegistry {
     /// Chauffeur made (`~/chauffeur/repos/<owner>/<name>`), else a clone of that name under the
     /// clone roots whose `origin` is that repo (a folder name alone may be another owner's).
     pub fn find_owned_clone(&self, owner: &str, name: &str) -> Option<PathBuf> {
-        validate_owner(owner).ok()?;
+        let settings = self.settings.get();
+        validate_owner(settings.forge, owner).ok()?;
         validate_repo_name(name).ok()?;
         let own = self.paths.repos_dir.join(owner).join(name);
         if own.join(".git").is_dir() {
             return Some(own);
         }
         let full_name = format!("{owner}/{name}");
-        let settings = self.settings.get();
+        let host = forge_host(&settings);
         settings
             .clone_roots
             .iter()
             .map(|root| expand_home(root))
             .chain(std::iter::once(self.paths.repos_dir.clone()))
             .map(|root| root.join(name))
-            .find(|clone| clone.join(".git").is_dir() && origin_is(clone, &full_name))
+            .find(|clone| clone.join(".git").is_dir() && origin_is(clone, host, &full_name))
     }
 
     /// Resolves a repo (`name`, or `owner/name` outside the main organization) to a local clone,
@@ -434,9 +468,9 @@ impl RepoRegistry {
         git: &Git,
         env: &ShellEnv,
     ) -> Result<ResolvedRepo> {
-        let (owner, name) = parse_repo_ref(reference)?;
         let settings = self.settings.get();
-        let default_in_main = !settings.github_org.is_empty()
+        let (owner, name) = parse_repo_ref(settings.forge, reference)?;
+        let default_in_main = !main_owner(&settings).is_empty()
             && settings.default_repos.iter().any(|repo| repo == name);
         let mut cache = self.cached(&settings)?;
         if owner.is_none()
@@ -473,10 +507,10 @@ impl RepoRegistry {
                         [] => {
                             return Err(Error::NotFound(format!(
                                 "repo {name} is neither in {} nor in the settings",
-                                if settings.github_org.is_empty() {
-                                    "your GitHub repos"
-                                } else {
-                                    &settings.github_org
+                                match (main_owner(&settings), settings.forge) {
+                                    ("", Forge::Github) => "your GitHub repos",
+                                    ("", Forge::Gitlab) => "your GitLab projects",
+                                    (main, _) => main,
                                 }
                             )));
                         }
@@ -503,7 +537,7 @@ impl RepoRegistry {
         let full_name = cached
             .as_ref()
             .map(|r| r.full_name.clone())
-            .unwrap_or_else(|| format!("{}/{}", settings.github_org, name));
+            .unwrap_or_else(|| format!("{}/{}", main_owner(&settings), name));
         let clone_path = match self.find_clone(name) {
             Some(path) => path,
             None => {
@@ -546,7 +580,7 @@ impl RepoRegistry {
             .find(|repo| repo.full_name.eq_ignore_ascii_case(&asked));
         // GitHub's own case, when listed: the folder Chauffeur clones into follows it.
         let full_name = cached.as_ref().map_or(asked, |r| r.full_name.clone());
-        let (owner, name) = full_name.split_once('/').unwrap_or((owner, name));
+        let (owner, name) = full_name.rsplit_once('/').unwrap_or((owner, name));
         let clone_path = match self.find_owned_clone(owner, name) {
             Some(path) => path,
             None => {
@@ -574,22 +608,51 @@ impl RepoRegistry {
         let lock = self.lock_for(target);
         let _guard = lock.lock().await;
         if !target.join(".git").is_dir() {
-            clone_repo(full_name, target, env).await?;
+            let settings = self.settings.get();
+            match settings.forge {
+                Forge::Github => clone_repo(full_name, target, env).await?,
+                Forge::Gitlab => {
+                    gitlab::clone_repo(&settings.gitlab_host, full_name, target, env).await?
+                }
+            }
         }
         Ok(())
     }
 }
 
-/// `owner` is the main organization (GitHub logins ignore case).
+/// `owner` is the main organization, or the main group on GitLab (both ignore case).
 fn is_main(settings: &UserSettings, owner: &str) -> bool {
-    !settings.github_org.is_empty() && owner.eq_ignore_ascii_case(&settings.github_org)
+    let main = main_owner(settings);
+    !main.is_empty() && owner.eq_ignore_ascii_case(main)
 }
 
-/// A repo as a request names it: `name`, or `owner/name`.
-pub fn parse_repo_ref(reference: &str) -> Result<(Option<&str>, &str)> {
-    match reference.split_once('/') {
+/// The owner whose repos are named short: GitHub's main organization, or GitLab's main group
+/// (docs/adr/gitlab-as-the-forge.md).
+fn main_owner(settings: &UserSettings) -> &str {
+    match settings.forge {
+        Forge::Github => &settings.github_org,
+        Forge::Gitlab => &settings.gitlab_group,
+    }
+}
+
+/// The host a clone's `origin` names: github.com, or the GitLab's.
+fn forge_host(settings: &UserSettings) -> &str {
+    match settings.forge {
+        Forge::Github => "github.com",
+        Forge::Gitlab => &settings.gitlab_host,
+    }
+}
+
+/// A repo as a request names it: `name`, or `owner/name`; on GitLab the owner is a group's path,
+/// which may hold subgroups (`team/sub/name`).
+pub fn parse_repo_ref(forge: Forge, reference: &str) -> Result<(Option<&str>, &str)> {
+    let split = match forge {
+        Forge::Github => reference.split_once('/'),
+        Forge::Gitlab => reference.rsplit_once('/'),
+    };
+    match split {
         Some((owner, name)) => {
-            validate_owner(owner)?;
+            validate_owner(forge, owner)?;
             validate_repo_name(name)?;
             Ok((Some(owner), name))
         }
@@ -607,23 +670,45 @@ pub fn repo_folder(reference: &str) -> &str {
         .map_or(reference, |(_, name)| name)
 }
 
-/// Refuses an owner that is not a GitHub login (letters, digits and inner hyphens).
-fn validate_owner(owner: &str) -> Result<()> {
-    let valid = !owner.is_empty()
-        && !owner.starts_with('-')
-        && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
-    if valid {
-        Ok(())
-    } else {
-        Err(Error::BadRequest(format!(
-            "{owner:?} is not a GitHub account or organization"
-        )))
+/// Refuses an owner that is not a GitHub login (letters, digits and inner hyphens), or on GitLab
+/// a group's path ([`is_gitlab_namespace`]): it is joined into the folder a repo is cloned into.
+fn validate_owner(forge: Forge, owner: &str) -> Result<()> {
+    match forge {
+        Forge::Github => {
+            let valid = !owner.is_empty()
+                && !owner.starts_with('-')
+                && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+            if valid {
+                Ok(())
+            } else {
+                Err(Error::BadRequest(format!(
+                    "{owner:?} is not a GitHub account or organization"
+                )))
+            }
+        }
+        Forge::Gitlab if is_gitlab_namespace(owner) => Ok(()),
+        Forge::Gitlab => Err(Error::BadRequest(format!(
+            "{owner:?} is not a GitLab group or user"
+        ))),
     }
 }
 
-/// The clone's `origin` remote is the GitHub repo `full_name` (`https://github.com/o/n.git`,
-/// `git@github.com:o/n`, any case).
-fn origin_is(clone: &Path, full_name: &str) -> bool {
+/// A GitLab namespace path (`team`, `team/sub`): segments of letters, digits, `_`, `-` and `.`,
+/// none empty nor starting with `.` or `-`, so every one is a plain folder name.
+pub fn is_gitlab_namespace(path: &str) -> bool {
+    !path.is_empty()
+        && path.split('/').all(|segment| {
+            !segment.is_empty()
+                && !segment.starts_with(['.', '-'])
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        })
+}
+
+/// The clone's `origin` remote is the repo `full_name` on `host` (`https://github.com/o/n.git`,
+/// `git@github.com:o/n`, `ssh://git@gitlab.example.com:2222/team/sub/n.git`, any case).
+fn origin_is(clone: &Path, host: &str, full_name: &str) -> bool {
     let Ok(config) = std::fs::read_to_string(clone.join(".git").join("config")) else {
         return false;
     };
@@ -644,8 +729,24 @@ fn origin_is(clone: &Path, full_name: &str) -> bool {
         };
         let url = url.trim().trim_end_matches('/');
         let url = url.strip_suffix(".git").unwrap_or(url);
-        let Some((_, path)) = url.split_once("github.com") else {
+        if host.is_empty() {
             return false;
+        }
+        let Some((_, path)) = url.split_once(host) else {
+            return false;
+        };
+        // On a GitLab, an `ssh://` URL may name a port after the host (`host:2222/path`), which is
+        // not part of the path; `host:1234/path` without the scheme is a path, as on GitHub.
+        let path = match path.strip_prefix(':').map(|rest| rest.split_once('/')) {
+            Some(Some((port, rest)))
+                if host != "github.com"
+                    && url.starts_with("ssh://")
+                    && !port.is_empty()
+                    && port.bytes().all(|b| b.is_ascii_digit()) =>
+            {
+                rest
+            }
+            _ => path,
         };
         return path
             .trim_start_matches([':', '/'])
@@ -1102,6 +1203,143 @@ mod tests {
         assert_eq!(listed.iter().filter(|r| r.name == "notes").count(), 1);
     }
 
+    #[tokio::test]
+    async fn on_gitlab_the_main_group_names_its_projects_short_and_clones_are_found_by_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = |full_name: &str| CachedRepo {
+            name: full_name.rsplit_once('/').unwrap().1.into(),
+            full_name: full_name.into(),
+            owner_is_org: true,
+            default_branch: Some("main".into()),
+            ..Default::default()
+        };
+        let (registry, settings) = registry(dir.path(), &[]);
+        let code = dir.path().join("code");
+        settings
+            .update(|doc| {
+                doc["forge"] = toml_edit::value("gitlab");
+                doc["gitlab_host"] = toml_edit::value("gitlab.example.com");
+                doc["gitlab_group"] = toml_edit::value("Team");
+                doc["github_sources"] = toml_edit::value(true);
+                let mut roots = toml_edit::Array::new();
+                roots.push(code.to_string_lossy().as_ref());
+                doc["clone_roots"] = toml_edit::value(roots);
+            })
+            .unwrap();
+        // What GitLab listed, as `fetch_repos` caches it.
+        registry
+            .store
+            .replace_repos_cache(&[
+                project("team/web"),
+                project("team/shop/api"),
+                project("other/tool"),
+            ])
+            .unwrap();
+        registry
+            .store
+            .kv_set(REFRESHED_AT, &crate::store::now())
+            .unwrap();
+        registry
+            .store
+            .kv_set(LISTED_FOR, "gitlab|gitlab.example.com|team|true")
+            .unwrap();
+        git_repo(&code.join("web"), "https://gitlab.example.com/team/web.git");
+        git_repo(
+            &code.join("api"),
+            "git@gitlab.example.com:team/shop/api.git",
+        );
+        git_repo(
+            &code.join("tool"),
+            "ssh://git@gitlab.example.com:2222/other/tool.git",
+        );
+        let listed = registry.list(false, &ShellEnv::new()).await.unwrap();
+        let find = |key: &str| listed.iter().find(|r| r.key == key).unwrap();
+        assert_eq!(find("web").clone_path, Some(display(code.join("web"))));
+        assert_eq!(
+            (
+                find("team/shop/api").owner.as_str(),
+                find("team/shop/api").clone_path.clone()
+            ),
+            ("team/shop", Some(display(code.join("api"))))
+        );
+        assert_eq!(
+            find("other/tool").clone_path,
+            Some(display(code.join("tool")))
+        );
+        assert_eq!(
+            registry.existing_clone("team/shop/api"),
+            Some(code.join("api"))
+        );
+        // Back on GitHub (nothing listed there, so nothing asked of `gh`), what the GitLab listed
+        // is no longer offered.
+        settings
+            .update(|doc| {
+                doc["forge"] = toml_edit::value("github");
+                doc["github_sources"] = toml_edit::value(false);
+            })
+            .unwrap();
+        registry.list(false, &ShellEnv::new()).await.unwrap();
+        assert!(registry.store.repos_cache().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_gitlab_reference_may_name_subgroups_a_github_one_may_not() {
+        assert_eq!(
+            parse_repo_ref(Forge::Gitlab, "team/shop/api").unwrap(),
+            (Some("team/shop"), "api")
+        );
+        assert_eq!(parse_repo_ref(Forge::Gitlab, "web").unwrap(), (None, "web"));
+        for bad in [
+            "team/../api",
+            "team//api",
+            ".team/api",
+            "team/-x/api",
+            "team/sh op/api",
+        ] {
+            assert!(parse_repo_ref(Forge::Gitlab, bad).is_err(), "{bad}");
+        }
+        assert!(parse_repo_ref(Forge::Github, "team/shop/api").is_err());
+        assert!(parse_repo_ref(Forge::Github, "my.org/api").is_err());
+    }
+
+    #[test]
+    fn origins_match_gitlab_projects_and_github_keeps_its_reading() {
+        let dir = tempfile::tempdir().unwrap();
+        let host = "gitlab.example.com";
+        for (url, full_name, matches) in [
+            (
+                "https://gitlab.example.com/team/shop/api.git",
+                "team/shop/api",
+                true,
+            ),
+            (
+                "git@gitlab.example.com:Team/Shop/API.git",
+                "team/shop/api",
+                true,
+            ),
+            (
+                "ssh://git@gitlab.example.com:2222/team/shop/api.git",
+                "team/shop/api",
+                true,
+            ),
+            (
+                "https://gitlab.example.com/team/api.git",
+                "team/shop/api",
+                false,
+            ),
+            ("https://github.com/team/shop.git", "team/shop", false),
+        ] {
+            let clone = dir.path().join(format!("g{}", url.len()));
+            git_repo(&clone, url);
+            assert_eq!(origin_is(&clone, host, full_name), matches, "{url}");
+        }
+        // A GitHub owner of digits is an owner, not a port.
+        let clone = dir.path().join("digits");
+        git_repo(&clone, "git@github.com:1234/repo.git");
+        assert!(origin_is(&clone, "github.com", "1234/repo"));
+        assert!(!origin_is(&clone, "", "1234/repo"));
+    }
+
     #[test]
     fn origins_match_github_repos_in_any_form() {
         let dir = tempfile::tempdir().unwrap();
@@ -1114,12 +1352,15 @@ mod tests {
         ] {
             let clone = dir.path().join(format!("c{}", url.len()));
             git_repo(&clone, url);
-            assert_eq!(origin_is(&clone, full_name), matches, "{url}");
+            assert_eq!(origin_is(&clone, "github.com", full_name), matches, "{url}");
         }
         assert_eq!(repo_folder("owner/repo"), "repo");
         assert_eq!(repo_folder("repo"), "repo");
-        assert!(parse_repo_ref("owner/repo/x").is_err());
-        assert_eq!(parse_repo_ref("o-1/r.x").unwrap(), (Some("o-1"), "r.x"));
+        assert!(parse_repo_ref(Forge::Github, "owner/repo/x").is_err());
+        assert_eq!(
+            parse_repo_ref(Forge::Github, "o-1/r.x").unwrap(),
+            (Some("o-1"), "r.x")
+        );
     }
 
     #[test]

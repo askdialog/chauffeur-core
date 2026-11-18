@@ -1,12 +1,16 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { ALL_OWNERS, repoPickerSearch, repoPickerView } from "@/lib/repoPicker";
 import { useGithubSource } from "@/state/github";
+import { useForge } from "@/state/gitlab";
 import { useRepoCatalog } from "@/state/repos";
 import { useRepoPages } from "./useRepoPages";
 
 export function useRepoPicker(selection: string[], onToggle: (repo: string) => void) {
   const catalog = useRepoCatalog();
-  const github = useGithubSource();
+  // On a GitLab installation, GitHub's account and organizations are no owners of its projects.
+  const gitlab = useForge() === "gitlab";
+  const githubStatus = useGithubSource();
+  const github = gitlab ? null : githubStatus;
   const account = github?.account ?? null;
   const [filter, setFilter] = useState("");
   const [owner, setOwner] = useState(ALL_OWNERS);

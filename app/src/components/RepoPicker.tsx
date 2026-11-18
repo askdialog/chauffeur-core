@@ -11,6 +11,8 @@ import {
   showsOwner,
 } from "@/lib/repoPicker";
 import { suggestedRepoName } from "@/lib/newRepo";
+import { forgeName } from "@/lib/forge";
+import { useForge } from "@/state/gitlab";
 import { NewRepoForm } from "./NewRepoForm";
 import { Button, cx, Kbd, Popover } from "./ui";
 import { useRepoPicker } from "./useRepoPicker";
@@ -37,13 +39,17 @@ export function RepoPopover({
   onToggle: (repo: string) => void;
 }) {
   const { filter, setFilter, owner, setOwner, view, navigation, pages, status, pick, onKeyDown, showScopeHint, catalogCount } = useRepoPicker(selection, onToggle);
+  // GitHub unless the installation is set to a GitLab, where repos are listed, not created.
+  const forge = useForge();
+  const gitlab = forge === "gitlab";
+  const forgeLabel = forgeName(forge);
   const { repos, query, offered, sections, options, owners, unknown } = view;
   const { listRef, active, onHover } = navigation;
   const { catalogError, githubError, refreshedAt } = status;
   /** The name the "New repository" view opens with; null while the list shows. */
   const [creating, setCreating] = useState<string | null>(null);
   const suggestion = suggestedRepoName(filter);
-  const offerCreate = !!suggestion && !offered && !repos.some((repo) => repo.name.toLowerCase() === suggestion.toLowerCase());
+  const offerCreate = !gitlab && !!suggestion && !offered && !repos.some((repo) => repo.name.toLowerCase() === suggestion.toLowerCase());
 
   if (creating !== null) {
     return (
@@ -67,7 +73,7 @@ export function RepoPopover({
         <input
           data-autofocus
           className="h-full min-w-0 flex-1 bg-transparent text-[12.5px] text-fg placeholder:text-faint focus:outline-none"
-          placeholder="Filter repos, or paste a GitHub URL…"
+          placeholder={gitlab ? "Filter projects…" : "Filter repos, or paste a GitHub URL…"}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
           onKeyDown={onKeyDown}
@@ -75,21 +81,23 @@ export function RepoPopover({
           aria-activedescendant={options.length > 0 ? `repo-option-${active}` : undefined}
           data-testid="repo-filter"
         />
-        <button type="button" title="Refresh from GitHub" aria-label="Refresh from GitHub" disabled={status.refreshDisabled} className="shrink-0 text-faint hover:text-fg disabled:opacity-40" onClick={pages.refresh}>
+        <button type="button" title={`Refresh from ${forgeLabel}`} aria-label={`Refresh from ${forgeLabel}`} disabled={status.refreshDisabled} className="shrink-0 text-faint hover:text-fg disabled:opacity-40" onClick={pages.refresh}>
           <RefreshCw size={12} className={pages.loading ? "animate-spin" : ""} />
         </button>
-        <button type="button" title="New repository on GitHub" aria-label="New repository on GitHub" className="shrink-0 text-faint hover:text-fg" onClick={() => setCreating(suggestion)} data-testid="new-repo">
-          <Plus size={13} />
-        </button>
+        {!gitlab && (
+          <button type="button" title="New repository on GitHub" aria-label="New repository on GitHub" className="shrink-0 text-faint hover:text-fg" onClick={() => setCreating(suggestion)} data-testid="new-repo">
+            <Plus size={13} />
+          </button>
+        )}
       </div>
 
       {githubError && (
         <div className="mx-2.5 mt-2 mb-1 flex shrink-0 items-start gap-[9px] rounded-[7px] border border-danger/30 bg-danger/10 px-[11px] py-[9px] text-danger" data-testid="repos-github-error">
           <span className="mt-px shrink-0">
-            <GithubMark size={13} />
+            {gitlab ? <GitBranch size={13} /> : <GithubMark size={13} />}
           </span>
           <div className="min-w-0 flex-1">
-            <div className="font-medium text-fg">GitHub didn't answer: some repos may be missing</div>
+            <div className="font-medium text-fg">{forgeLabel} didn't answer: some repos may be missing</div>
             <div className="truncate font-mono text-[11px]" title={githubError}>
               {githubError}
             </div>
@@ -156,13 +164,17 @@ export function RepoPopover({
         {status.showEmpty && (
           <div className="px-2 pt-3.5 pb-3 text-center">
             <div className="text-[12.5px] text-muted">{filter.trim() ? `No ${owner ? "" : "loaded "}repo matches “${filter.trim()}”.` : "No repo to pick yet."}</div>
-            <div className="mt-0.5 text-[11.5px] text-faint">
-              Paste its GitHub URL, or{" "}
-              <button type="button" className="text-muted underline hover:text-fg" onClick={() => void openExternal(GITHUB_ACCESS_URL)}>
-                check access ↗
-              </button>{" "}
-              if it lives in an SSO organization.
-            </div>
+            {gitlab ? (
+              <div className="mt-0.5 text-[11.5px] text-faint">Check that your GitLab account is a member of its project or group.</div>
+            ) : (
+              <div className="mt-0.5 text-[11.5px] text-faint">
+                Paste its GitHub URL, or{" "}
+                <button type="button" className="text-muted underline hover:text-fg" onClick={() => void openExternal(GITHUB_ACCESS_URL)}>
+                  check access ↗
+                </button>{" "}
+                if it lives in an SSO organization.
+              </div>
+            )}
           </div>
         )}
         {sections.map((section) => (
@@ -185,7 +197,7 @@ export function RepoPopover({
                   {repo.is_default && <span title="In the repos a new workspace starts with (Settings)" className="shrink-0 text-[10.5px] text-faint">default</span>}
                   {repo.local && (
                     <span
-                      title="Only on this Mac, no GitHub remote"
+                      title={`Only on this Mac, no ${forgeLabel} remote`}
                       className="inline-flex h-4 shrink-0 items-center gap-[3px] rounded border border-line-strong px-[5px] text-[10.5px] text-muted"
                     >
                       <Folder size={10} />
@@ -234,16 +246,18 @@ export function RepoPopover({
 
       {showScopeHint && (
         <div className="border-t border-line px-2.5 py-2 text-[11.5px] text-muted" data-testid="repos-search-scope">
-          Showing loaded matches. Choose an owner above to search all its repos on GitHub.
+          {gitlab
+            ? "Showing loaded matches. Choose a group above to search all its projects on GitLab."
+            : "Showing loaded matches. Choose an owner above to search all its repos on GitHub."}
         </div>
       )}
       {pages.truncated && (
-        <div className="border-t border-line px-2.5 py-2 text-[11.5px] text-muted">GitHub limits search results. Use a more specific search to find other repos.</div>
+        <div className="border-t border-line px-2.5 py-2 text-[11.5px] text-muted">{forgeLabel} limits search results. Use a more specific search to find other repos.</div>
       )}
       <div className="flex shrink-0 items-center gap-3 border-t border-line px-2.5 py-1.5 text-[11px] text-faint">
         {githubError ? null : status.loading ? (
           <span className="flex items-center gap-1.5">
-            <Loader2 size={11} className="animate-spin" /> Listing your repos on GitHub…
+            <Loader2 size={11} className="animate-spin" /> Listing your repos on {forgeLabel}…
           </span>
         ) : (
           <>
@@ -254,11 +268,11 @@ export function RepoPopover({
         )}
         <span className={cx("truncate", !githubError && "ml-auto")}>
           {githubError ? (
-            <span>Check GitHub access, then Retry.</span>
+            <span>Check {forgeLabel} access, then Retry.</span>
           ) : (
             refreshedAt && status.checked && (
               <span className="flex items-center gap-1" data-testid="repos-synced">
-                <RefreshCw size={10} /> Checked GitHub {relativeTime(refreshedAt)}
+                <RefreshCw size={10} /> Checked {forgeLabel} {relativeTime(refreshedAt)}
               </span>
             )
           )}

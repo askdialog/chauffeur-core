@@ -421,10 +421,14 @@ function Workspaces({ settings, update, busy }: SectionProps) {
   const { repos, error: reposError, refresh } = useRepoCatalog("all");
   const { default_repos, branch_prefix, github_login, clone_roots } = settings.workspaces;
   const w = settings.workspaces;
-  const [org, setOrg] = useState(w.github_org);
-  useEffect(() => setOrg(w.github_org), [w.github_org]);
+  // On a GitLab installation, the main owner is a group (docs/adr/gitlab-as-the-forge.md).
+  const gitlab = w.forge === "gitlab";
+  const mainOwner = gitlab ? w.gitlab_group : w.github_org;
+  const [org, setOrg] = useState(mainOwner);
+  useEffect(() => setOrg(mainOwner), [mainOwner]);
   const saveOrg = () => {
-    if (org.trim() !== w.github_org) void update({ workspaces: { github_org: org.trim() } });
+    if (org.trim() === mainOwner) return;
+    void update({ workspaces: gitlab ? { gitlab_group: org.trim() } : { github_org: org.trim() } });
   };
   const [prefix, setPrefix] = useState(branch_prefix);
   useEffect(() => setPrefix(branch_prefix), [branch_prefix]);
@@ -456,7 +460,15 @@ function Workspaces({ settings, update, busy }: SectionProps) {
           onKeyDown={(event) => {
             if (event.key === "Enter") savePrefix();
           }}
-          placeholder={github_login ? `${github_login} (your GitHub login)` : "your GitHub login"}
+          placeholder={
+            gitlab
+              ? github_login
+                ? `${github_login} (your GitLab username)`
+                : "your GitLab username"
+              : github_login
+                ? `${github_login} (your GitHub login)`
+                : "your GitHub login"
+          }
           spellCheck={false}
           className={inputClass}
           data-testid="branch-prefix"
@@ -472,7 +484,10 @@ function Workspaces({ settings, update, busy }: SectionProps) {
           testId="clone-roots"
         />
       </Field>
-      <Field label="Main GitHub organization" hint="its repos go without their owner's name">
+      <Field
+        label={gitlab ? "Main GitLab group" : "Main GitHub organization"}
+        hint={gitlab ? "its projects go without their group's path" : "its repos go without their owner's name"}
+      >
         <input
           value={org}
           onChange={(event) => setOrg(event.target.value)}
@@ -481,13 +496,18 @@ function Workspaces({ settings, update, busy }: SectionProps) {
             if (event.key === "Enter") saveOrg();
           }}
           spellCheck={false}
+          placeholder={gitlab ? "team or team/sub" : undefined}
           className={inputClass}
-          data-testid="github-org"
+          data-testid={gitlab ? "gitlab-group" : "github-org"}
         />
       </Field>
       <Switch
-        label="Every repo my GitHub account reaches"
-        hint="Your own, your other organizations' and the ones you collaborate on, beside the main organization's."
+        label={gitlab ? "Every project my GitLab account is a member of" : "Every repo my GitHub account reaches"}
+        hint={
+          gitlab
+            ? "Beside the main group's: the projects and groups your account belongs to."
+            : "Your own, your other organizations' and the ones you collaborate on, beside the main organization's."
+        }
         on={w.github_sources}
         disabled={busy}
         onChange={(on) => void update({ workspaces: { github_sources: on } }).then(() => loadAllRepos(true))}

@@ -170,8 +170,14 @@ impl Gitlab {
         account
     }
 
+    /// The account changed: read it again on the next ask, the branch prefix's username too.
     async fn forget_account(&self) {
         *self.account.lock().await = None;
+        if let Some(host) = self.host()
+            && let Err(error) = self.d().store.kv_delete(&login_key(&host))
+        {
+            tracing::warn!(%error, "could not forget the gitlab username");
+        }
     }
 
     /// Starts signing in in the background; `status` follows it. The token goes to `glab` only.
@@ -332,6 +338,26 @@ impl Gitlab {
         tracing::info!(version = VERSION, dir = %dir.display(), "glab installed");
         Ok(link)
     }
+}
+
+/// Where the username the branch prefix defaults to is kept, by host.
+pub fn login_key(host: &str) -> String {
+    format!("glab_login:{host}")
+}
+
+/// The username `glab` is signed in as on `host`, asked once and kept until the account changes.
+pub async fn login(d: &Daemon, host: &str) -> Option<String> {
+    if host.is_empty() {
+        return None;
+    }
+    if let Ok(Some(login)) = d.store.kv_get(&login_key(host)) {
+        return Some(login);
+    }
+    let env = d.shell_env.vars();
+    let glab = find(&env, "glab")?;
+    let login = read_account(&glab, host, &env).await?;
+    let _ = d.store.kv_set(&login_key(host), &login);
+    Some(login)
 }
 
 fn step(phase: &str) -> GitlabConnecting {

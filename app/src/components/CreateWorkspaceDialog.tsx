@@ -61,6 +61,8 @@ import { DEFAULT_PERMISSION_MODE } from "@/lib/permissions";
 import { PermissionPicker } from "./PermissionPicker";
 import { StateDot, useTicketSearch } from "./TicketSearch";
 import { ForgeSetup } from "./ForgeSetup";
+import { forgeWords } from "@/lib/forge";
+import { useForge } from "@/state/gitlab";
 import { ClaudeArtifactImport } from "./ClaudeArtifactImport";
 import { RepoPopover } from "./RepoPicker";
 import { useWorkspaceRepoSelection } from "./useWorkspaceRepoSelection";
@@ -103,6 +105,8 @@ type FormError = { message: string; created: boolean; branch: { suggestion: stri
 type FormSettings = { prefix: string; startTickets: boolean };
 
 function CreateForm({ onClose }: { onClose: () => void }) {
+  // PRs on GitHub, MRs on GitLab (docs/adr/gitlab-as-the-forge.md).
+  const changeRequests = forgeWords(useForge()).shorts;
   const signingIn = useIdentity((s) => s.signingIn);
   const signInError = useIdentity((s) => s.error);
   const signedInEmail = useApp((s) => s.identity?.email ?? null);
@@ -405,7 +409,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
           }
         }}
       >
-        {!parentId && <div className="-mt-1.5 pl-0.5 text-[11.5px] text-faint" data-testid="kind-hint">{KIND_HINTS[kind]}</div>}
+        {!parentId && <div className="-mt-1.5 pl-0.5 text-[11.5px] text-faint" data-testid="kind-hint">{KIND_HINTS[kind].replace("open PRs", `open ${changeRequests}`)}</div>}
 
         {error && (
           <div className="flex items-start gap-[9px] rounded-[7px] border border-danger/30 bg-danger/10 px-[11px] py-[9px] text-[12.5px] text-danger selectable" data-testid="create-error">

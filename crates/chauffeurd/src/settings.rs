@@ -27,6 +27,9 @@ pub struct UserSettings {
     pub forge: chauffeur_protocol::client::Forge,
     /// The GitLab's host when `forge` is GitLab: `gitlab.example.com`, no scheme nor path.
     pub gitlab_host: String,
+    /// On GitLab, the main group (`team` or `team/sub`): its projects are named without their
+    /// namespace. Empty: none.
+    pub gitlab_group: String,
     /// Repos preselected for a new workspace.
     pub default_repos: Vec<String>,
     /// Preferred display order; unlisted repos follow in automatic order.
@@ -427,6 +430,7 @@ impl Default for UserSettings {
             github_sources: true,
             forge: Default::default(),
             gitlab_host: String::new(),
+            gitlab_group: String::new(),
             default_repos: Vec::new(),
             repo_order: Vec::new(),
             branch_prefix: String::new(),

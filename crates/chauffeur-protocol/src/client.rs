@@ -3870,6 +3870,10 @@ pub struct WorkspaceDefaults {
     /// The GitLab's host (`gitlab.example.com`) when `forge` is GitLab; empty otherwise.
     #[serde(default)]
     pub gitlab_host: String,
+    /// On GitLab, the main group (`team` or `team/sub`): its projects are named without their
+    /// namespace, as `github_org`'s repos are on GitHub; empty: none.
+    #[serde(default)]
+    pub gitlab_group: String,
     /// First port handed out to workspaces, and ports per workspace.
     pub port_range_start: u16,
     pub port_block_size: u16,
@@ -4277,6 +4281,8 @@ pub struct WorkspaceDefaultsUpdate {
     /// Required with `forge` GitLab, unless one is set already.
     #[serde(default)]
     pub gitlab_host: Option<String>,
+    #[serde(default)]
+    pub gitlab_group: Option<String>,
     #[serde(default)]
     pub port_range_start: Option<u16>,
     #[serde(default)]

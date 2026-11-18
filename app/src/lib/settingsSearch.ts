@@ -27,6 +27,7 @@ export const SETTINGS_OPTIONS: readonly SettingsOption[] = [
   { section: "workspaces", label: "Folders with your clones", target: "clone-roots", keywords: "repositories directory"  },
   { section: "github", label: "GitLab host", target: "gitlab-host", keywords: "forge gitlab self-hosted merge requests mr"  },
   { section: "workspaces", label: "Main GitHub organization", target: "github-org", keywords: "repos"  },
+  { section: "workspaces", label: "Main GitLab group", target: "gitlab-group", keywords: "projects gitlab namespace subgroup"  },
   { section: "workspaces", label: "GitHub repository sources", target: "github-sources", keywords: "account repos"  },
   { section: "workspaces", label: "Repositories elsewhere", target: "repo-table", keywords: "repos default branch"  },
   { section: "workspaces", label: "Workspace ports", target: "port-range-start", keywords: "port block size"  },

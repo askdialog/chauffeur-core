@@ -38,12 +38,18 @@ pub async fn get(d: &Arc<Daemon>) -> Result<AppSettings> {
             repo_order: settings.repo_order.clone(),
             branch_prefix: settings.branch_prefix.clone(),
             // Known once a workspace was created: `gh` is not asked here.
-            github_login: d.store.kv_get("gh_login")?,
+            github_login: match settings.forge {
+                Forge::Github => d.store.kv_get("gh_login")?,
+                Forge::Gitlab => d
+                    .store
+                    .kv_get(&crate::gitlab::login_key(&settings.gitlab_host))?,
+            },
             clone_roots: settings.clone_roots.clone(),
             github_org: settings.github_org.clone(),
             github_sources: settings.github_sources,
             forge: settings.forge,
             gitlab_host: settings.gitlab_host.clone(),
+            gitlab_group: settings.gitlab_group.clone(),
             port_range_start: settings.port_range_start,
             port_block_size: settings.port_block_size,
             archive_script_timeout_secs: settings.archive_script_timeout_secs.min(u32::MAX.into())
@@ -363,6 +369,8 @@ const TEMPLATE: &str = r#"# Chauffeur's settings. The app's Settings (⌘,) chan
 # The forge Chauffeur goes through: "github", or "gitlab" with your GitLab's host.
 # forge = "github"
 # gitlab_host = ""
+# On GitLab, the main group (`team` or `team/sub`): its projects are named without their namespace.
+# gitlab_group = ""
 # default_repos = []
 # clone_roots = []
 
@@ -543,12 +551,27 @@ fn set_workspace_limits(d: &Daemon, update: &WorkspaceDefaultsUpdate) -> Result<
         ));
     }
     let forge = update.forge;
+    let gitlab_group = update
+        .gitlab_group
+        .as_deref()
+        .map(|group| {
+            let group = group.trim().trim_matches('/');
+            if group.is_empty() || crate::repos::is_gitlab_namespace(group) {
+                Ok(group.to_string())
+            } else {
+                Err(Error::BadRequest(format!(
+                    "\"{group}\" is not a GitLab group path"
+                )))
+            }
+        })
+        .transpose()?;
     if numbers.is_empty()
         && org.is_none()
         && repos.is_none()
         && sources.is_none()
         && forge.is_none()
         && gitlab_host.is_none()
+        && gitlab_group.is_none()
     {
         return Ok(());
     }
@@ -572,6 +595,9 @@ fn set_workspace_limits(d: &Daemon, update: &WorkspaceDefaultsUpdate) -> Result<
             }
             if let Some(host) = &gitlab_host {
                 doc["gitlab_host"] = toml_edit::value(host.as_str());
+            }
+            if let Some(group) = &gitlab_group {
+                doc["gitlab_group"] = toml_edit::value(group.as_str());
             }
             if let Some(repos) = &repos {
                 set_repo_tables(doc, repos);

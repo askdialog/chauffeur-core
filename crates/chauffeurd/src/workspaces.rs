@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use chauffeur_protocol::client::{
     AddWorktreeParams, AddWorktreeResult, CreateChatParams, CreateWorkspaceParams,
-    CreateWorkspaceResult, OpenRequest, ProcessInfo, ProcessesResult, PromoteLeftovers,
+    CreateWorkspaceResult, Forge, OpenRequest, ProcessInfo, ProcessesResult, PromoteLeftovers,
     RemoveWorktreeResult, RepoLeftovers, SetTicketsResult, WaitResult, WorkspaceDesign,
 };
 use chauffeur_protocol::events::{ProcessKind, RegistryEvent, WorkspaceEvent};
@@ -782,7 +782,7 @@ impl WorkspaceManager {
                 "pick at least one repo (no default repos are configured)".into(),
             ));
         }
-        check_repo_refs(&repo_names)?;
+        check_repo_refs(self.d().settings.get().forge, &repo_names)?;
 
         let parent = match &params.parent {
             Some(key) => Some(self.check_parent(key)?),
@@ -1573,9 +1573,14 @@ impl WorkspaceManager {
             .unwrap_or_else(|| "chauffeur".into())
     }
 
-    /// The user's GitHub login, asked of `gh` once.
+    /// The user's login on the forge, the branch prefix when none is set: GitHub's, asked of `gh`
+    /// once, or on a GitLab installation the username `glab` is signed in as there.
     pub async fn github_login(&self) -> Option<String> {
         let d = self.d();
+        let settings = d.settings.get();
+        if settings.forge == Forge::Gitlab {
+            return crate::gitlab::login(&d, &settings.gitlab_host).await;
+        }
         if let Ok(Some(login)) = d.store.kv_get("gh_login") {
             return Some(login);
         }
@@ -2305,10 +2310,10 @@ impl WorkspaceManager {
     /// exploration), and says whether its setup script was started. The workspace's agents take
     /// it in from their next message.
     pub async fn add_repo_to(&self, key: &str, reference: &str) -> Result<(WorkspaceInfo, bool)> {
-        parse_repo_ref(reference)?;
+        let d = self.d();
+        parse_repo_ref(d.settings.get().forge, reference)?;
         // `owner/name` takes the folder `name`, as one of the main organization's would.
         let repo = repo_folder(reference);
-        let d = self.d();
         let row = self.row(key)?;
         let _admission = d.execution.admit(&row.id)?;
         if row.state != WorkspaceState::Ready {
@@ -2405,7 +2410,7 @@ impl WorkspaceManager {
                 .collect();
         }
         dedup(&mut repos);
-        check_repo_refs(&repos)?;
+        check_repo_refs(self.d().settings.get().forge, &repos)?;
         let name = params
             .name
             .as_deref()
@@ -3226,10 +3231,10 @@ pub fn read_only(row: &WorkspaceRow, what: &str) -> Result<()> {
 
 /// Repos named in a request (`name` or `owner/name`): valid, and one per folder, since a
 /// workspace holds each repo in a folder of its short name.
-fn check_repo_refs(references: &[String]) -> Result<()> {
+fn check_repo_refs(forge: Forge, references: &[String]) -> Result<()> {
     let mut folders: HashMap<&str, &str> = HashMap::new();
     for reference in references {
-        parse_repo_ref(reference)?;
+        parse_repo_ref(forge, reference)?;
         if let Some(other) = folders.insert(repo_folder(reference), reference) {
             return Err(Error::BadRequest(format!(
                 "{other} and {reference} would share the folder {}: a workspace holds one repo of each name",

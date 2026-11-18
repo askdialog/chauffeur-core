@@ -4,10 +4,10 @@ use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use chauffeur_protocol::client::{ReposPageParams, ReposPageResult};
+use chauffeur_protocol::client::{Forge, ReposPageParams, ReposPageResult};
 use serde::{Deserialize, Serialize};
 
-use super::{RepoListing, RepoRegistry, gh_output, validate_owner};
+use super::{RepoListing, RepoRegistry, gh_output, main_owner, validate_owner};
 use crate::settings::UserSettings;
 use crate::shellenv::ShellEnv;
 use crate::store::CachedRepo;
@@ -180,21 +180,25 @@ impl RepoRegistry {
             ..params
         };
         if let Some(owner) = &params.owner {
-            validate_owner(owner)?;
+            validate_owner(settings.forge, owner)?;
             if !settings.github_sources && !super::is_main(&settings, owner) {
-                return Err(Error::BadRequest(
-                    "only the main GitHub owner is enabled: change Sources in Settings › GitHub"
-                        .into(),
-                ));
+                return Err(Error::BadRequest(match settings.forge {
+                    Forge::Github => {
+                        "only the main GitHub owner is enabled: change Sources in Settings › GitHub"
+                            .into()
+                    }
+                    Forge::Gitlab => "only the main GitLab group is enabled: change Sources in Settings › Workspaces".into(),
+                }));
             }
         }
         if params.query.len() > 256 {
             return Err(Error::BadRequest("use a shorter repo search".into()));
         }
         if !params.query.is_empty() && params.owner.is_none() {
-            return Err(Error::BadRequest(
-                "choose an owner to search its repos on GitHub".into(),
-            ));
+            return Err(Error::BadRequest(match settings.forge {
+                Forge::Github => "choose an owner to search its repos on GitHub".into(),
+                Forge::Gitlab => "choose a group to search its projects on GitLab".into(),
+            }));
         }
         let cursor = match params.cursor.as_deref() {
             Some(encoded) => {
@@ -220,7 +224,7 @@ impl RepoRegistry {
                 query: params.query.clone(),
                 main: None,
                 account: None,
-                main_done: params.owner.is_none() && settings.github_org.is_empty(),
+                main_done: params.owner.is_none() && main_owner(&settings).is_empty(),
                 account_done: params.owner.is_some() || !settings.github_sources,
                 search_page: 1,
             },
@@ -241,12 +245,20 @@ impl RepoRegistry {
         });
         let mut github_error = None;
         if !fresh {
-            let fetched =
-                tokio::time::timeout(PAGE_TIMEOUT, fetch_page(&settings, cursor, env)).await;
+            let fetched = match settings.forge {
+                Forge::Github => {
+                    tokio::time::timeout(PAGE_TIMEOUT, fetch_page(&settings, cursor, env)).await
+                }
+                Forge::Gitlab => {
+                    tokio::time::timeout(PAGE_TIMEOUT, fetch_gitlab_page(&settings, cursor, env))
+                        .await
+                }
+            };
             let fetched = fetched.unwrap_or_else(|_| {
-                Err(anyhow::anyhow!(
-                    "GitHub took too long to list repos: try again"
-                ))
+                Err(anyhow::anyhow!(match settings.forge {
+                    Forge::Github => "GitHub took too long to list repos: try again",
+                    Forge::Gitlab => "GitLab took too long to list projects: try again",
+                }))
             });
             match fetched {
                 Ok(page) => {
@@ -308,11 +320,94 @@ impl RepoRegistry {
 }
 
 fn scope(settings: &UserSettings) -> String {
-    format!(
-        "{}|{}",
-        settings.github_org.to_lowercase(),
-        settings.github_sources
-    )
+    match settings.forge {
+        Forge::Github => format!(
+            "{}|{}",
+            settings.github_org.to_lowercase(),
+            settings.github_sources
+        ),
+        Forge::Gitlab => format!(
+            "gitlab|{}|{}|{}",
+            settings.gitlab_host,
+            settings.gitlab_group.to_lowercase(),
+            settings.github_sources
+        ),
+    }
+}
+
+/// A page of a GitLab's projects: the cursor's `main` and `account` are the next page numbers of
+/// the main group's (or the chosen group's) and the account's; a search reads the chosen group's.
+async fn fetch_gitlab_page(
+    settings: &UserSettings,
+    mut cursor: Cursor,
+    env: &ShellEnv,
+) -> anyhow::Result<Page> {
+    use super::gitlab::{ACCOUNT_PROJECTS, group_projects, page_of};
+    let host = settings.gitlab_host.as_str();
+    anyhow::ensure!(!host.is_empty(), "no GitLab host is set");
+    if !cursor.query.is_empty() {
+        let owner = cursor.owner.as_deref().expect("a search has an owner");
+        let search = format!(
+            "{}&search={}",
+            group_projects(owner),
+            percent_encoding::utf8_percent_encode(
+                &cursor.query,
+                percent_encoding::NON_ALPHANUMERIC
+            )
+        );
+        let repos = page_of(host, &search, cursor.search_page, PAGE_SIZE, env).await?;
+        let more = repos.len() == PAGE_SIZE && cursor.search_page < 20;
+        cursor.search_page += 1;
+        return Ok(Page {
+            repos,
+            next_cursor: more.then(|| encode(&cursor)).transpose()?,
+            truncated: false,
+        });
+    }
+    let owner = cursor
+        .owner
+        .clone()
+        .unwrap_or_else(|| main_owner(settings).to_string());
+    let mut repos = HashMap::new();
+    for (endpoint, next, done) in [
+        (
+            group_projects(&owner),
+            &mut cursor.main,
+            &mut cursor.main_done,
+        ),
+        (
+            ACCOUNT_PROJECTS.to_string(),
+            &mut cursor.account,
+            &mut cursor.account_done,
+        ),
+    ] {
+        if *done {
+            continue;
+        }
+        let page = next
+            .as_deref()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(1usize);
+        let listed = page_of(host, &endpoint, page, PAGE_SIZE, env).await?;
+        *done = listed.len() < PAGE_SIZE || page >= 20;
+        *next = Some((page + 1).to_string());
+        for repo in listed {
+            repos.insert(repo.full_name.to_lowercase(), repo);
+        }
+    }
+    let mut repos: Vec<CachedRepo> = repos.into_values().collect();
+    repos.sort_by(|a, b| {
+        b.pushed_at
+            .cmp(&a.pushed_at)
+            .then(a.full_name.cmp(&b.full_name))
+    });
+    Ok(Page {
+        repos,
+        next_cursor: (!(cursor.main_done && cursor.account_done))
+            .then(|| encode(&cursor))
+            .transpose()?,
+        truncated: false,
+    })
 }
 
 fn encode(cursor: &Cursor) -> anyhow::Result<String> {

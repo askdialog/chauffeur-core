@@ -14,7 +14,7 @@ branch_prefix?: string, clone_roots?: Array<string>, github_org?: string, github
 /**
  * Required with `forge` GitLab, unless one is set already.
  */
-gitlab_host?: string, port_range_start?: number, port_block_size?: number, archive_script_timeout_secs?: number, snapshot_retention_days?: number, idle_session_minutes?: number, 
+gitlab_host?: string, gitlab_group?: string, port_range_start?: number, port_block_size?: number, archive_script_timeout_secs?: number, snapshot_retention_days?: number, idle_session_minutes?: number, 
 /**
  * The whole list: each `[repos.<name>]` gets the row's `path` and `default_branch`, its other
  * keys (`scripts`, `env`…) kept; a table without a row is removed.

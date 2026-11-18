@@ -434,9 +434,10 @@ pub struct CachedRepo {
 }
 
 impl CachedRepo {
+    /// `owner` of `owner/name`; a GitLab project's whole namespace (`team/sub`).
     pub fn owner(&self) -> &str {
         self.full_name
-            .split_once('/')
+            .rsplit_once('/')
             .map_or("", |(owner, _)| owner)
     }
 }

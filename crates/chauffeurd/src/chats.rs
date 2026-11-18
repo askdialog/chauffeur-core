@@ -1077,6 +1077,7 @@ impl ChatManager {
                 self.subagent_notice(&chat).as_deref(),
                 // Codex keeps its plan natively; Claude, with Chauffeur's tool.
                 (chat.agent == AgentKind::Claude && design_dir.is_none()).then_some(PLAN_NOTICE),
+                &d.settings.get(),
             ),
             design_dir,
             prompt,
@@ -4494,6 +4495,18 @@ When revising, change only the slides the user names by number or title, keep th
 ```
 Chauffeur shows it beside this chat with its slides, notes, Present and its PDF, PNG and HTML downloads: do not make those yourself unless asked."#;
 
+/// How an agent links a pull request, or on a GitLab installation a merge request
+/// (docs/adr/gitlab-as-the-forge.md).
+fn change_request_links(settings: &crate::settings::UserSettings) -> String {
+    match settings.forge {
+        chauffeur_protocol::client::Forge::Github => "When mentioning a pull request in a reply, including in tables and summaries, use a clickable Markdown link to its actual URL, such as [#351](https://github.com/owner/repo/pull/351), rather than a bare PR number. Resolve the URL from the correct repository or `gh pr view <number> --repo <owner/repo> --json url`; never guess the repository when it is ambiguous.".to_string(),
+        chauffeur_protocol::client::Forge::Gitlab => format!(
+            "This workspace's code is on the GitLab {host}: its changes are merge requests (MRs), numbered like !351, read and opened with `glab` (`glab mr view`, `glab mr create`), not `gh`. When mentioning a merge request in a reply, including in tables and summaries, use a clickable Markdown link to its actual URL, such as [!351](https://{host}/group/project/-/merge_requests/351), rather than a bare MR number. Resolve the URL from the correct project or `glab mr view <number> --repo <group/project> -F json`; never guess the project when it is ambiguous.",
+            host = settings.gitlab_host
+        ),
+    }
+}
+
 /// What every session of the workspace is told: that a design chat designs, or that an
 /// exploration is read-only; that a delegated chat answers its parent; the tickets and reply format.
 fn system_prompt(
@@ -4503,6 +4516,7 @@ fn system_prompt(
     brands: Option<&crate::brands::ChatBrands>,
     subagent: Option<&str>,
     plan: Option<&str>,
+    settings: &crate::settings::UserSettings,
 ) -> Option<String> {
     let notice = match design {
         Some((dir, _)) if chat.brand.is_some() => Some(crate::brands::system_prompt(dir)),
@@ -4525,7 +4539,7 @@ fn system_prompt(
         )),
     };
     let parts: Vec<String> = [
-        Some("When mentioning a pull request in a reply, including in tables and summaries, use a clickable Markdown link to its actual URL, such as [#351](https://github.com/owner/repo/pull/351), rather than a bare PR number. Resolve the URL from the correct repository or `gh pr view <number> --repo <owner/repo> --json url`; never guess the repository when it is ambiguous.".to_string()),
+        Some(change_request_links(settings)),
         Some("You are replying in Chauffeur. It does not render the `visualize` skill's inline content references: never emit a visualize marker or rely on the Codex inline visualization runtime. Interface mockups belong in a Chauffeur design chat's canvas, as self-contained HTML screens, not HTML fragments written into the notes and referenced in a reply.".to_string()),
         notice,
         (!workspace.explore && design.is_none()).then(|| DOCUMENT_NOTICE.to_string()),
@@ -4839,6 +4853,26 @@ pub(crate) fn moved_before(mut ids: Vec<String>, id: &str, before: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agents_link_pull_requests_on_github_and_merge_requests_on_gitlab() {
+        let github = crate::settings::UserSettings::default();
+        assert_eq!(
+            change_request_links(&github),
+            "When mentioning a pull request in a reply, including in tables and summaries, use a clickable Markdown link to its actual URL, such as [#351](https://github.com/owner/repo/pull/351), rather than a bare PR number. Resolve the URL from the correct repository or `gh pr view <number> --repo <owner/repo> --json url`; never guess the repository when it is ambiguous."
+        );
+        let gitlab = crate::settings::UserSettings {
+            forge: chauffeur_protocol::client::Forge::Gitlab,
+            gitlab_host: "gitlab.example.com".into(),
+            ..Default::default()
+        };
+        let text = change_request_links(&gitlab);
+        assert!(
+            text.contains("[!351](https://gitlab.example.com/group/project/-/merge_requests/351)")
+        );
+        assert!(text.contains("`glab mr view <number> --repo <group/project> -F json`"));
+        assert!(!text.contains("gh pr"));
+    }
     use chauffeur_protocol::events::ContextCategory;
 
     #[test]
