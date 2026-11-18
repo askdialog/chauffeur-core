@@ -1077,8 +1077,9 @@ impl ChatManager {
                 .filter_map(|repo| repo.clone_path.as_ref())
                 .map(|clone| clone.display().to_string())
                 .collect(),
-            // The user's local allow rules reach neither a design chat, which starts outside the
-            // workspace, nor an exploration, read-only whatever the user allows elsewhere.
+            // The user's local allow rules reach neither a design chat, which starts in its own
+            // folder where the workspace's generated settings do not apply, nor an exploration,
+            // read-only whatever the user allows elsewhere.
             local_allow: match design_dir.is_none() && !workspace.explore {
                 true => crate::genconfig::local_allow_rules(&config_repos),
                 false => Vec::new(),
