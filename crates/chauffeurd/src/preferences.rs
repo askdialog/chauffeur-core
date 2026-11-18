@@ -538,25 +538,64 @@ fn set_workspace_limits(d: &Daemon, update: &WorkspaceDefaultsUpdate) -> Result<
                 doc["github_sources"] = toml_edit::value(sources);
             }
             if let Some(repos) = &repos {
-                doc.remove("repos");
-                if !repos.is_empty() {
-                    let mut tables = toml_edit::Table::new();
-                    tables.set_implicit(true);
-                    for repo in repos {
-                        let mut table = toml_edit::Table::new();
-                        if let Some(path) = &repo.path {
-                            table["path"] = toml_edit::value(path.as_str());
-                        }
-                        if let Some(branch) = &repo.default_branch {
-                            table["default_branch"] = toml_edit::value(branch.as_str());
-                        }
-                        tables.insert(&repo.name, toml_edit::Item::Table(table));
-                    }
-                    doc["repos"] = toml_edit::Item::Table(tables);
-                }
+                set_repo_tables(doc, repos);
             }
         })
         .map_err(refused)
+}
+
+/// Writes the repos table of the settings window into `[repos.<name>]`: only the `path` and
+/// `default_branch` it shows, so that what it does not show (`scripts`, `env`,
+/// `clone_local_claude_settings`, comments) stays. A row removed loses those two keys, and its
+/// table goes once nothing is left in it.
+fn set_repo_tables(doc: &mut toml_edit::DocumentMut, repos: &[RepoSetting]) {
+    let tables = doc.entry("repos").or_insert_with(|| {
+        let mut tables = toml_edit::Table::new();
+        tables.set_implicit(true);
+        toml_edit::Item::Table(tables)
+    });
+    let Some(tables) = tables.as_table_like_mut() else {
+        return;
+    };
+    let names: Vec<String> = tables.iter().map(|(name, _)| name.to_string()).collect();
+    for name in names {
+        let row = repos.iter().find(|repo| repo.name == name);
+        let Some(table) = tables.get_mut(&name).and_then(|t| t.as_table_like_mut()) else {
+            continue;
+        };
+        set_or_remove(table, "path", row.and_then(|r| r.path.as_deref()));
+        set_or_remove(
+            table,
+            "default_branch",
+            row.and_then(|r| r.default_branch.as_deref()),
+        );
+        if row.is_none() && table.is_empty() {
+            tables.remove(&name);
+        }
+    }
+    for repo in repos {
+        if tables.contains_key(&repo.name) {
+            continue;
+        }
+        let mut table = toml_edit::Table::new();
+        set_or_remove(&mut table, "path", repo.path.as_deref());
+        set_or_remove(&mut table, "default_branch", repo.default_branch.as_deref());
+        tables.insert(&repo.name, toml_edit::Item::Table(table));
+    }
+    if tables.is_empty() {
+        doc.remove("repos");
+    }
+}
+
+fn set_or_remove(table: &mut dyn toml_edit::TableLike, key: &str, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            table.insert(key, toml_edit::value(value));
+        }
+        None => {
+            table.remove(key);
+        }
+    }
 }
 
 /// A repo's name, clone path and default branch, trimmed; blanks dropped, a name only once.

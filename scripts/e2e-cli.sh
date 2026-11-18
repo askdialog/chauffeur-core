@@ -588,12 +588,24 @@ grep -q "^## Codex · 2026-10-03 09:01 UTC$" "$PF/.chauffeur/conductor/Review.md
 test ! -e "$PF/.chauffeur/conductor/Empty.md"
 grep -q "Ship the price filter" "$PF/.chauffeur/conductor/context/plan.md"
 grep -q "Its earlier chats are in \`.chauffeur/conductor/\`" "$PF/CLAUDE.md"
-# The typed scripts and the variable in the user's settings, given to the repo's scripts.
+# The typed scripts and the variable in the user's settings, given to the repo's scripts. The
+# function's status is that of the whole chain: under `set -e`, a failing `grep` before `&&` stops
+# nothing, nor does any command of a function called before `||`.
 S="$CHAUFFEUR_HOME/settings.toml"
-grep -q "^\[repos.alpha.scripts\]$" "$S" && grep -q '^setup = "echo conductor-setup > .conductor-setup-ran"$' "$S"
-grep -q '^run = "echo run"$' "$S" && grep -q '^run_mode = "nonconcurrent"$' "$S"
-grep -q "^\[repos.alpha.env\]$" "$S" && grep -q '^API_TOKEN = "s3cret-fixture-value"$' "$S"
+typed_settings_kept() {
+  grep -q "^\[repos.alpha.scripts\]$" "$S" &&
+    grep -q '^setup = "echo conductor-setup > .conductor-setup-ran"$' "$S" &&
+    grep -q '^run = "echo run"$' "$S" &&
+    grep -q '^run_mode = "nonconcurrent"$' "$S" &&
+    grep -q "^\[repos.alpha.env\]$" "$S" &&
+    grep -q '^API_TOKEN = "s3cret-fixture-value"$' "$S"
+}
+typed_settings_kept || { echo "the import did not write the repo's typed settings"; exit 1; }
 grep -q "^clone_roots = .*\"$T/conductor/clones\"" "$S"
+# Saving the settings window's repos table, as the app does, keeps them.
+bun scripts/app-call.ts settings.get '{}' | python3 -c 'import sys,json; print(json.dumps({"workspaces": {"repos": json.load(sys.stdin)["workspaces"]["repos"]}}))' > "$T/repos-table.json"
+bun scripts/app-call.ts settings.set "$(cat "$T/repos-table.json")" >/dev/null
+typed_settings_kept || { echo "saving the repos table erased a repo's typed settings"; exit 1; }
 for _ in $(seq 1 100); do [ -e "$PF/alpha/.conductor-setup-ran" ] && break; sleep 0.1; done
 test "$(cat "$PF/alpha/.conductor-setup-ran")" = conductor-setup
 # Again, archived ones included: only the archived one is new, as an archived workspace with its chat.
