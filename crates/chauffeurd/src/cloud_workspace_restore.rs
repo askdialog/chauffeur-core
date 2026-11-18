@@ -352,6 +352,7 @@ async fn restore_inner(
                 repo: repo.repo.clone(),
                 path: root.join(&repo.path),
                 clone_path: None,
+                read_clone_local_settings: false,
                 base_branch: repo.base_branch.clone(),
             })
             .collect::<Vec<_>>();

@@ -72,6 +72,10 @@ pub struct UserSettings {
     pub linear_enabled: bool,
     /// Move attached Linear tickets to In Progress when a workspace starts on them.
     pub linear_start_tickets: bool,
+    /// A workspace whose worktree of a repo has no `.claude/settings.local.json` reads the one of
+    /// the repo's clone (docs/adr/clone-local-claude-settings.md); `[repos.<name>]` can say
+    /// otherwise for one repo.
+    pub clone_local_claude_settings: bool,
     /// Explicit clone paths and default branches, by repo name.
     pub repos: BTreeMap<String, RepoOverride>,
     /// The app's fonts.
@@ -87,6 +91,16 @@ pub struct UserSettings {
     pub workers: WorkerSettings,
     pub distribution: DistributionSettings,
     pub search: chauffeur_protocol::client::SearchSettings,
+}
+
+impl UserSettings {
+    /// Whether a workspace reads `repo`'s clone's `.claude/settings.local.json`.
+    pub fn clone_local_claude_settings_of(&self, repo: &str) -> bool {
+        self.repos
+            .get(repo)
+            .and_then(|o| o.clone_local_claude_settings)
+            .unwrap_or(self.clone_local_claude_settings)
+    }
 }
 
 /// `[distribution]`: what a distribution says of its own users.
@@ -390,6 +404,8 @@ pub struct RepoOverride {
     pub scripts: Option<UserScripts>,
     /// Variables given to the repo's scripts and to the agents of a workspace holding it.
     pub env: RepoEnv,
+    /// Over the global `clone_local_claude_settings`, for this repo.
+    pub clone_local_claude_settings: Option<bool>,
 }
 
 /// `[repos.<name>.scripts]`, keyed as a repo's `settings.toml` `[scripts]`.
@@ -450,6 +466,7 @@ impl Default for UserSettings {
             error_reports: ErrorReports::default(),
             linear_enabled: true,
             linear_start_tickets: true,
+            clone_local_claude_settings: true,
             repos: BTreeMap::new(),
             appearance: AppearanceSettings::default(),
             notifications: NotificationsSettings::default(),
@@ -866,6 +883,34 @@ mod tests {
         assert_eq!(configured.default_repos, ["my-app"]);
         assert_eq!(configured.clone_roots, ["~/code"]);
         assert_eq!(configured.workers.project, "my-cloud-project");
+    }
+
+    #[test]
+    fn a_clones_local_claude_settings_are_read_unless_turned_off_globally_or_for_the_repo() {
+        let default: UserSettings = toml::from_str("").unwrap();
+        assert!(default.clone_local_claude_settings_of("web"));
+
+        let settings: UserSettings = toml::from_str(
+            r#"clone_local_claude_settings = false
+                [repos.web]
+                clone_local_claude_settings = true
+                [repos.api]
+                path = "~/code/api"
+            "#,
+        )
+        .unwrap();
+        assert!(settings.clone_local_claude_settings_of("web"));
+        assert!(!settings.clone_local_claude_settings_of("api"));
+        assert!(!settings.clone_local_claude_settings_of("docs"));
+
+        let settings: UserSettings = toml::from_str(
+            r#"[repos.web]
+                clone_local_claude_settings = false
+            "#,
+        )
+        .unwrap();
+        assert!(!settings.clone_local_claude_settings_of("web"));
+        assert!(settings.clone_local_claude_settings_of("api"));
     }
 
     #[test]

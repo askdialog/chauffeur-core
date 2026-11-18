@@ -94,6 +94,21 @@ python3 -c 'import sys,json; p=json.load(open(sys.argv[1]))["permissions"]; asse
 echo '{"permissions":{"deny":["Edit(/private/**)"]}}' > "$T/clones/alpha/.claude/settings.local.json"
 c add-repo clone-settings beta >/dev/null
 python3 -c 'import sys,json; p=json.load(open(sys.argv[1]))["permissions"]; assert p["deny"] == ["Edit(/alpha/private/**)"], p' "$generated"
+echo "== clone settings off. turned off globally, a workspace reads no clone's local settings; turned on for one repo, it reads that one's"
+cp "$CHAUFFEUR_HOME/settings.toml" "$T/settings-before-clone-off.toml"
+perl -pi -e 's/^linear_enabled = false$/linear_enabled = false\nclone_local_claude_settings = false/' "$CHAUFFEUR_HOME/settings.toml"
+grep -q '^clone_local_claude_settings = false$' "$CHAUFFEUR_HOME/settings.toml"
+sleep 1.5   # the daemon reads settings.toml again within a second
+c new --repo alpha --name clone-settings-off >/dev/null
+python3 -c 'import sys,json; p=json.load(open(sys.argv[1])).get("permissions"); assert p is None or p["deny"] == [], p' "$CHAUFFEUR_WORKSPACES_DIR/clone-settings-off/.claude/settings.json"
+printf '\n[repos.alpha]\nclone_local_claude_settings = true\n' >> "$CHAUFFEUR_HOME/settings.toml"
+sleep 1.5
+c new --repo alpha --name clone-settings-on >/dev/null
+python3 -c 'import sys,json; p=json.load(open(sys.argv[1]))["permissions"]; assert p["deny"] == ["Edit(/alpha/private/**)"], p' "$CHAUFFEUR_WORKSPACES_DIR/clone-settings-on/.claude/settings.json"
+mv "$T/settings-before-clone-off.toml" "$CHAUFFEUR_HOME/settings.toml"
+sleep 1.5
+c archive clone-settings-off --force
+c archive clone-settings-on --force
 c archive clone-settings --force
 rm -r "$T/clones/alpha/.claude"
 c new --ticket E2E-1 --name e2e-one

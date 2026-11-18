@@ -14,13 +14,13 @@ Proposed 2026-11-16 with the import from Claude Code, decided with Justin 2026-1
 Asked by Justin 2026-11-17, with it:
 
 - Allow rules that name the clone's path, in any of the repo's settings files (in practice the clone's local file, or a copy of it in the worktree), (absolute `//…`, from the home folder `~/…`, `$HOME/…`, or plain in a `Bash(…)` rule) are left out, each one reported as a workspace warning: otherwise a rule like `Edit(//Users/…/my-clone/**)` would let every workspace agent write into the clone without asking. Ask and deny rules are kept: they only restrict (first worded as allow and ask, narrowed the same day once it was clear that dropping an ask rule loosens the user's protection).
-- A setting turns the reading of the clone's file off, globally or per repo, in `~/.chauffeur/settings.toml`.
+- A setting turns the reading of the clone's file off, globally or per repo, in `~/.chauffeur/settings.toml` (`clone_local_claude_settings`, and the same key in `[repos.<name>]`). A worktree's own local file is still read, and its allow rules naming the clone still left out.
 - The first config write that takes a clone's local file into a workspace lists, for that workspace, the rules and hooks it adds.
 - The generated settings' `$comment` names the clone's local file.
 
 ## Consequences
 
-- It ships in steps: the merge and the filter of allow rules first; the opt-out setting and the first-write notice follow in their own pull requests, until which the left-out rules are warned about at every config write.
+- It ships in steps: the merge and the filter of allow rules first; the opt-out setting, then the first-write notice, follow in their own pull requests, until which the left-out rules are warned about at every config write.
 - The clone's file is only read, at every config write: its latest permissions and hooks apply from then on, nothing is copied and Chauffeur never writes it.
 - The merge already wraps a repo's hooks to run in that repo's worktree, so the clone's hooks run there unchanged. Its `Read`/`Edit` paths are re-anchored at the repo like any repo rule (Claude Code anchors a local file's paths at the session's working directory, not where the file lives).
 - Always allow in Chauffeur keeps writing to the workspace's own settings, never to the clone's.

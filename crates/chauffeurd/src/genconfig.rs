@@ -19,6 +19,9 @@ pub struct RepoEntry {
     /// The clone the worktree was made from (Chauffeur's own copy for a workspace restored from
     /// the cloud); none while a cloud restore writes the config.
     pub clone_path: Option<PathBuf>,
+    /// Whether the clone's `.claude/settings.local.json` stands in for the worktree's missing one
+    /// (`clone_local_claude_settings` in the user's settings).
+    pub read_clone_local_settings: bool,
     pub base_branch: String,
 }
 
@@ -366,12 +369,14 @@ fn anchor_rule_at_repo(rule: &Value, kind: &str, folder: &str) -> Value {
 }
 
 /// A repo's settings files: its `.claude/settings.json`, and its `.claude/settings.local.json`,
-/// the clone's when the worktree has none (the file is gitignored, and Claude Code itself reads
-/// it from the main checkout in a worktree).
+/// the clone's when the worktree has none and the user did not turn it off (the file is
+/// gitignored, and Claude Code itself reads it from the main checkout in a worktree).
 fn settings_files(repo: &RepoEntry) -> [PathBuf; 2] {
     let local = repo.path.join(".claude/settings.local.json");
     let local = match &repo.clone_path {
-        Some(clone) if !local.exists() => clone.join(".claude/settings.local.json"),
+        Some(clone) if repo.read_clone_local_settings && !local.exists() => {
+            clone.join(".claude/settings.local.json")
+        }
         _ => local,
     };
     [repo.path.join(".claude/settings.json"), local]
@@ -494,12 +499,14 @@ mod tests {
                 repo: "web".into(),
                 path: ecom.clone(),
                 clone_path: None,
+                read_clone_local_settings: false,
                 base_branch: "staging".into(),
             },
             RepoEntry {
                 repo: "api".into(),
                 path: api.clone(),
                 clone_path: None,
+                read_clone_local_settings: false,
                 base_branch: "staging".into(),
             },
         ];
@@ -573,6 +580,7 @@ mod tests {
             repo: path.file_name().unwrap().to_string_lossy().into_owned(),
             path: path.clone(),
             clone_path: None,
+            read_clone_local_settings: false,
             base_branch: "main".into(),
         });
         write(&WorkspaceConfig {
@@ -679,6 +687,7 @@ mod tests {
             repo: "web".into(),
             path: worktree.clone(),
             clone_path: Some(clone.clone()),
+            read_clone_local_settings: true,
             base_branch: "main".into(),
         }];
 
@@ -716,6 +725,53 @@ mod tests {
     }
 
     #[test]
+    fn a_repo_turned_off_lends_none_of_its_clones_local_settings_but_still_filters_a_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let clone = tempfile::tempdir().unwrap();
+        let worktree = root.path().join("web");
+        std::fs::create_dir_all(&worktree).unwrap();
+        claude_file(
+            clone.path(),
+            "settings.local.json",
+            r#"{"permissions":{"deny":["Edit(/secrets/**)"]}}"#,
+        );
+        let mut repos = [RepoEntry {
+            repo: "web".into(),
+            path: worktree.clone(),
+            clone_path: Some(clone.path().to_path_buf()),
+            read_clone_local_settings: false,
+            base_branch: "main".into(),
+        }];
+
+        let (settings, warnings) = generate(root.path(), &repos);
+
+        assert_eq!(settings.get("permissions"), None, "{settings}");
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        // A copy in the worktree (`.worktreeinclude`) is the worktree's own: still read, and its
+        // allow rules naming the clone still left out.
+        claude_file(
+            &worktree,
+            "settings.local.json",
+            &format!(
+                r#"{{"permissions":{{"allow":["Bash(make)","Edit(/{}/**)"]}}}}"#,
+                clone.path().display()
+            ),
+        );
+        let (settings, warnings) = generate(root.path(), &repos);
+        assert_eq!(settings["permissions"]["allow"], json!(["Bash(make)"]));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+
+        repos[0].read_clone_local_settings = true;
+        std::fs::remove_file(worktree.join(".claude/settings.local.json")).unwrap();
+        let (settings, _) = generate(root.path(), &repos);
+        assert_eq!(
+            settings["permissions"]["deny"],
+            json!(["Edit(/web/secrets/**)"])
+        );
+    }
+
+    #[test]
     fn a_worktrees_own_local_settings_win_over_its_clones_and_are_filtered_alike() {
         let root = tempfile::tempdir().unwrap();
         let clone = tempfile::tempdir().unwrap();
@@ -738,6 +794,7 @@ mod tests {
             repo: "web".into(),
             path: worktree,
             clone_path: Some(clone.path().to_path_buf()),
+            read_clone_local_settings: true,
             base_branch: "main".into(),
         }];
 

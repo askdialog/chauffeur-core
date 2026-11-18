@@ -1938,12 +1938,14 @@ impl WorkspaceManager {
     pub fn regenerate_config(&self, workspace_id: &str) -> Result<()> {
         let d = self.d();
         let row = self.row(workspace_id)?;
+        let settings = d.settings.get();
         let repos: Vec<genconfig::RepoEntry> = d
             .store
             .worktrees_of(&row.id)?
             .into_iter()
             .filter(|w| !w.removed && w.origin == WorktreeOrigin::Workspace)
             .map(|w| genconfig::RepoEntry {
+                read_clone_local_settings: settings.clone_local_claude_settings_of(&w.repo),
                 repo: w.repo,
                 path: PathBuf::from(w.path),
                 clone_path: Some(PathBuf::from(w.clone_path)),

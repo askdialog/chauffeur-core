@@ -462,10 +462,17 @@ const TEMPLATE: &str = r#"# Chauffeur's settings. The app's Settings (⌘,) chan
 # project = ""
 # zone = "europe-west9-a"
 
-# A clone outside the clone folders, or another default branch, for one repo:
+# A workspace whose worktree of a repo has no .claude/settings.local.json (it is gitignored) reads
+# the one of the repo's clone: the permissions you granted and the hooks you set in your terminal
+# apply in workspaces too, but for the allow rules naming the clone. false: never read.
+# clone_local_claude_settings = true
+
+# A clone outside the clone folders, or another default branch, for one repo; and whether its
+# clone's .claude/settings.local.json is read, over the setting above:
 # [repos.my-app]
 # path = "~/code/my-app"
 # default_branch = "main"
+# clone_local_claude_settings = false
 "#;
 
 /// Writes `settings.toml` from the template when it does not exist.
