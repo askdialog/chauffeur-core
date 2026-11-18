@@ -77,7 +77,7 @@ pub fn write(config: &WorkspaceConfig) -> anyhow::Result<WriteOutcome> {
         config.root.join(".claude/settings.json"),
         serde_json::to_string_pretty(&settings)? + "\n",
     )?;
-    let mcp = merged_mcp(config, &mut warnings)?;
+    let mcp = merged_mcp(config, &mut warnings);
     let mcp_path = config.root.join(".mcp.json");
     if mcp["mcpServers"].as_object().is_some_and(|s| !s.is_empty()) {
         std::fs::write(&mcp_path, serde_json::to_string_pretty(&mcp)? + "\n")?;
@@ -591,7 +591,7 @@ fn wrap_hook_group(group: &Value, repo_path: &Path, cli: &str) -> Value {
     group
 }
 
-fn merged_mcp(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyhow::Result<Value> {
+fn merged_mcp(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> Value {
     let mut servers = Map::new();
     for repo in config.repos {
         let Some(mcp) = read_json(&repo.path.join(".mcp.json")) else {
@@ -615,7 +615,7 @@ fn merged_mcp(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyhow::R
             servers.insert(name.clone(), server.clone());
         }
     }
-    Ok(json!({ "mcpServers": servers }))
+    json!({ "mcpServers": servers })
 }
 
 #[cfg(test)]
@@ -1005,10 +1005,10 @@ mod tests {
         std::fs::write(home.join("notes.md"), "mine").unwrap();
         let root = tmp.path().join("ws");
         std::fs::create_dir_all(&root).unwrap();
-        let config = config(&root, &[]);
+        let workspace = config(&root, &[]);
 
         std::os::unix::fs::symlink(home.join(".claude"), root.join(".claude")).unwrap();
-        let error = write(&config).unwrap_err().to_string();
+        let error = write(&workspace).unwrap_err().to_string();
         assert!(
             error.contains(".claude") && error.contains("symlink"),
             "{error}"
@@ -1021,7 +1021,7 @@ mod tests {
 
         std::fs::remove_file(root.join(".claude")).unwrap();
         std::os::unix::fs::symlink(home.join("notes.md"), root.join("CLAUDE.md")).unwrap();
-        assert!(write(&config).is_err());
+        assert!(write(&workspace).is_err());
         assert_eq!(
             std::fs::read_to_string(home.join("notes.md")).unwrap(),
             "mine"
@@ -1032,15 +1032,14 @@ mod tests {
         );
 
         std::fs::remove_file(root.join("CLAUDE.md")).unwrap();
-        write(&config).unwrap();
+        write(&workspace).unwrap();
         assert!(root.join(".claude/settings.json").is_file());
     }
 
     #[test]
     fn agents_are_told_to_start_dev_servers_through_the_run_scripts() {
         let root = tempfile::tempdir().unwrap();
-        let config = config(root.path(), &[]);
-        write(&config).unwrap();
+        write(&config(root.path(), &[])).unwrap();
 
         for file in ["CLAUDE.md", "AGENTS.md"] {
             let text = std::fs::read_to_string(root.path().join(file)).unwrap();
@@ -1058,13 +1057,13 @@ mod tests {
     #[test]
     fn agents_of_a_workspace_imported_from_conductor_are_pointed_at_its_chat_history() {
         let root = tempfile::tempdir().unwrap();
-        let config = config(root.path(), &[]);
-        write(&config).unwrap();
+        let workspace = config(root.path(), &[]);
+        write(&workspace).unwrap();
         let text = std::fs::read_to_string(root.path().join("CLAUDE.md")).unwrap();
         assert!(!text.contains("imported from Conductor"));
 
         std::fs::create_dir_all(root.path().join(".chauffeur/conductor")).unwrap();
-        write(&config).unwrap();
+        write(&workspace).unwrap();
         for file in ["CLAUDE.md", "AGENTS.md"] {
             let text = std::fs::read_to_string(root.path().join(file)).unwrap();
             assert!(

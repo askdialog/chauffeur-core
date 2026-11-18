@@ -625,7 +625,7 @@ fn set_repo_tables(doc: &mut toml_edit::DocumentMut, repos: &[RepoSetting]) {
     }
     let tables = item
         .as_table_like_mut()
-        .expect("`repos` was made a table just above");
+        .expect("`repos` is a table, or was made one just above");
     let removed: Vec<String> = tables
         .iter()
         .map(|(name, _)| name.to_string())
