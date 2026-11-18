@@ -2895,6 +2895,7 @@ async fn claude_sessions_are_given_the_clone_of_the_repo_asked_first_to_read_its
             (AgentKind::Claude, ChatKind::Chat),
             (AgentKind::Claude, ChatKind::Design),
             (AgentKind::Codex, ChatKind::Chat),
+            (AgentKind::Vibe, ChatKind::Chat),
         ] {
             let chat = d
                 .chats
@@ -2925,7 +2926,7 @@ async fn claude_sessions_are_given_the_clone_of_the_repo_asked_first_to_read_its
             let memory_clone = &start["params"]["memory_clone"];
             match agent {
                 AgentKind::Claude => assert_eq!(memory_clone, &serde_json::json!(clone), "{start}"),
-                AgentKind::Codex => assert!(memory_clone.is_null(), "{start}"),
+                _ => assert!(memory_clone.is_null(), "{start}"),
             }
         }
     }

@@ -1069,7 +1069,7 @@ impl ChatManager {
             brands_dir: brands.as_ref().map(|b| b.root.clone()),
             memory_clone: match chat.agent {
                 AgentKind::Claude => first_clone(&d.store, &workspace.id)?,
-                AgentKind::Codex => None,
+                AgentKind::Codex | AgentKind::Vibe => None,
             },
             resume_session_id: chat.agent_session_id.clone(),
             env,

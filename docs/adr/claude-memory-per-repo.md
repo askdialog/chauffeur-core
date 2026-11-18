@@ -16,7 +16,7 @@ In V1, chats read the clone's Claude memory without being able to write it. Prop
 - Only the first repo's memory is loaded. The generated `CLAUDE.md` gives the path of the other repos' memories, to read when needed. It is an accepted limit.
 - A setting turns the sharing off, globally or for one repo, in `~/.chauffeur/settings.toml`.
 - `CLAUDE_CODE_PROJECT_DIR_NAME` is not used: that variable would move the transcripts too.
-- Claude chats only (decided 2026-11-18): it is Claude Code's memory, and Codex keeps its own.
+- Claude chats only (decided 2026-11-18): it is Claude Code's memory; Codex and Vibe chats do not get it.
 
 ## Why not writing at once
 
