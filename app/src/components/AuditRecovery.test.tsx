@@ -55,14 +55,14 @@ domTest("process configuration guides creation when missing and opens existing T
   } finally { session.close(); call.mockRestore(); }
 });
 
-domTest("an archive toast keeps its navigation action until dismissed", file, async () => {
+domTest("an archive toast keeps its navigation action for a while, then hides", file, async () => {
   const { toast, dismissToast, useToasts } = await import("@/state/toasts");
   let opened = false;
   const timer = spyOn(globalThis, "setTimeout");
   try {
     toast("Workspace archived", "info", { label: "View archive", run: () => { opened = true; } });
     const notice = useToasts.getState().toasts.at(-1)!;
-    expect(timer).not.toHaveBeenCalled();
+    expect(timer.mock.calls.some(([, ms]) => ms === 10000)).toBe(true);
     expect(notice.action?.label).toBe("View archive");
     notice.action?.run();
     expect(opened).toBe(true);

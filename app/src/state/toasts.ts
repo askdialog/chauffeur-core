@@ -47,7 +47,8 @@ export function toast(message: string, level: "info" | "error" = "info", action?
   const failure = report ? reporter?.failureOf(message) : undefined;
   useToasts.setState((s) => ({ toasts: [...s.toasts.slice(-4), { id, level, message, report, failure, action }] }));
   // A toast offering its report stays until the user answers or closes it.
-  if (report !== "ask" && !action) dismissLater(id, level === "error" ? 8000 : 4000);
+  // One with an action lingers longer, to leave time to use it, but never stays for good.
+  if (report !== "ask") dismissLater(id, level === "error" ? 8000 : action ? 10000 : 4000);
   if (report === "sending") void send(id);
 }
 
