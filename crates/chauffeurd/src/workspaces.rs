@@ -1975,7 +1975,7 @@ impl WorkspaceManager {
         for warning in written.warnings {
             self.warn(&row.id, warning);
         }
-        self.announce_local_settings(&row.id, &repos, &written.notices);
+        self.announce_local_settings(&row.id, &written.notices);
         Ok(())
     }
 
@@ -1983,22 +1983,14 @@ impl WorkspaceManager {
     /// what was last said is kept per workspace and repo in the store, across restarts, even while
     /// a repo has nothing to say (a clone's file caught mid-write would otherwise be said again).
     /// A store error says it again rather than never.
-    fn announce_local_settings(
-        &self,
-        workspace: &str,
-        repos: &[genconfig::RepoEntry],
-        notices: &[genconfig::LocalSettingsNotice],
-    ) {
+    fn announce_local_settings(&self, workspace: &str, notices: &[genconfig::LocalSettingsNotice]) {
         let store = &self.d().store;
-        for repo in repos {
-            let key = format!("{LOCAL_SETTINGS_NOTICE_KEY}{workspace}:{}", repo.repo);
+        for notice in notices {
+            let key = format!("{LOCAL_SETTINGS_NOTICE_KEY}{workspace}:{}", notice.repo);
             let said = store.kv_get(&key).unwrap_or_else(|error| {
                 tracing::warn!(%error, key, "could not read the last local-settings notice");
                 None
             });
-            let Some(notice) = notices.iter().find(|notice| notice.repo == repo.repo) else {
-                continue;
-            };
             if said.as_deref() == Some(notice.message.as_str()) {
                 continue;
             }

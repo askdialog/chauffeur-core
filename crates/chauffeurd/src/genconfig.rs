@@ -72,7 +72,7 @@ pub fn write(config: &WorkspaceConfig) -> anyhow::Result<WriteOutcome> {
     std::fs::create_dir_all(config.root.join(".claude"))?;
     std::fs::write(config.root.join("CLAUDE.md"), claude_md(config))?;
     std::fs::write(config.root.join("AGENTS.md"), agents_md(config))?;
-    let settings = merged_settings(config, &mut notices)?;
+    let settings = merged_settings(config, &mut notices);
     std::fs::write(
         config.root.join(".claude/settings.json"),
         serde_json::to_string_pretty(&settings)? + "\n",
@@ -223,10 +223,7 @@ pub fn shell_quote(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
-fn merged_settings(
-    config: &WorkspaceConfig,
-    notices: &mut Vec<LocalSettingsNotice>,
-) -> anyhow::Result<Value> {
+fn merged_settings(config: &WorkspaceConfig, notices: &mut Vec<LocalSettingsNotice>) -> Value {
     let cli = shell_quote(&config.cli.to_string_lossy());
     let mut hooks: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     hooks.entry("SessionStart".into()).or_default().push(json!({
@@ -358,7 +355,7 @@ fn merged_settings(
             json!({ "allow": allow, "deny": deny, "ask": ask }),
         );
     }
-    Ok(Value::Object(out))
+    Value::Object(out)
 }
 
 /// Claude Code resolves the path of a `Read(…)` or `Edit(…)` rule (the only rules with paths)
@@ -518,9 +515,9 @@ fn quoted(items: &[String]) -> String {
 }
 
 /// A repo's settings files, each said whether it is the clone's: its `.claude/settings.json`, and
-/// its `.claude/settings.local.json`,
-/// the clone's when the worktree has none and the user did not turn it off (the file is
-/// gitignored, and Claude Code itself reads it from the main checkout in a worktree).
+/// its `.claude/settings.local.json`, the clone's when the worktree has none and the user did not
+/// turn it off (the file is gitignored, and Claude Code itself reads it from the main checkout in a
+/// worktree).
 fn settings_files(repo: &RepoEntry) -> [(PathBuf, bool); 2] {
     let local = repo.path.join(".claude/settings.local.json");
     let local = match &repo.clone_path {
@@ -644,40 +641,8 @@ mod tests {
             r#"{"enabledPlugins":{"acme-skills@acme-skills":true,"other@x":false}}"#,
         )
         .unwrap();
-        let repos = vec![
-            RepoEntry {
-                repo: "web".into(),
-                path: ecom.clone(),
-                clone_path: None,
-                read_clone_local_settings: false,
-                base_branch: "staging".into(),
-            },
-            RepoEntry {
-                repo: "api".into(),
-                path: api.clone(),
-                clone_path: None,
-                read_clone_local_settings: false,
-                base_branch: "staging".into(),
-            },
-        ];
-        let config = WorkspaceConfig {
-            slug: "xyz-1-x",
-            branch: "alice/xyz-1-x",
-            root: root.path(),
-            repos: &repos,
-            tickets: &[],
-            port_base: 41000,
-            port_count: 10,
-            parent_slug: None,
-            cli: Path::new("/opt/chauffeur"),
-            explore: false,
-        };
-        write(&config).unwrap();
+        let (settings, _) = generate(root.path(), &[repo("web", &ecom), repo("api", &api)]);
 
-        let settings: Value = serde_json::from_str(
-            &std::fs::read_to_string(root.path().join(".claude/settings.json")).unwrap(),
-        )
-        .unwrap();
         let command = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
             .as_str()
             .unwrap();
@@ -726,31 +691,8 @@ mod tests {
             )
             .unwrap();
         }
-        let repos = [&web, &api].map(|path| RepoEntry {
-            repo: path.file_name().unwrap().to_string_lossy().into_owned(),
-            path: path.clone(),
-            clone_path: None,
-            read_clone_local_settings: false,
-            base_branch: "main".into(),
-        });
-        write(&WorkspaceConfig {
-            slug: "xyz-1-x",
-            branch: "alice/xyz-1-x",
-            root: root.path(),
-            repos: &repos,
-            tickets: &[],
-            port_base: 41000,
-            port_count: 10,
-            parent_slug: None,
-            cli: Path::new("/opt/chauffeur"),
-            explore: false,
-        })
-        .unwrap();
+        let (settings, _) = generate(root.path(), &[repo("web", &web), repo("api", &api)]);
 
-        let settings: Value = serde_json::from_str(
-            &std::fs::read_to_string(root.path().join(".claude/settings.json")).unwrap(),
-        )
-        .unwrap();
         let permissions = &settings["permissions"];
         assert_eq!(
             permissions["allow"],
@@ -794,11 +736,10 @@ mod tests {
         std::fs::write(folder.join(".claude").join(file), settings).unwrap();
     }
 
-    /// The generated settings, and the local-settings notices.
-    fn generate(root: &Path, repos: &[RepoEntry]) -> (Value, Vec<String>) {
-        let written = write(&WorkspaceConfig {
-            slug: "xyz-1-x",
-            branch: "alice/xyz-1-x",
+    fn config<'a>(root: &'a Path, repos: &'a [RepoEntry]) -> WorkspaceConfig<'a> {
+        WorkspaceConfig {
+            slug: "ws",
+            branch: "x/ws",
             root,
             repos,
             tickets: &[],
@@ -807,8 +748,23 @@ mod tests {
             parent_slug: None,
             cli: Path::new("/opt/chauffeur"),
             explore: false,
-        })
-        .unwrap();
+        }
+    }
+
+    /// A repo whose clone is not known.
+    fn repo(name: &str, path: &Path) -> RepoEntry {
+        RepoEntry {
+            repo: name.into(),
+            path: path.to_path_buf(),
+            clone_path: None,
+            read_clone_local_settings: false,
+            base_branch: "main".into(),
+        }
+    }
+
+    /// The generated settings, and the local-settings notices.
+    fn generate(root: &Path, repos: &[RepoEntry]) -> (Value, Vec<String>) {
+        let written = write(&config(root, repos)).unwrap();
         assert!(written.warnings.is_empty(), "{:?}", written.warnings);
         let settings = serde_json::from_str(
             &std::fs::read_to_string(root.join(".claude/settings.json")).unwrap(),
@@ -837,11 +793,9 @@ mod tests {
         );
         claude_file(&clone, "settings.local.json", &local);
         let repos = [RepoEntry {
-            repo: "web".into(),
-            path: worktree.clone(),
             clone_path: Some(clone.clone()),
             read_clone_local_settings: true,
-            base_branch: "main".into(),
+            ..repo("web", &worktree)
         }];
 
         let (settings, notices) = generate(root.path(), &repos);
@@ -889,11 +843,8 @@ mod tests {
             r#"{"permissions":{"deny":["Edit(/secrets/**)"]}}"#,
         );
         let repos = [RepoEntry {
-            repo: "web".into(),
-            path: worktree.clone(),
             clone_path: Some(clone.path().to_path_buf()),
-            read_clone_local_settings: false,
-            base_branch: "main".into(),
+            ..repo("web", &worktree)
         }];
 
         let (settings, notices) = generate(root.path(), &repos);
@@ -936,11 +887,9 @@ mod tests {
             r#"{"permissions":{"allow":["Bash(rm *)"]}}"#,
         );
         let repos = [RepoEntry {
-            repo: "web".into(),
-            path: worktree,
             clone_path: Some(clone.path().to_path_buf()),
             read_clone_local_settings: true,
-            base_branch: "main".into(),
+            ..repo("web", &worktree)
         }];
 
         let (settings, notices) = generate(root.path(), &repos);
@@ -976,19 +925,11 @@ mod tests {
             r#"{"permissions":{"allow":["Bash(lint)"]}}"#,
         );
         let repos = [
+            repo("api", &api),
             RepoEntry {
-                repo: "api".into(),
-                path: api,
-                clone_path: None,
-                read_clone_local_settings: false,
-                base_branch: "main".into(),
-            },
-            RepoEntry {
-                repo: "next.js".into(),
-                path: worktree.clone(),
                 clone_path: Some(clone.path().to_path_buf()),
                 read_clone_local_settings: true,
-                base_branch: "main".into(),
+                ..repo("next.js", &worktree)
             },
         ];
 
@@ -1064,18 +1005,7 @@ mod tests {
         std::fs::write(home.join("notes.md"), "mine").unwrap();
         let root = tmp.path().join("ws");
         std::fs::create_dir_all(&root).unwrap();
-        let config = WorkspaceConfig {
-            slug: "ws",
-            branch: "x/ws",
-            root: &root,
-            repos: &[],
-            tickets: &[],
-            port_base: 41000,
-            port_count: 10,
-            parent_slug: None,
-            cli: Path::new("/opt/chauffeur"),
-            explore: false,
-        };
+        let config = config(&root, &[]);
 
         std::os::unix::fs::symlink(home.join(".claude"), root.join(".claude")).unwrap();
         let error = write(&config).unwrap_err().to_string();
@@ -1109,18 +1039,7 @@ mod tests {
     #[test]
     fn agents_are_told_to_start_dev_servers_through_the_run_scripts() {
         let root = tempfile::tempdir().unwrap();
-        let config = WorkspaceConfig {
-            slug: "ws",
-            branch: "x/ws",
-            root: root.path(),
-            repos: &[],
-            tickets: &[],
-            port_base: 41000,
-            port_count: 10,
-            parent_slug: None,
-            cli: Path::new("/opt/chauffeur"),
-            explore: false,
-        };
+        let config = config(root.path(), &[]);
         write(&config).unwrap();
 
         for file in ["CLAUDE.md", "AGENTS.md"] {
@@ -1139,18 +1058,7 @@ mod tests {
     #[test]
     fn agents_of_a_workspace_imported_from_conductor_are_pointed_at_its_chat_history() {
         let root = tempfile::tempdir().unwrap();
-        let config = WorkspaceConfig {
-            slug: "ws",
-            branch: "x/ws",
-            root: root.path(),
-            repos: &[],
-            tickets: &[],
-            port_base: 41000,
-            port_count: 10,
-            parent_slug: None,
-            cli: Path::new("/opt/chauffeur"),
-            explore: false,
-        };
+        let config = config(root.path(), &[]);
         write(&config).unwrap();
         let text = std::fs::read_to_string(root.path().join("CLAUDE.md")).unwrap();
         assert!(!text.contains("imported from Conductor"));
