@@ -4,6 +4,7 @@
 
 import type {
   EventEnvelope,
+  LoginSessionInfo,
   OutputStream,
   ProcessInfo,
   ProcessKind,
@@ -51,6 +52,8 @@ export type WorkspaceLive = {
   turnsEnded: number;
   /** Bumped when worktrees are added or removed. */
   worktreesChanged: number;
+  /** The logins the workspace declares, by name, from `session.list` then `session_changed`. */
+  sessions: Record<string, LoginSessionInfo>;
   /** Set by the session from `terminal.list` and `terminal_activity`. */
   terminals: TerminalsActivity;
   lastSeq: number;
@@ -114,6 +117,7 @@ export const emptyWorkspaceLive: WorkspaceLive = {
   processOrder: [],
   turnsEnded: 0,
   worktreesChanged: 0,
+  sessions: {},
   terminals: {},
   lastSeq: 0,
   live: false,
@@ -216,6 +220,8 @@ function apply(state: WorkspaceLive, envelope: EventEnvelope): WorkspaceLive {
         },
       };
     }
+    case "session_changed":
+      return { ...state, sessions: { ...state.sessions, [e.session.name]: e.session } };
     case "terminal_output":
     case "terminal_exited":
     case "terminal_activity":
@@ -223,6 +229,11 @@ function apply(state: WorkspaceLive, envelope: EventEnvelope): WorkspaceLive {
     case "file_share":
       return state;
   }
+}
+
+/** The sessions `session.list` read, in place of those known. */
+export function listedSessions(state: WorkspaceLive, sessions: LoginSessionInfo[]): WorkspaceLive {
+  return { ...state, sessions: Object.fromEntries(sessions.map((session) => [session.name, session])) };
 }
 
 function stateMessage(state: WorkspaceState, error: string | null): string {

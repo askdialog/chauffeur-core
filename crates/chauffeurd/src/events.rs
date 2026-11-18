@@ -142,6 +142,8 @@ pub fn is_ephemeral(event: &Event) -> bool {
         Event::Workspace {
             event:
                 WorkspaceEvent::ProcessOutput { .. }
+                // Read again from the check: `session.list`.
+                | WorkspaceEvent::SessionChanged { .. }
                 | WorkspaceEvent::TerminalOutput { .. }
                 | WorkspaceEvent::TerminalActivity { .. }
                 // Whole at each step; `cloud.transfer.status` reads the last one.

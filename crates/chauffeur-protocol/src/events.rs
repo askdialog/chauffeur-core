@@ -212,6 +212,10 @@ pub enum WorkspaceEvent {
     WorktreeAdded {
         worktree: WorktreeInfo,
     },
+    /// A declared session was checked, or a login of it started or ended.
+    SessionChanged {
+        session: crate::client::LoginSessionInfo,
+    },
     WorktreeRemoved {
         worktree_id: String,
     },

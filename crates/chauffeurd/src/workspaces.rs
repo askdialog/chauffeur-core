@@ -2002,7 +2002,7 @@ impl WorkspaceManager {
     }
 
     /// A repo's settings, the user's `[repos.<name>.scripts]` included.
-    fn repo_settings(
+    pub(crate) fn repo_settings(
         &self,
         repo: &str,
         clone: &Path,

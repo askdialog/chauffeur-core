@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chauffeur_protocol::client::{
-    ChatsResult, ClientCall, EmptyParams, HelloResult, HistoryResult, ReposListResult,
-    SectionsResult, WorkspacesResult,
+    ChatsResult, ClientCall, EmptyParams, HelloResult, HistoryResult, LoginSessionsResult,
+    ReposListResult, SectionsResult, WorkspacesResult,
 };
 use chauffeur_protocol::{MIN_PROTOCOL_VERSION, PROTOCOL_VERSION};
 use serde_json::Value;
@@ -321,6 +321,21 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
             daemon
                 .workspaces
                 .run_script(&params.workspace, &params.repo, params.name.as_deref())
+                .await?,
+        ),
+        ClientCall::SessionList(params) => to_value(LoginSessionsResult {
+            sessions: daemon.sessions.list(daemon, &params.workspace).await?,
+        }),
+        ClientCall::SessionCheck(params) => to_value(
+            daemon
+                .sessions
+                .check(daemon, &params.workspace, &params.name)
+                .await?,
+        ),
+        ClientCall::SessionLogin(params) => to_value(
+            daemon
+                .sessions
+                .login(daemon, &params.workspace, &params.name)
                 .await?,
         ),
         ClientCall::ProcessSetup(params) => to_value(

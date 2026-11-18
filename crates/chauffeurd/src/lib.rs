@@ -96,6 +96,7 @@ pub mod search;
 pub mod secrets;
 pub mod sections;
 pub mod server;
+pub mod sessions;
 pub mod settings;
 pub mod share;
 pub mod shellenv;
@@ -165,6 +166,8 @@ pub struct Daemon {
     pub workers: workers::Workers,
     pub transfer_controller: transfer_controller::TransferController,
     pub idle_reminders: idle_reminders::IdleReminders,
+    /// The logins workspaces declare, their checks and logins.
+    pub sessions: Arc<sessions::Sessions>,
     /// Encrypted backups of workspaces running here on a worker, and the keys of those moved to one.
     pub backups: cloud_workspace_backup::Backups,
     pub transfer_captures: cloud_transfer::Captures,
@@ -251,6 +254,7 @@ impl Daemon {
             workers: Default::default(),
             transfer_controller: Default::default(),
             idle_reminders: Default::default(),
+            sessions: Default::default(),
             backups: cloud_workspace_backup::Backups::new(secrets::Secrets::for_paths(&paths)),
             transfer_captures: Default::default(),
             repos: repos::RepoRegistry::new(paths.clone(), settings.clone(), store.clone()),

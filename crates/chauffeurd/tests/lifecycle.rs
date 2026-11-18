@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use chauffeur_protocol::client::{
     AddWorktreeParams, ConfigureChatParams, CreateChatParams, CreateWorkspaceParams, Forge,
-    SearchFilters, SearchResult,
+    LoginSessionState, SearchFilters, SearchResult,
 };
 use chauffeur_protocol::events::{Event, WorkspaceEvent};
 use chauffeur_protocol::model::{AgentKind, LoadoutEntry, WorkspaceState, WorktreeOrigin};
@@ -20976,4 +20976,75 @@ async fn activity_lists_what_the_user_wrote_in_the_window_and_where_each_chat_st
     )
     .unwrap_err();
     assert!(unreadable.to_string().contains("RFC 3339"), "{unreadable}");
+}
+
+#[tokio::test]
+async fn declared_sessions_are_checked_and_a_login_gives_its_link_then_holds() {
+    let marker = tempfile::tempdir().unwrap();
+    let on = marker.path().join("svc-on");
+    let f = fixture_with(
+        49910,
+        &format!(
+            r#"
+[repos.repo-a.sessions.svc]
+label = "Service (staging)"
+check = "test -f {on} && echo expires_at=2030-01-01T00:00:00Z"
+login = "echo 'Open https://login.example/device'; echo 'Code: AB12'; sleep 1; touch {on}"
+
+[sessions.everywhere]
+label = "Always"
+check = "true"
+login = "true"
+
+[sessions.incomplete]
+label = "No check nor login"
+"#,
+            on = on.display()
+        ),
+    );
+    let d = &f.daemon;
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams::default())
+        .await
+        .unwrap()
+        .workspace;
+
+    let sessions = d.sessions.list(d, &ws.id).await.unwrap();
+    let names: Vec<_> = sessions.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["everywhere", "svc"],
+        "an incomplete one is not offered"
+    );
+    let svc = &sessions[1];
+    assert_eq!(svc.repo.as_deref(), Some("repo-a"));
+    assert_eq!(svc.state, LoginSessionState::Expired);
+    assert_eq!(sessions[0].repo, None);
+    assert_eq!(sessions[0].state, LoginSessionState::Holds);
+
+    let login = d.sessions.login(d, &ws.id, "svc").await.unwrap();
+    assert_eq!(login.url.as_deref(), Some("https://login.example/device"));
+    assert!(login.output.contains("Code: AB12"), "{}", login.output);
+    assert!(login.session.logging_in);
+    let again = d.sessions.login(d, &ws.id, "svc").await.unwrap_err();
+    assert!(again.to_string().contains("already running"), "{again}");
+
+    let mut held = None;
+    for _ in 0..50 {
+        let session = d.sessions.check(d, &ws.id, "svc").await.unwrap();
+        if session.state == LoginSessionState::Holds && !session.logging_in {
+            held = Some(session);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let held = held.expect("the session holds once its login ended");
+    assert_eq!(
+        held.expires_at.as_deref(),
+        Some("2030-01-01T00:00:00+00:00")
+    );
+
+    let unknown = d.sessions.check(d, &ws.id, "nope").await.unwrap_err();
+    assert!(unknown.to_string().contains("session nope"), "{unknown}");
 }

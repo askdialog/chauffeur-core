@@ -6,7 +6,7 @@
 // takes it in two: the end of each chat (and the workspace's own events) first, shown at once,
 // then what came before, folded apart and put under the end in one go (`partial` until then).
 
-import type { EventEnvelope, ProcessInfo, TerminalInfo } from "@chauffeur/protocol";
+import type { EventEnvelope, LoginSessionInfo, ProcessInfo, TerminalInfo } from "@chauffeur/protocol";
 import { useEffect, useSyncExternalStore } from "react";
 import { base64ToBytes } from "@/lib/format";
 import type { Subscription } from "@/lib/rpc";
@@ -22,6 +22,7 @@ import {
 import { type ChatView, emptyChatView, reduceChat } from "@/lib/chat";
 import {
   emptyWorkspaceLive,
+  listedSessions,
   mergeProcessList,
   reduceWorkspace,
   type WorkspaceLive,
@@ -221,6 +222,11 @@ export class WorkspaceSession {
 
   mergeProcesses(processes: ProcessInfo[]) {
     this.state = mergeProcessList(this.state, processes);
+    this.schedule();
+  }
+
+  listSessions(sessions: LoginSessionInfo[]) {
+    this.state = listedSessions(this.state, sessions);
     this.schedule();
   }
 

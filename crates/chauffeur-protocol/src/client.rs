@@ -604,6 +604,23 @@ methods! {
         #[access(Any)]
         #[relay(Act)]
         ProcessSetup(SetupScriptParams) -> ProcessInfo,
+        /// The logins the workspace's repos and the user declare, checked again when their last
+        /// check is a minute old (docs/adr/declared-sessions.md).
+        #[serde(rename = "session.list")]
+        #[access(Any)]
+        #[relay(Act)]
+        SessionList(WorkspaceParams) -> LoginSessionsResult,
+        /// Runs a session's check now.
+        #[serde(rename = "session.check")]
+        #[access(Any)]
+        #[relay(Act)]
+        SessionCheck(LoginSessionParams) -> LoginSessionInfo,
+        /// Starts a session's login; answers once it printed a link or ended. Never for an agent:
+        /// an agent renews a session through a request the user approves.
+        #[serde(rename = "session.login")]
+        #[access(User)]
+        #[relay(Act)]
+        SessionLogin(LoginSessionParams) -> LoginSessionLogin,
         #[serde(rename = "process.stop")]
         #[access(Any)]
         #[relay(Act)]
@@ -2146,6 +2163,56 @@ pub struct ProcessesResult {
     pub processes: Vec<ProcessInfo>,
     /// Run scripts the workspace's repos declare, as `repo:name`.
     pub scripts: Vec<String>,
+}
+
+/// A login a workspace's work needs, as its repos or the user declare it.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[ts(export)]
+pub struct LoginSessionInfo {
+    pub name: String,
+    pub label: String,
+    /// The repo that declares it; None when only the user does.
+    pub repo: Option<String>,
+    pub state: LoginSessionState,
+    /// When it ends, as its check said (RFC 3339).
+    pub expires_at: Option<String>,
+    /// When it was last checked (RFC 3339).
+    pub checked_at: Option<String>,
+    /// A login of it is running.
+    pub logging_in: bool,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum LoginSessionState {
+    Holds,
+    Expired,
+    /// Not checked yet.
+    Unchecked,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct LoginSessionsResult {
+    pub sessions: Vec<LoginSessionInfo>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct LoginSessionParams {
+    pub workspace: String,
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct LoginSessionLogin {
+    pub session: LoginSessionInfo,
+    /// The `https://` link the login printed (a device code), to open where the user is.
+    pub url: Option<String>,
+    /// What it printed until then (a code to type with the link). Never logged.
+    pub output: String,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]

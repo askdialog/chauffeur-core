@@ -48,6 +48,11 @@ url = ""
 # Explicit, so a distribution's own share service is never reached.
 [design_share]
 url = "" # e2e share url
+# A login the e2e renews: its check holds once its login ran.
+[sessions.e2e]
+label = "E2E service"
+check = "test -f $T/e2e-session && echo expires_at=2030-01-01T00:00:00Z"
+login = "echo 'Open https://login.example/device'; echo 'Code: E2E1'; touch $T/e2e-session"
 TOML
 
 c() { "$BIN/chauffeur" "$@"; }
@@ -168,6 +173,19 @@ assert r["workspaces"][0]["path"].endswith("/e2e-routine-src"), r'
 c activity --since 1h | grep -q "^- .*  Triage the new tickets$"
 if c activity --since yesterday 2>/dev/null; then echo "an unreadable time was taken"; exit 1; fi
 c routine rm Triage | grep -q "its workspace stays"
+echo "== sessions. a declared login is checked, renewed through its link, then holds"
+c new --name e2e-sessions >/dev/null
+c --json session ls --workspace e2e-sessions | python3 -c '
+import sys, json
+s = json.load(sys.stdin)["sessions"]
+assert [(x["name"], x["state"], x["repo"]) for x in s] == [("e2e", "expired", None)], s'
+if c session check e2e --workspace e2e-sessions >/dev/null; then echo "a session held before its login"; exit 1; fi
+c --json session login e2e --workspace e2e-sessions | python3 -c '
+import sys, json
+r = json.load(sys.stdin)
+assert r["url"] == "https://login.example/device" and "Code: E2E1" in r["output"], r'
+for _ in $(seq 1 50); do c session check e2e --workspace e2e-sessions >/dev/null 2>&1 && break; sleep 0.1; done
+c session check e2e --workspace e2e-sessions | grep -q "holds until 2030-01-01"
 echo "== a brief read from standard input keeps its backticks and \$ as written"
 c new --name e2e-stdin-brief --prompt - >/dev/null <<'EOF'
 Accept old links in `share_id_of` and in `chauffeur new --workspace-share`, with $HOME untouched.

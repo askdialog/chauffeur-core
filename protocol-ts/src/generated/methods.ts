@@ -188,6 +188,10 @@ import type { LinearSetStateParams } from "./LinearSetStateParams";
 import type { LinearStatesResult } from "./LinearStatesResult";
 import type { ListWorkspacesParams } from "./ListWorkspacesParams";
 import type { LoadoutParams } from "./LoadoutParams";
+import type { LoginSessionInfo } from "./LoginSessionInfo";
+import type { LoginSessionLogin } from "./LoginSessionLogin";
+import type { LoginSessionParams } from "./LoginSessionParams";
+import type { LoginSessionsResult } from "./LoginSessionsResult";
 import type { McpConnectParams } from "./McpConnectParams";
 import type { McpConnectResult } from "./McpConnectResult";
 import type { MentionSeenParams } from "./MentionSeenParams";
@@ -503,6 +507,9 @@ export type ClientMethods = {
   "process.list": [WorkspaceParams, ProcessesResult];
   "process.run": [RunScriptParams, ProcessInfo];
   "process.setup": [SetupScriptParams, ProcessInfo];
+  "session.list": [WorkspaceParams, LoginSessionsResult];
+  "session.check": [LoginSessionParams, LoginSessionInfo];
+  "session.login": [LoginSessionParams, LoginSessionLogin];
   "process.stop": [StopProcessParams, ProcessInfo];
   "chat.create": [CreateChatParams, ChatInfo];
   "chat.list": [ChatListParams, ChatsResult];
@@ -904,6 +911,9 @@ export const METHOD_NAMES = [
   "process.list",
   "process.run",
   "process.setup",
+  "session.list",
+  "session.check",
+  "session.login",
   "process.stop",
   "chat.create",
   "chat.list",

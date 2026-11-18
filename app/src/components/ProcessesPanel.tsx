@@ -5,6 +5,7 @@ import { errorMessage, RpcCallError } from "@/lib/rpc";
 import { processLines, type ProcessView } from "@/lib/workspaceLive";
 import { client, openFile, sendToChat, toast } from "@/state/app";
 import { useWorkspaceSelector, type WorkspaceSession } from "@/state/session";
+import { SessionsSection } from "./SessionsSection";
 import { Badge, Button, cx, EmptyState, Spinner } from "./ui";
 
 export function ProcessesPanel({ workspace, session }: { workspace: WorkspaceInfo; session: WorkspaceSession }) {
@@ -147,6 +148,7 @@ export function ProcessesPanel({ workspace, session }: { workspace: WorkspaceInf
             </div>
           )}
         </div>
+        <SessionsSection workspace={workspace} session={session} />
         <div className="min-h-0 flex-1 overflow-y-auto py-1">
           <div className="px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wide text-faint">Processes</div>
           {processes.length === 0 && <div className="px-3 text-[12px] text-faint">Nothing has run yet.</div>}

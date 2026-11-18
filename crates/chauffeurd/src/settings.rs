@@ -80,6 +80,9 @@ pub struct UserSettings {
     pub repos: BTreeMap<String, RepoOverride>,
     /// The app's fonts.
     pub appearance: AppearanceSettings,
+    /// `[sessions.<name>]`: logins the user declares for every workspace, over the repos'
+    /// (docs/adr/declared-sessions.md).
+    pub sessions: BTreeMap<String, SessionDecl>,
     pub notifications: NotificationsSettings,
     pub keyboard: KeyboardSettings,
     pub office: OfficeSettings,
@@ -406,6 +409,68 @@ pub struct RepoOverride {
     pub env: RepoEnv,
     /// Over the global `clone_local_claude_settings`, for this repo.
     pub clone_local_claude_settings: Option<bool>,
+    /// `[repos.<name>.sessions.<session>]`, over the repo's own declarations.
+    pub sessions: BTreeMap<String, SessionDecl>,
+}
+
+/// `[sessions.<name>]`: a login a repo's work needs, as a layer declares it. Keys merge layer by
+/// layer; a session missing one of the three in the end is not offered.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SessionDecl {
+    pub label: Option<String>,
+    /// Exits 0 while the session holds; may end with a line `expires_at=<RFC 3339>`.
+    pub check: Option<String>,
+    /// Renews it, with no terminal; may print the link to open.
+    pub login: Option<String>,
+}
+
+/// A session every key of which was declared.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionSpec {
+    pub label: String,
+    pub check: String,
+    pub login: String,
+}
+
+impl SessionDecl {
+    /// Takes the keys `over` sets.
+    pub fn merge(&mut self, over: &SessionDecl) {
+        if over.label.is_some() {
+            self.label.clone_from(&over.label);
+        }
+        if over.check.is_some() {
+            self.check.clone_from(&over.check);
+        }
+        if over.login.is_some() {
+            self.login.clone_from(&over.login);
+        }
+    }
+
+    pub fn spec(&self) -> Option<SessionSpec> {
+        let present = |value: &Option<String>| {
+            value
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(String::from)
+        };
+        Some(SessionSpec {
+            label: present(&self.label)?,
+            check: present(&self.check)?,
+            login: present(&self.login)?,
+        })
+    }
+}
+
+/// Merges `over` into `into`, session by session and key by key.
+pub fn merge_sessions(
+    into: &mut BTreeMap<String, SessionDecl>,
+    over: &BTreeMap<String, SessionDecl>,
+) {
+    for (name, decl) in over {
+        into.entry(name.clone()).or_default().merge(decl);
+    }
 }
 
 /// `[repos.<name>.scripts]`, keyed as a repo's `settings.toml` `[scripts]`.
@@ -468,6 +533,7 @@ impl Default for UserSettings {
             linear_start_tickets: true,
             clone_local_claude_settings: true,
             repos: BTreeMap::new(),
+            sessions: BTreeMap::new(),
             appearance: AppearanceSettings::default(),
             notifications: NotificationsSettings::default(),
             keyboard: KeyboardSettings::default(),
@@ -678,6 +744,8 @@ pub struct RepoSettings {
     pub files_to_copy: Vec<String>,
     /// The file the settings came from, for display.
     pub source: Option<PathBuf>,
+    /// `[sessions.<name>]`, merged key by key; Conductor's file has none.
+    pub sessions: BTreeMap<String, SessionDecl>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -691,6 +759,7 @@ pub struct RunScript {
 #[serde(default)]
 struct RawRepoSettings {
     scripts: RawScripts,
+    sessions: BTreeMap<String, SessionDecl>,
     file_include_globs: Option<Vec<String>>,
     files: Option<RawFiles>,
 }
@@ -753,8 +822,12 @@ impl RepoSettings {
         };
         let mut files_set = false;
         // Lowest priority first: each layer overwrites the keys it sets.
-        for path in &committed {
-            if let Some(raw) = read_layer(path)? {
+        for (layer, path) in committed.iter().enumerate() {
+            if let Some(mut raw) = read_layer(path)? {
+                // Conductor knows no sessions: a table of that name there is something else.
+                if layer == 0 {
+                    raw.sessions.clear();
+                }
                 files_set |= merged.apply(raw, path);
             }
         }
@@ -788,6 +861,7 @@ impl RepoSettings {
     /// Takes the keys `raw` sets; returns whether it set the files to copy.
     fn apply(&mut self, raw: RawRepoSettings, path: &Path) -> bool {
         self.apply_scripts(raw.scripts);
+        merge_sessions(&mut self.sessions, &raw.sessions);
         self.source = Some(path.to_path_buf());
         let globs = raw
             .files
@@ -1161,6 +1235,58 @@ mod tests {
             toml::from_str("auto_archive_on_merge = true\nmax_children = 3\nport_block_size = 3\n")
                 .unwrap();
         assert_eq!(settings.port_block_size, 3);
+    }
+
+    #[test]
+    fn sessions_merge_key_by_key_and_never_come_from_conductor() {
+        let clone = tempfile::tempdir().unwrap();
+        let worktree = tempfile::tempdir().unwrap();
+        for dir in [".conductor", ".chauffeur"] {
+            std::fs::create_dir_all(worktree.path().join(dir)).unwrap();
+        }
+        std::fs::create_dir_all(clone.path().join(".chauffeur")).unwrap();
+        std::fs::write(
+            worktree.path().join(".conductor/settings.toml"),
+            "[sessions.conductor]\nlabel = \"C\"\ncheck = \"true\"\nlogin = \"true\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            worktree.path().join(".chauffeur/settings.toml"),
+            "[sessions.aws]\nlabel = \"AWS\"\ncheck = \"aws check\"\nlogin = \"aws login\"\n\
+             [sessions.half]\nlabel = \"Half\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            clone.path().join(".chauffeur/settings.local.toml"),
+            "[sessions.aws]\nlogin = \"aws login --no-browser\"\n",
+        )
+        .unwrap();
+        let settings = RepoSettings::load(clone.path(), worktree.path(), None).unwrap();
+
+        assert!(!settings.sessions.contains_key("conductor"));
+        assert_eq!(
+            settings.sessions["aws"].spec(),
+            Some(SessionSpec {
+                label: "AWS".into(),
+                check: "aws check".into(),
+                login: "aws login --no-browser".into(),
+            })
+        );
+        assert_eq!(settings.sessions["half"].spec(), None);
+    }
+
+    #[test]
+    fn the_user_declares_sessions_globally_and_per_repo() {
+        let settings: UserSettings = toml::from_str(
+            "[sessions.gh]\nlabel = \"GitHub\"\ncheck = \"gh auth status\"\nlogin = \"gh auth login\"\n\
+             [repos.app.sessions.aws]\ncheck = \"mine\"\n",
+        )
+        .unwrap();
+        assert!(settings.sessions["gh"].spec().is_some());
+        assert_eq!(
+            settings.repos["app"].sessions["aws"].check.as_deref(),
+            Some("mine")
+        );
     }
 
     #[test]

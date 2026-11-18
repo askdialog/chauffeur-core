@@ -12,6 +12,7 @@ mod linear_key;
 mod render;
 mod routine;
 mod service;
+mod session;
 mod transfer;
 mod worker;
 
@@ -63,6 +64,12 @@ enum Command {
     Routine {
         #[command(subcommand)]
         action: routine::Action,
+    },
+    /// Logins a workspace's repos declare (AWS SSO, an internal CLI…): see whether they hold, and
+    /// renew one.
+    Session {
+        #[command(subcommand)]
+        action: session::Action,
     },
     /// Start, stop or inspect the daemon.
     Daemon {
@@ -2031,6 +2038,7 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
         }
         Command::Database { action } => database::run(&mut client, action).await?,
         Command::Routine { action } => routine::run(&mut client, action, json).await?,
+        Command::Session { action } => session::run(&mut client, action, json).await?,
         Command::Services { workspace, action } => {
             dev_services::run(&mut client, workspace, action, json).await?
         }

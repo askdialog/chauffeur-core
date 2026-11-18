@@ -773,6 +773,9 @@ fn raw_event(envelope: &EventEnvelope, chat_hint: &str) -> Option<String> {
                 exit_code.map(|c| c.to_string()).unwrap_or("?".into())
             )),
             WorkspaceEvent::ProcessOutput { line, .. } => Some(format!("  │ {line}")),
+            WorkspaceEvent::SessionChanged { session } => {
+                Some(format!("· session {}: {:?}", session.name, session.state).to_lowercase())
+            }
             WorkspaceEvent::WorktreeAdded { worktree } => {
                 Some(format!("· worktree {} at {}", worktree.repo, worktree.path))
             }
