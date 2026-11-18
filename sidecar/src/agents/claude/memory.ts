@@ -80,6 +80,11 @@ export async function readCloneMemories(clones: string[], env: Record<string, st
   return { first, others: others.filter((memory) => memory !== undefined) };
 }
 
+/** The memory folders of a session's memories, the first one's first. */
+export function memoryDirs({ first, others }: CloneMemories): string[] {
+  return [...(first ? [first] : []), ...others].map((memory) => memory.dir);
+}
+
 /** What the session is told of its memories: the first loaded, the others pointed at; none without any. */
 export function memoriesPrompt({ first, others }: CloneMemories): string | undefined {
   const parts = [first && memoryPrompt(first), others.length > 0 && otherMemoriesPrompt(others)].filter(Boolean);

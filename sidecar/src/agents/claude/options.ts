@@ -16,7 +16,7 @@ import { RpcError } from "../../rpc/peer.ts";
 import { SIDECAR_VERSION } from "../../version.ts";
 import type { Hooks } from "./hooks.ts";
 import { USER_JEV_PLUGIN } from "./jev.ts";
-import { type CloneMemories, memoriesPrompt } from "./memory.ts";
+import { type CloneMemories, memoriesPrompt, memoryDirs } from "./memory.ts";
 import { DELEGATE_TOOL } from "../delegate-tool.ts";
 import { DESIGN_BROWSER, designBrowserCommand } from "../design-browser.ts";
 import { ADD_REPO_TOOL, CHAUFFEUR_TOOLS, LIST_REPOS_TOOL, UPDATE_PLAN_TOOL } from "../repo-tools.ts";
@@ -269,8 +269,7 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
   // The clones' memory folders (docs/adr/claude-memory-per-repo.md), outside the working
   // directories: read without asking and never written; granted here, as Claude Code ignores the
   // allow rules of a folder never trusted, as a workspace is.
-  const { first, others } = deps.memories ?? { others: [] };
-  for (const { dir } of [...(first ? [first] : []), ...others]) {
+  for (const dir of deps.memories ? memoryDirs(deps.memories) : []) {
     addRules(settings, "allow", folderRules("Read", dir));
     addRules(settings, "deny", folderRules("Edit", dir));
   }

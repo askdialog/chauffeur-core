@@ -108,6 +108,10 @@ describe("a session pointed at the other repos' memories", () => {
     // The first repo's clone without a memory: the others' still pointed at.
     expect(appended(buildClaudeOptions(start({}), { ...deps, memories: { others: [api] } }))).toContain(`- \`/code/api\`: \`${api.dir}\``);
     expect(appended(buildClaudeOptions(start({}), deps))).toBe("");
+    // Clones none of which has a memory: nothing said, nothing granted.
+    const empty = buildClaudeOptions(start({}), { ...deps, memories: { others: [] } });
+    expect(appended(empty)).toBe("");
+    expect(JSON.stringify(empty.settings ?? {})).not.toContain("Edit(");
   });
 });
 
