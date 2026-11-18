@@ -5,6 +5,7 @@
 
 import { open, realpath } from "node:fs/promises";
 import { join } from "node:path";
+import type { SessionStartParams } from "../../protocol.ts";
 import { nativeHome } from "../context-capture.ts";
 import { claudeProjectKey } from "./context-bundle.ts";
 
@@ -68,6 +69,22 @@ async function readHead(path: string): Promise<string> {
   }
 }
 
+/** The memories a session is given: the first repo's, loaded, and the other repos', pointed at. */
+export interface CloneMemories {
+  first?: CloneMemory;
+  others: CloneMemory[];
+}
+
+/** The memories of the session's clones, read side by side; a clone without one left out. */
+export async function readCloneMemories(
+  params: Pick<SessionStartParams, "memory_clone" | "other_memory_clones">,
+  env: Record<string, string | undefined>,
+): Promise<CloneMemories> {
+  const read = (clone: string | undefined) => (clone ? readCloneMemory(clone, env) : Promise.resolve(undefined));
+  const [first, ...others] = await Promise.all([params.memory_clone, ...(params.other_memory_clones ?? [])].map(read));
+  return { first, others: others.filter((memory) => memory !== undefined) };
+}
+
 /** What the session is told of the memory: whose it is, that it is read-only, and its index. */
 export function memoryPrompt(memory: CloneMemory): string {
   const cut = memory.cut ? " (cut as Claude Code loads it: read the file for the rest)" : "";
@@ -76,4 +93,12 @@ export function memoryPrompt(memory: CloneMemory): string {
     // As Claude Code wraps a memory: its text cannot close the element.
     `<user-memory path="${memory.dir}/MEMORY.md">\n${memory.index.replaceAll("<", "&lt;")}\n</user-memory>`,
   ].join("\n\n");
+}
+
+/** What the session is told of the other repos' memories: where they are, to read when needed. */
+export function otherMemoriesPrompt(others: CloneMemory[]): string {
+  return [
+    "The user's own Claude Code memory of the workspace's other repos, read-only and not loaded: when the work touches one of them, read its folder's MEMORY.md, then the files it points to. Never write to these folders.",
+    ...others.map((memory) => `- \`${memory.clone}\`: \`${memory.dir}\``),
+  ].join("\n");
 }

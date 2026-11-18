@@ -51,6 +51,11 @@ brands_dir?: string,
  */
 memory_clone?: string, 
 /**
+ * The clones of the workspace's other repos, given to a Claude chat: its session is pointed
+ * at their Claude Code memories, read-only, to read when the work touches them.
+ */
+other_memory_clones?: Array<string>, 
+/**
  * Resume this agent session instead of starting a new one.
  */
 resume_session_id?: string, 

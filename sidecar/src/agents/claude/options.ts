@@ -16,7 +16,7 @@ import { RpcError } from "../../rpc/peer.ts";
 import { SIDECAR_VERSION } from "../../version.ts";
 import type { Hooks } from "./hooks.ts";
 import { USER_JEV_PLUGIN } from "./jev.ts";
-import { type CloneMemory, memoryPrompt } from "./memory.ts";
+import { type CloneMemory, memoryPrompt, otherMemoriesPrompt } from "./memory.ts";
 import { DELEGATE_TOOL } from "../delegate-tool.ts";
 import { DESIGN_BROWSER, designBrowserCommand } from "../design-browser.ts";
 import { ADD_REPO_TOOL, CHAUFFEUR_TOOLS, LIST_REPOS_TOOL, UPDATE_PLAN_TOOL } from "../repo-tools.ts";
@@ -179,6 +179,8 @@ export interface OptionDeps {
   repoTools?: McpSdkServerConfigWithInstance;
   /** The user's memory of the workspace's first repo, read from its clone for this session. */
   memory?: CloneMemory;
+  /** The user's memories of the workspace's other repos, which the session is pointed at. */
+  otherMemories?: CloneMemory[];
 }
 
 /**
@@ -264,9 +266,11 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
   }
   // The clone's memory folder (docs/adr/claude-memory-per-repo.md): its topic files read without
   // asking, though it sits outside the working directories; never written from a workspace.
-  if (deps.memory) {
-    addRules(settings, "allow", folderRules("Read", deps.memory.dir));
-    addRules(settings, "deny", folderRules("Edit", deps.memory.dir));
+  // And the other repos' memory folders it is pointed at: granted here, as Claude Code ignores the
+  // allow rules of a folder never trusted, as a workspace is.
+  for (const { dir } of [...(deps.memory ? [deps.memory] : []), ...(deps.otherMemories ?? [])]) {
+    addRules(settings, "allow", folderRules("Read", dir));
+    addRules(settings, "deny", folderRules("Edit", dir));
   }
   if (params.jev) {
     options.plugins = [{ type: "local", path: deps.jevPluginDir() }];
@@ -277,7 +281,14 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
   }
   if (Object.keys(settings).length > 0) options.settings = settings;
   if (params.resume_session_id) options.resume = params.resume_session_id;
-  const append = [params.append_system_prompt, deps.memory && memoryPrompt(deps.memory)].filter(Boolean).join("\n\n");
+  const others = deps.otherMemories ?? [];
+  const append = [
+    params.append_system_prompt,
+    deps.memory && memoryPrompt(deps.memory),
+    others.length > 0 && otherMemoriesPrompt(others),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   if (append) options.systemPrompt = { type: "preset", preset: "claude_code", append };
   if (deps.executable) options.pathToClaudeCodeExecutable = deps.executable;
   return options;

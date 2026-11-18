@@ -672,6 +672,11 @@ pub struct SessionStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub memory_clone: Option<String>,
+    /// The clones of the workspace's other repos, given to a Claude chat: its session is pointed
+    /// at their Claude Code memories, read-only, to read when the work touches them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub other_memory_clones: Vec<String>,
     /// Resume this agent session instead of starting a new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_session_id: Option<String>,

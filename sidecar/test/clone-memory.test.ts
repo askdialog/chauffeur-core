@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Settings } from "@anthropic-ai/claude-agent-sdk";
-import { indexHead, readCloneMemory } from "../src/agents/claude/memory.ts";
+import { indexHead, readCloneMemories, readCloneMemory } from "../src/agents/claude/memory.ts";
 import { buildClaudeOptions } from "../src/agents/claude/options.ts";
 import { appended, optionDeps as deps, startParams as start } from "./support/claude-options.ts";
 
@@ -79,6 +79,39 @@ describe("a clone's memory", () => {
     writeFileSync(join(memoryDir(config, clone), "MEMORY.md"), "\n \n");
     expect(await readCloneMemory(clone, { CLAUDE_CONFIG_DIR: config })).toBeUndefined();
     expect(await readCloneMemory(join(clone, "gone"), { CLAUDE_CONFIG_DIR: config })).toBeUndefined();
+  });
+});
+
+describe("the other repos' memories", () => {
+  test("are read where Claude Code keeps them, a clone without one left out", async () => {
+    const config = folder();
+    const [web, api, docs] = [folder(), folder(), folder()];
+    for (const clone of [web, api]) {
+      mkdirSync(memoryDir(config, clone), { recursive: true });
+      writeFileSync(join(memoryDir(config, clone), "MEMORY.md"), "- a note\n");
+    }
+    const memories = await readCloneMemories({ memory_clone: web, other_memory_clones: [api, docs] }, { CLAUDE_CONFIG_DIR: config });
+    expect(memories.first?.dir).toBe(memoryDir(config, web));
+    expect(memories.others.map((m) => m.dir)).toEqual([memoryDir(config, api)]);
+  });
+});
+
+describe("a session pointed at the other repos' memories", () => {
+  const api = { clone: "/code/api", dir: "/home/me/.claude/projects/-code-api/memory", index: "- a note", cut: false };
+
+  test("is told where they are, read-only, after the first repo's, and may read them but not write them", () => {
+    const first = { clone: "/code/web", dir: "/home/me/.claude/projects/-code-web/memory", index: "- staging first", cut: false };
+    const options = buildClaudeOptions(start({ append_system_prompt: "Reply in Chauffeur." }), { ...deps, memory: first, otherMemories: [api] });
+    const append = appended(options);
+    const pointer = append.indexOf(`- \`/code/api\`: \`${api.dir}\``);
+    expect(pointer).toBeGreaterThan(append.indexOf("</user-memory>"));
+    expect(append).not.toContain("<user-memory path=\"/home/me/.claude/projects/-code-api");
+    const permissions = (options.settings as Settings).permissions;
+    expect(permissions?.allow).toContain(`Read(/${api.dir}/**)`);
+    expect(permissions?.deny).toContain(`Edit(/${api.dir}/**)`);
+
+    expect(appended(buildClaudeOptions(start({}), { ...deps, otherMemories: [api] }))).toContain(`- \`/code/api\`: \`${api.dir}\``);
+    expect(appended(buildClaudeOptions(start({}), deps))).toBe("");
   });
 });
 

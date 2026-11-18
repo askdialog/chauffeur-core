@@ -263,6 +263,8 @@ export function parseStartParams(params: unknown): SessionStartParams {
   if (p.jev !== undefined && p.jev !== null) start.jev = jevParams(p.jev);
   const always = strings(p.always_allow, "always_allow");
   if (always.length > 0) start.always_allow = always;
+  const others = strings(p.other_memory_clones, "other_memory_clones");
+  if (others.length > 0) start.other_memory_clones = others;
   return start;
 }
 

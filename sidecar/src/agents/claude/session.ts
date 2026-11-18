@@ -37,7 +37,7 @@ import { contextUsageOf } from "./context.ts";
 import { ClaudeEventMapper, notice } from "./events.ts";
 import { buildHooks, type Confinement, type WriteFolder, writeRefusal } from "./hooks.ts";
 import { jevPluginDir } from "./jev.ts";
-import { readCloneMemory } from "./memory.ts";
+import { readCloneMemories } from "./memory.ts";
 import { buildClaudeOptions, effortLevel, PERMISSION_MODES } from "./options.ts";
 import { claudeRepoTools } from "./repo-tools.ts";
 import { PendingRequests } from "../pending.ts";
@@ -182,13 +182,15 @@ export class ClaudeSession implements AgentSession {
         : plans
           ? { kind: "plans", dir: plans, cwd }
           : undefined;
-      const memory = this.params.memory_clone
-        ? await readCloneMemory(this.params.memory_clone, { ...this.deps.baseEnv, ...this.params.env })
-        : undefined;
+      // The daemon gives other clones only with the first one.
+      const memories = this.params.memory_clone
+        ? await readCloneMemories(this.params, { ...this.deps.baseEnv, ...this.params.env })
+        : { others: [] };
       // Stopped while the memory was read: no agent is started for a stopped session.
       if (this.state !== "starting") throw new RpcError(ErrorCode.UNAVAILABLE, "the session was stopped while starting");
       const options = buildClaudeOptions(this.params, {
-        memory,
+        memory: memories.first,
+        otherMemories: memories.others,
         baseEnv: this.deps.baseEnv,
         executable: this.deps.resolveExecutable(),
         canUseTool: claudeCanUseTool(

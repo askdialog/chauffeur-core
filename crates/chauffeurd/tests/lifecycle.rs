@@ -2869,7 +2869,8 @@ async fn both_agents_receive_chauffeur_reply_and_design_instructions() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn claude_sessions_are_given_the_clone_of_the_repo_asked_first_to_read_its_memory() {
+async fn claude_sessions_are_given_their_repos_clones_to_read_their_memories_the_first_asked_loaded()
+ {
     use chauffeur_protocol::model::ChatKind;
 
     let f = fixture(47430);
@@ -2890,7 +2891,7 @@ async fn claude_sessions_are_given_the_clone_of_the_repo_asked_first_to_read_its
         // Listed, and its memory read, in the order asked, though made side by side.
         let listed: Vec<&str> = ws.worktrees.iter().map(|w| w.repo.as_str()).collect();
         assert_eq!(listed, asked);
-        let clone = d.settings.get().repos[asked[0]].path.clone().unwrap();
+        let clone = |repo: &str| d.settings.get().repos[repo].path.clone().unwrap();
         for (agent, kind) in [
             (AgentKind::Claude, ChatKind::Chat),
             (AgentKind::Claude, ChatKind::Design),
@@ -2923,10 +2924,17 @@ async fn claude_sessions_are_given_the_clone_of_the_repo_asked_first_to_read_its
                     call["method"] == "session.start" && call["params"]["chat_id"] == chat.id
                 })
                 .unwrap();
-            let memory_clone = &start["params"]["memory_clone"];
+            // The first repo's memory is loaded, the others' pointed at.
+            let (first, others) = (
+                &start["params"]["memory_clone"],
+                &start["params"]["other_memory_clones"],
+            );
             match agent {
-                AgentKind::Claude => assert_eq!(memory_clone, &serde_json::json!(clone), "{start}"),
-                _ => assert!(memory_clone.is_null(), "{start}"),
+                AgentKind::Claude => {
+                    assert_eq!(first, &serde_json::json!(clone(asked[0])), "{start}");
+                    assert_eq!(others, &serde_json::json!([clone(asked[1])]), "{start}");
+                }
+                _ => assert!(first.is_null() && others.is_null(), "{start}"),
             }
         }
     }
