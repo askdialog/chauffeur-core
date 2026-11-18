@@ -3,7 +3,7 @@
 // a memory of its own and would never see what the user taught Claude in the clone. Read only:
 // nothing here writes to it.
 
-import { readFile, realpath } from "node:fs/promises";
+import { open, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { nativeHome } from "../context-capture.ts";
 import { claudeProjectKey } from "./context-bundle.ts";
@@ -14,6 +14,8 @@ import { claudeProjectKey } from "./context-bundle.ts";
  */
 const INDEX_LINES = 200;
 const INDEX_CHARS = 25_000;
+/** Enough of a `MEMORY.md` for its head, whatever its size: a character is 4 bytes at most. */
+const HEAD_BYTES = INDEX_CHARS * 4 + 4;
 
 export interface CloneMemory {
   /** The clone as the daemon named it. */
@@ -48,10 +50,21 @@ export async function readCloneMemory(clone: string, env: Record<string, string 
   try {
     const key = await claudeProjectKey(await realpath(clone));
     const dir = join(nativeHome("claude", env), "projects", key, "memory");
-    const { head, cut } = indexHead(await readFile(join(dir, "MEMORY.md"), "utf8"));
+    const { head, cut } = indexHead(await readHead(join(dir, "MEMORY.md")));
     return head ? { clone, dir, index: head, cut } : undefined;
   } catch {
     return undefined;
+  }
+}
+
+async function readHead(path: string): Promise<string> {
+  const file = await open(path);
+  try {
+    const buffer = Buffer.alloc(HEAD_BYTES);
+    const { bytesRead } = await file.read(buffer, 0, HEAD_BYTES, 0);
+    return buffer.toString("utf8", 0, bytesRead);
+  } finally {
+    await file.close();
   }
 }
 

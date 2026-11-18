@@ -185,6 +185,8 @@ export class ClaudeSession implements AgentSession {
       const memory = this.params.memory_clone
         ? await readCloneMemory(this.params.memory_clone, { ...this.deps.baseEnv, ...this.params.env })
         : undefined;
+      // Stopped while the memory was read: no agent is started for a stopped session.
+      if (this.state !== "starting") throw new RpcError(ErrorCode.UNAVAILABLE, "the session was stopped while starting");
       const options = buildClaudeOptions(this.params, {
         memory,
         baseEnv: this.deps.baseEnv,

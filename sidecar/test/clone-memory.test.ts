@@ -63,6 +63,14 @@ describe("a clone's memory", () => {
     expect(await readCloneMemory(clone, { HOME: config })).toBeUndefined();
   });
 
+  test("of any size is cut as a short one is, from its head", async () => {
+    const clone = folder();
+    const config = folder();
+    mkdirSync(memoryDir(config, clone), { recursive: true });
+    writeFileSync(join(memoryDir(config, clone), "MEMORY.md"), "é".repeat(4_000_000));
+    expect(await readCloneMemory(clone, { CLAUDE_CONFIG_DIR: config })).toMatchObject({ index: "é".repeat(25_000), cut: true });
+  });
+
   test("is none without the file, with an empty one, or without the clone", async () => {
     const clone = folder();
     const config = folder();

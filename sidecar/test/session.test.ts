@@ -316,6 +316,14 @@ describe("starting", () => {
     expect(fixture.host.events).toEqual([]);
   });
 
+  test("a stop while the clone's memory is read starts no agent", async () => {
+    const fixture = await started({ memory_clone: "/no/such/clone" }, { initialized: false });
+    const start = fixture.session.start();
+    await fixture.session.stop();
+    await expect(start).rejects.toMatchObject({ code: ErrorCode.UNAVAILABLE, message: "the session was stopped while starting" });
+    expect(() => fixture.query).toThrow("the session has not created its query yet");
+  });
+
   test("sends the first prompt once initialized, announcing the turn", async () => {
     const fixture = await started({ prompt: "Fix the bug" }, { initialized: false });
     const start = fixture.session.start();
