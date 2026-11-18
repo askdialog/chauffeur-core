@@ -11,7 +11,7 @@ Claude Code keeps an auto memory per git repo, `~/.claude/projects/<repo key>/me
 
 In V1, chats read the clone's Claude memory without being able to write it. Proposed 2026-11-16 with the import from Claude Code, then narrowed to reading by Justin on 2026-11-17.
 
-- At every session start, the sidecar appends to the system prompt the head of the `MEMORY.md` that Claude Code keeps for the clone of the workspace's first repo, cut as Claude Code cuts it. It presents it as the user's memory, read-only, with the folder's path so that the agent reads its topic files when needed. The folder is read without asking and never written.
+- At every session start, the sidecar appends to the system prompt the head of the `MEMORY.md` that Claude Code keeps for the clone of the workspace's first repo (the one asked first; decided 2026-11-18), cut as Claude Code cuts it. It presents it as the user's memory, read-only, with the folder's path so that the agent reads its topic files when needed. The folder is read without asking and never written.
 - The workspace's own auto memory does not change: what agents write there never reaches the clone's.
 - Only the first repo's memory is loaded. The generated `CLAUDE.md` gives the path of the other repos' memories, to read when needed. It is an accepted limit.
 - A setting turns the sharing off, globally or for one repo, in `~/.chauffeur/settings.toml`.
