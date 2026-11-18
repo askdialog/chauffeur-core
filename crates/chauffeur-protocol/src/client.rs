@@ -4244,7 +4244,8 @@ pub struct WorkspaceDefaultsUpdate {
     pub snapshot_retention_days: Option<u32>,
     #[serde(default)]
     pub idle_session_minutes: Option<u32>,
-    /// Replaces every `[repos.*]` table.
+    /// The whole list: each `[repos.<name>]` gets the row's `path` and `default_branch`, its other
+    /// keys (`scripts`, `env`…) kept; a table without a row is removed.
     #[serde(default)]
     pub repos: Option<Vec<RepoSetting>>,
 }

@@ -11,6 +11,7 @@ repo_order?: Array<string>,
  */
 branch_prefix?: string, clone_roots?: Array<string>, github_org?: string, github_sources?: boolean, port_range_start?: number, port_block_size?: number, archive_script_timeout_secs?: number, snapshot_retention_days?: number, idle_session_minutes?: number, 
 /**
- * Replaces every `[repos.*]` table.
+ * The whole list: each `[repos.<name>]` gets the row's `path` and `default_branch`, its other
+ * keys (`scripts`, `env`…) kept; a table without a row is removed.
  */
 repos?: Array<RepoSetting>, };
