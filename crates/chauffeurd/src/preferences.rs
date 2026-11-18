@@ -413,6 +413,11 @@ const TEMPLATE: &str = r#"# Chauffeur's settings. The app's Settings (⌘,) chan
 # anonymous id. Only packaged builds send any.
 # error_reports = "ask"
 
+# A workspace whose worktree of a repo has no .claude/settings.local.json (it is gitignored) reads
+# the one of the repo's clone: the permissions you granted and the hooks you set in your terminal
+# apply in workspaces too, but for the allow rules naming the clone. false: never read.
+# clone_local_claude_settings = true
+
 # Daily session review at 18:00 local time. Model unset: the usual default.
 # [daily_review]
 # enabled = true
@@ -461,11 +466,6 @@ const TEMPLATE: &str = r#"# Chauffeur's settings. The app's Settings (⌘,) chan
 # [workers]
 # project = ""
 # zone = "europe-west9-a"
-
-# A workspace whose worktree of a repo has no .claude/settings.local.json (it is gitignored) reads
-# the one of the repo's clone: the permissions you granted and the hooks you set in your terminal
-# apply in workspaces too, but for the allow rules naming the clone. false: never read.
-# clone_local_claude_settings = true
 
 # A clone outside the clone folders, or another default branch, for one repo; and whether its
 # clone's .claude/settings.local.json is read, over the setting above:
