@@ -2868,6 +2868,68 @@ async fn both_agents_receive_chauffeur_reply_and_design_instructions() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn claude_sessions_are_given_the_first_repos_clone_to_read_its_memory() {
+    use chauffeur_protocol::model::ChatKind;
+
+    let f = fixture(47430);
+    let d = &f.daemon;
+    let log = f.root.join("sidecar.log");
+    d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
+    for explore in [false, true] {
+        let ws = d
+            .workspaces
+            .create(CreateWorkspaceParams {
+                repos: vec!["repo-b".into(), "repo-a".into()],
+                explore,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .workspace;
+        // The first repo as the workspace lists it.
+        let first = &ws.worktrees[0].repo;
+        let clone = d.settings.get().repos[first].path.clone().unwrap();
+        for (agent, kind) in [
+            (AgentKind::Claude, ChatKind::Chat),
+            (AgentKind::Claude, ChatKind::Design),
+            (AgentKind::Codex, ChatKind::Chat),
+        ] {
+            let chat = d
+                .chats
+                .create(CreateChatParams {
+                    workspace: ws.id.clone(),
+                    agent: Some(agent),
+                    model: None,
+                    effort: None,
+                    fast: None,
+                    permission_mode: None,
+                    prompt: None,
+                    images: None,
+                    title: None,
+                    kind: Some(kind),
+                    source_chat: None,
+                })
+                .await
+                .unwrap();
+            d.chats.send(&chat.id, "What do I know?").await.unwrap();
+            let start: serde_json::Value = std::fs::read_to_string(&log)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .find(|call| {
+                    call["method"] == "session.start" && call["params"]["chat_id"] == chat.id
+                })
+                .unwrap();
+            let memory_clone = &start["params"]["memory_clone"];
+            match agent {
+                AgentKind::Claude => assert_eq!(memory_clone, &serde_json::json!(clone), "{start}"),
+                AgentKind::Codex => assert!(memory_clone.is_null(), "{start}"),
+            }
+        }
+    }
+}
+
 async fn new_chat(d: &Daemon, workspace: &str) -> chauffeur_protocol::model::ChatInfo {
     d.chats
         .create(CreateChatParams {

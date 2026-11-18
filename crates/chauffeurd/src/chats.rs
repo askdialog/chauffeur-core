@@ -1067,6 +1067,10 @@ impl ChatManager {
                     .into_owned()
             }),
             brands_dir: brands.as_ref().map(|b| b.root.clone()),
+            memory_clone: match chat.agent {
+                AgentKind::Claude => first_clone(&d.store, &workspace.id)?,
+                AgentKind::Codex => None,
+            },
             resume_session_id: chat.agent_session_id.clone(),
             env,
             append_system_prompt: system_prompt(
@@ -4138,6 +4142,15 @@ impl ChatManager {
 /// The workspace's own worktree of each repo. Sessions start in the workspace folder, above them,
 /// and get these as additional directories: Claude Code then loads each repo's skills and
 /// commands, as it would starting in the repo.
+/// The clone of the workspace's first repo, as the workspace lists its repos.
+fn first_clone(store: &crate::store::Store, workspace: &str) -> Result<Option<String>> {
+    Ok(store
+        .worktrees_of(workspace)?
+        .into_iter()
+        .find(|w| w.origin == WorktreeOrigin::Workspace && !w.removed)
+        .map(|w| w.clone_path))
+}
+
 pub fn repo_dirs(workspace: &WorkspaceInfo) -> Vec<String> {
     workspace
         .worktrees

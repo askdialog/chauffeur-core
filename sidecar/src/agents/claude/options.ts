@@ -16,6 +16,7 @@ import { RpcError } from "../../rpc/peer.ts";
 import { SIDECAR_VERSION } from "../../version.ts";
 import type { Hooks } from "./hooks.ts";
 import { USER_JEV_PLUGIN } from "./jev.ts";
+import { type CloneMemory, memoryPrompt } from "./memory.ts";
 import { DELEGATE_TOOL } from "../delegate-tool.ts";
 import { DESIGN_BROWSER, designBrowserCommand } from "../design-browser.ts";
 import { ADD_REPO_TOOL, CHAUFFEUR_TOOLS, LIST_REPOS_TOOL, UPDATE_PLAN_TOOL } from "../repo-tools.ts";
@@ -167,6 +168,8 @@ export interface OptionDeps {
   jevPluginDir: () => string;
   /** Chauffeur's own tools (the repo tools, `delegate`), for every chat but a design chat's. */
   repoTools?: McpSdkServerConfigWithInstance;
+  /** The user's memory of the workspace's first repo, read from its clone for this session. */
+  memory?: CloneMemory;
 }
 
 /**
@@ -250,6 +253,16 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
     options.mcpServers = { [CHAUFFEUR_TOOLS]: deps.repoTools };
     settings.permissions = { ...settings.permissions, allow: [...(settings.permissions?.allow ?? []), ...CHAUFFEUR_TOOL_RULES] };
   }
+  // The clone's memory folder (docs/adr/claude-memory-per-repo.md): its topic files read without
+  // asking, though it sits outside the working directories; never written from a workspace.
+  if (deps.memory) {
+    const { allow = [] } = notesReadRules(deps.memory.dir);
+    settings.permissions = {
+      ...settings.permissions,
+      allow: [...(settings.permissions?.allow ?? []), ...allow],
+      deny: [...(settings.permissions?.deny ?? []), ...allow.map((rule) => rule.replace(/^Read\(/, "Edit("))],
+    };
+  }
   if (params.jev) {
     options.plugins = [{ type: "local", path: deps.jevPluginDir() }];
     options.env = { ...options.env, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "1", TYPESAFE_API_KEY: params.jev.api_key };
@@ -259,9 +272,8 @@ export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps)
   }
   if (Object.keys(settings).length > 0) options.settings = settings;
   if (params.resume_session_id) options.resume = params.resume_session_id;
-  if (params.append_system_prompt) {
-    options.systemPrompt = { type: "preset", preset: "claude_code", append: params.append_system_prompt };
-  }
+  const append = [params.append_system_prompt, deps.memory && memoryPrompt(deps.memory)].filter(Boolean).join("\n\n");
+  if (append) options.systemPrompt = { type: "preset", preset: "claude_code", append };
   if (deps.executable) options.pathToClaudeCodeExecutable = deps.executable;
   return options;
 }

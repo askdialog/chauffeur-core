@@ -666,6 +666,12 @@ pub struct SessionStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub brands_dir: Option<String>,
+    /// The clone of the workspace's first repo, given to a Claude chat: its session reads the
+    /// Claude Code auto memory kept for that clone, read-only
+    /// (docs/adr/claude-memory-per-repo.md).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub memory_clone: Option<String>,
     /// Resume this agent session instead of starting a new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_session_id: Option<String>,
