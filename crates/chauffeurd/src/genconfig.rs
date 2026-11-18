@@ -296,12 +296,15 @@ fn merged_settings(config: &WorkspaceConfig, warnings: &mut Vec<String>) -> anyh
 
 /// Claude Code resolves the path of a `Read(…)` or `Edit(…)` rule (the only rules with paths)
 /// from the session's working directory: a `/src/**` path is anchored there. A path without a
-/// leading `/` (`./` aside) is read as in a `.gitignore` for an allow rule, anchored there too when
-/// a `/` is left before its end (`src/**`), at any depth below it otherwise (`*.ts`, `dist/`); a
-/// deny or ask rule matches it at any depth. A repo's rules were written for a session started in
-/// the repo; merged here, at the workspace root, the anchored ones would miss the repo and the
-/// others would reach every repo. They are rewritten to keep their reach inside the repo's
-/// `folder`: `/src/**` becomes `/web/src/**`, `*.ts` becomes `/web/**/*.ts`. Absolute (`//`) and
+/// leading `/` (`./` aside) is read as in a `.gitignore`: anchored there too when a `/` is left
+/// before its end (`src/**`), at any depth below it otherwise (`*.ts`, `dist/`); a deny or ask
+/// rule's `src/**` also blocks every `src` folder. A deny or ask rule starting with `!` carves its
+/// paths out of the relative rules listed before it. A repo's rules were written for a session
+/// started in the repo; merged here, at the workspace root, the anchored ones would miss the repo
+/// and the others would reach every repo. They are rewritten to keep their reach inside the repo's
+/// `folder`: `/src/**` becomes `/web/src/**`, an allow `*.ts` becomes `/web/**/*.ts`, a deny
+/// `*.env` becomes `web/**/*.env` (relative, at least as wide as in the repo, so that a `!` rule
+/// can still carve out of it) and `!sample.env` becomes `!web/**/sample.env`. Absolute (`//`) and
 /// home (`~`) paths, and rules without a path, are kept.
 fn anchor_rule_at_repo(rule: &Value, kind: &str, folder: &str) -> Value {
     let Some((tool, path)) = rule
@@ -312,24 +315,30 @@ fn anchor_rule_at_repo(rule: &Value, kind: &str, folder: &str) -> Value {
     else {
         return rule.clone();
     };
+    let (negated, path) = path
+        .strip_prefix('!')
+        .map_or((false, path), |path| (true, path));
     if path.starts_with("//") || path.starts_with('~') {
         return rule.clone();
+    }
+    if let Some(path) = path.strip_prefix('/').filter(|_| !negated) {
+        return json!(format!("{tool}(/{folder}/{path})"));
     }
     let (path, anchored) = match path.strip_prefix('/') {
         Some(path) => (path, true),
         None => {
             let path = path.strip_prefix("./").unwrap_or(path);
-            (
-                path,
-                kind == "allow" && path.trim_end_matches('/').contains('/'),
-            )
+            (path, path.trim_end_matches('/').contains('/'))
         }
     };
-    if anchored {
-        json!(format!("{tool}(/{folder}/{path})"))
-    } else {
-        json!(format!("{tool}(/{folder}/**/{path})"))
-    }
+    let rewritten = match (negated, kind == "allow", anchored) {
+        (true, _, true) => format!("!{folder}/{path}"),
+        (true, _, false) => format!("!{folder}/**/{path}"),
+        (false, true, true) => format!("/{folder}/{path}"),
+        (false, true, false) => format!("/{folder}/**/{path}"),
+        (false, false, _) => format!("{folder}/**/{path}"),
+    };
+    json!(format!("{tool}({rewritten})"))
 }
 
 /// Rewrites a repo's hook group so its command hooks run in the repo, and only for files of the
@@ -467,7 +476,8 @@ mod tests {
                     "Read(./docs/**)","Edit(*.ts)","Edit(./*.md)","Edit(dist/)",
                     "Bash(pnpm test *)","WebFetch","mcp__linear"],
                    "ask":["Read(/config/*.json)","Read(config/**)"],
-                   "deny":["Edit(/secrets/**)","Edit(./secrets/**)"]}"#,
+                   "deny":["Edit(/secrets/**)","Edit(./secrets/**)","Read(*.env)","Read(!sample.env)",
+                    "Read(!/local.env)","Read(!config/test.env)","Read(!~/x.env)"]}"#,
             ),
             (
                 &api,
@@ -524,13 +534,18 @@ mod tests {
         );
         assert_eq!(
             permissions["ask"],
-            json!(["Read(/web/config/*.json)", "Read(/web/**/config/**)"])
+            json!(["Read(/web/config/*.json)", "Read(web/**/config/**)"])
         );
         assert_eq!(
             permissions["deny"],
             json!([
                 "Edit(/web/secrets/**)",
-                "Edit(/web/**/secrets/**)",
+                "Edit(web/**/secrets/**)",
+                "Read(web/**/*.env)",
+                "Read(!web/**/sample.env)",
+                "Read(!web/local.env)",
+                "Read(!web/config/test.env)",
+                "Read(!~/x.env)",
                 "Edit(/api/secrets/**)"
             ])
         );
