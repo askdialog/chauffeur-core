@@ -41,9 +41,12 @@ pub struct WorkspaceManager {
 /// How long a new workspace's worktrees wait for its name before keeping the generated one; the
 /// repos are fetched meanwhile.
 const NAMING_WAIT: Duration = Duration::from_secs(15);
-/// `kv` key prefix of an exploration's last reactivation, by workspace: when, and the commit each
-/// checkout was at before (`{"at": …, "commits": {<worktree id>: <commit or null>}}`).
+/// `kv` key prefix of an exploration's last reactivation, by workspace: when, when it had been
+/// archived, the commit each checkout was at before, and whether it ended
+/// (`{"at": …, "archived_at": …, "commits": {<worktree id>: <commit or null>}, "done": …}`).
 pub const REACTIVATION_KEY: &str = "reactivated:";
+/// `kv` key prefix, by chat: the `at` of the reactivation its agent was told about.
+pub const REACTIVATION_TOLD_KEY: &str = "reactivation_told:";
 /// `kv` key prefix of the last local-settings notice said, by workspace and repo.
 const LOCAL_SETTINGS_NOTICE_KEY: &str = "local-settings-notice:";
 /// A fetch this recent is not repeated.
@@ -2807,6 +2810,13 @@ impl WorkspaceManager {
             let clone = Path::new(&worktree.clone_path);
             let lock = d.repos.lock_for(clone);
             let _guard = lock.lock().await;
+            // The commit the chats talked about, for their agents to be told what moved once the
+            // exploration is reactivated.
+            if row.explore
+                && let Ok(head) = git.run(path, &["rev-parse", "HEAD"]).await
+            {
+                d.store.set_base_commit(&worktree.id, head.trim())?;
+            }
             if let Some(ref_name) = &ref_name
                 && let Err(error) = git.snapshot(path, ref_name).await
             {
@@ -3074,7 +3084,12 @@ impl WorkspaceManager {
                     .iter()
                     .map(|w| (w.id.as_str(), w.base_commit.as_deref()))
                     .collect();
-                let started = serde_json::json!({ "at": now(), "commits": commits, "done": false });
+                let started = serde_json::json!({
+                    "at": now(),
+                    "archived_at": row.archived_at,
+                    "commits": commits,
+                    "done": false,
+                });
                 d.store.kv_set(&key, &started.to_string())?;
             }
             let git = self.git();
@@ -3145,6 +3160,90 @@ impl WorkspaceManager {
             )?;
         }
         self.get(&row.id)
+    }
+
+    /// What the agent of a reactivated exploration's chat is told with its first message since
+    /// (docs/adr/reactivate-archived-explorations.md): per repo, the commit its conversation was
+    /// about and the one checked out now. With the reactivation's `at`, to tell it once; none for
+    /// a chat opened since, or already told.
+    pub async fn moved_since_archive(&self, chat: &ChatInfo) -> Result<Option<(String, String)>> {
+        let d = self.d();
+        let Some(record) = d
+            .store
+            .kv_get(&format!("{REACTIVATION_KEY}{}", chat.workspace_id))?
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        else {
+            return Ok(None);
+        };
+        let Some(at) = record["at"].as_str() else {
+            return Ok(None);
+        };
+        if chat.created_at.as_str() >= at
+            || d.store
+                .kv_get(&format!("{REACTIVATION_TOLD_KEY}{}", chat.id))?
+                .as_deref()
+                == Some(at)
+        {
+            return Ok(None);
+        }
+        let day = |at: &str| at.get(..10).unwrap_or(at).to_string();
+        let workspace = self.row(&chat.workspace_id)?;
+        let git = self.git();
+        let mut lines = Vec::new();
+        for worktree in d.store.worktrees_of(&workspace.id)? {
+            let (Some(was), Some(now)) = (
+                record["commits"].get(&worktree.id),
+                worktree.base_commit.as_deref(),
+            ) else {
+                continue;
+            };
+            let (repo, branch) = (&worktree.repo, &worktree.base_branch);
+            lines.push(match was.as_str() {
+                Some(was) if was == now => {
+                    format!("- `{repo}` is still at `{now}` on `{branch}`, as at archive")
+                }
+                Some(was) => {
+                    let range = format!("{was}..{now}");
+                    let count = git
+                        .run(
+                            Path::new(&worktree.clone_path),
+                            &["rev-list", "--count", &range],
+                        )
+                        .await
+                        .ok()
+                        .and_then(|count| count.trim().parse::<u64>().ok());
+                    let later = match count {
+                        Some(1) => ", 1 commit later".to_string(),
+                        Some(count) => format!(", {count} commits later"),
+                        None => String::new(),
+                    };
+                    let dir = Path::new(&worktree.path);
+                    let dir = dir.strip_prefix(&workspace.path).unwrap_or(dir).display();
+                    format!(
+                        "- `{repo}` was at `{was}` at archive; it is now at `{now}` on `{branch}`{later}: `git -C {dir} log {range}` shows them"
+                    )
+                }
+                None => {
+                    let archived = record["archived_at"]
+                        .as_str()
+                        .map_or("its archive date is unknown too".to_string(), |at| {
+                            format!("archived on {}", day(at))
+                        });
+                    format!(
+                        "- `{repo}`: its commit at archive was not recorded ({archived}); it is now at `{now}` on `{branch}`"
+                    )
+                }
+            });
+        }
+        if lines.is_empty() {
+            return Ok(None);
+        }
+        let note = format!(
+            "(Chauffeur: this exploration was archived, then reactivated on {}: each repo is checked out again at its base branch as it is now, so the code may not be the one this conversation was about.\n{})\n\n",
+            day(at),
+            lines.join("\n")
+        );
+        Ok(Some((note, at.to_string())))
     }
 
     /// An archived workspace's folder made again, its notes brought back from the archive.

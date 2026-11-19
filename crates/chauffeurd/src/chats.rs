@@ -747,17 +747,28 @@ impl ChatManager {
         {
             self.close_for_briefing(&chat.id, true).await;
         }
-        // What the agent reads: a fork's conversation its agent never had, the user's shell
-        // commands the message hands over, the message, and a design chat's invalid canvas.json.
-        let text = self.with_handoff(
-            &chat,
-            crate::chat_shell::with_commands(&commands, &self.with_canvas_note(&chat, text)),
-            message.sent,
-        )?;
+        // What the agent reads: a fork's conversation its agent never had, what moved since a
+        // reactivated exploration's archive, the user's shell commands the message hands over,
+        // the message, and a design chat's invalid canvas.json.
+        let moved = d
+            .workspaces
+            .moved_since_archive(&chat)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, chat = chat.id, "could not tell what moved since the archive");
+                None
+            });
+        let mut text =
+            crate::chat_shell::with_commands(&commands, &self.with_canvas_note(&chat, text));
+        if let Some((note, _)) = &moved {
+            text.insert_str(0, note);
+        }
+        let text = self.with_handoff(&chat, text, message.sent)?;
         let text = &text;
         self.ensure_ollama(&chat).await?;
+        let mut sent = false;
         if self.is_live(&chat.id) {
-            let sent = d
+            sent = d
                 .chats
                 .sidecar
                 .call(SidecarCall::SessionSend(SessionSendParams {
@@ -766,22 +777,29 @@ impl ChatManager {
                     attachments: attachments.clone(),
                     message_id: Some(message_id.clone()),
                 }))
-                .await;
-            match sent {
-                Ok(_) => return self.current(&chat.id),
-                // The session died since: start it again below.
-                Err(_) => {
-                    self.live.lock().unwrap().remove(&chat.id);
-                }
+                .await
+                .is_ok();
+            // The session died since: start it again.
+            if !sent {
+                self.live.lock().unwrap().remove(&chat.id);
             }
         }
-        self.start_session_admitted(
-            &chat,
-            Some(text.to_string()),
-            attachments.clone(),
-            admission,
-        )
-        .await?;
+        if !sent {
+            self.start_session_admitted(
+                &chat,
+                Some(text.to_string()),
+                attachments.clone(),
+                admission,
+            )
+            .await?;
+        }
+        // Told once the agent has the message.
+        if let Some((_, at)) = &moved {
+            let key = format!("{}{}", crate::workspaces::REACTIVATION_TOLD_KEY, chat.id);
+            if let Err(error) = d.store.kv_set(&key, at) {
+                tracing::warn!(%error, chat = chat.id, "could not keep that the agent was told what moved");
+            }
+        }
         self.current(&chat.id)
     }
 

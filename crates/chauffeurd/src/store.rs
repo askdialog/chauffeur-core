@@ -1587,6 +1587,17 @@ impl Store {
         Ok(())
     }
 
+    /// The commit an exploration's checkout was at when archived.
+    pub fn set_base_commit(&self, id: &str, base_commit: &str) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE worktrees SET base_commit = ?2 WHERE id = ?1",
+                params![id, base_commit],
+            )
+        })?;
+        Ok(())
+    }
+
     pub fn set_worktree_removed(
         &self,
         id: &str,
