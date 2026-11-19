@@ -3,6 +3,7 @@
 import importlib.util
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("ci_scope", Path(__file__).with_name("ci_scope.py"))
 ci = importlib.util.module_from_spec(spec)
@@ -34,6 +35,40 @@ class Selection(unittest.TestCase):
     def test_renamed_files_include_both_old_and_new_locations(self):
         self.assertEqual(ci.scope(["crates/old.rs", "docs/old.rs"]),
                          {"rust": True, "javascript": True})
+
+    def test_documentation_only_merge_group_skips_rust_and_javascript(self):
+        with patch.object(ci.subprocess, "check_output", return_value=b"docs/SPEC.md\0"):
+            self.assertEqual(ci.select_checks("merge_group", "a" * 40, "b" * 40),
+                             {"rust": False, "javascript": False})
+
+    def test_merge_group_checks_the_whole_candidate_including_earlier_queued_changes(self):
+        base, head = "a" * 40, "b" * 40
+        with patch.object(ci.subprocess, "check_output",
+                          return_value=b"crates/daemon/src/lib.rs\0docs/SPEC.md\0") as diff:
+            self.assertEqual(ci.select_checks("merge_group", base, head),
+                             {"rust": True, "javascript": True})
+        diff.assert_called_once_with(
+            ["git", "diff", "--name-only", "--no-renames", "-z", f"{base}..{head}", "--"]
+        )
+
+    def test_pull_requests_keep_the_merge_base_and_main_keeps_full_checks(self):
+        base, head = "a" * 40, "b" * 40
+        with patch.object(ci.subprocess, "check_output",
+                          return_value=b"app/src/App.tsx\0") as diff:
+            self.assertEqual(ci.select_checks("pull_request", base, head),
+                             {"rust": False, "javascript": True})
+            for event in ("push", "workflow_dispatch"):
+                self.assertEqual(ci.select_checks(event, "", ""),
+                                 {"rust": True, "javascript": True})
+        diff.assert_called_once_with(
+            ["git", "diff", "--name-only", "--no-renames", "-z", f"{base}...{head}", "--"]
+        )
+
+    def test_merge_group_fails_closed_when_the_commit_range_is_missing(self):
+        with patch.object(ci.subprocess, "check_output") as diff:
+            with self.assertRaisesRegex(ValueError, "full Git commit IDs"):
+                ci.select_checks("merge_group", "", "b" * 40)
+        diff.assert_not_called()
 
 
 class RequiredCheck(unittest.TestCase):

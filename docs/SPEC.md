@@ -829,6 +829,8 @@ private resource access when hidden or disconnected. See [mobile-private-canvas]
 
 **Core releases (decided with Justin 2026-11-11).** Core-only artifacts use their own `core-vX.Y.Z` tags and names in the public repository. Their source and binary versions agree. Their updater and worker downloads select only Core artifacts; Dialog keeps the legacy `vX.Y.Z` channel for existing installations. Core releases do not become GitHub’s latest release. See [separate releases](adr/separate-core-and-dialog-releases.md).
 
+**Core merge queue pilot (decided with Justin 2026-11-19).** Core `main` uses GitHub's merge queue during the pilot, after Core CI supports it. A human approves and queues the PR; the queue validates the combined candidate with the existing `check` and squash-merges it when green. Packaging triggers and releases stay separate. See [Core merge queue pilot](adr/core-merge-queue-pilot.md).
+
 ### UX/UI foundations (2026-11-16)
 
 The desktop's dialogs contain keyboard focus, keep the background inert and restore the trigger;
