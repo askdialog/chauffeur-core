@@ -39,14 +39,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - kind: mac
-            runner: macos-15
-          - kind: linux
-            runner: ubuntu-24.04
-          - kind: desktop
-            runner: ubuntu-24.04
-    runs-on: ${{ matrix.runner }}
+        kind: ${{ fromJSON(github.event_name == 'pull_request' && !inputs.source_sha && '["mac","linux"]' || '["mac","linux","desktop"]') }}
+    runs-on: ${{ matrix.kind == 'mac' && 'macos-15' || 'ubuntu-24.04' }}
     timeout-minutes: 120
     env:
       CHAUFFEUR_RELEASE_CHANNEL: core
