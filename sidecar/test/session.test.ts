@@ -956,6 +956,16 @@ describe("configure and stop", () => {
     expect(host.events.filter((e) => e.type === "notice")).toEqual([]);
   });
 
+  test("auto mode refused when the chat asks for it is said once, even in its first turn", async () => {
+    const { session, query, host } = await started({ permission_mode: "default", model: "claude-haiku-4-5-20251001" });
+    query.permissionModeErrors.auto = new Error("auto mode unavailable for this model");
+    await session.configure({ permissionMode: "auto" });
+    // The first turn's status then says default: already said.
+    query.push({ type: "system", subtype: "status", status: null, permissionMode: "default", uuid: "u1", session_id: "sess-1" } as never);
+    await flush();
+    expect(host.events.filter((event) => event.type === "notice")).toHaveLength(1);
+  });
+
   test("a design chat without auto mode accepts edits instead, and says so", async () => {
     // At start, before any turn: its model is listed without auto mode.
     const host = new FakeHost();

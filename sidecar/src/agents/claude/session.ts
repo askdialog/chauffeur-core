@@ -420,6 +420,8 @@ export class ClaudeSession implements AgentSession {
       const fallback = this.params.design_dir ? "acceptEdits" : "default";
       await query.setPermissionMode(fallback);
       this.reportMode(fallback, true);
+      // Said here: not again from the first turn's mode.
+      this.autoFellBack = true;
       this.emit(notice("warning", `${AUTO_UNAVAILABLE} (${errorMessage(error)}). ${this.params.design_dir ? DESIGN_AUTO_FALLBACK : AUTO_FALLBACK}`));
     }
   }
