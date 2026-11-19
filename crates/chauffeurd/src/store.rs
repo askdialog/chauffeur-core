@@ -1750,6 +1750,25 @@ impl Store {
         Ok(inserted == 1)
     }
 
+    /// As `insert_chat`, while its workspace is still in `state`: false once it is gone or moved
+    /// on (a restore that failed since it was read), checked under the lock its state change takes.
+    pub fn insert_chat_while(&self, chat: &ChatInfo, state: WorkspaceState) -> Result<bool> {
+        let inserted = self.with(|c| {
+            let now: Option<String> = c
+                .query_row(
+                    "SELECT state FROM workspaces WHERE id = ?1",
+                    params![chat.workspace_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if now.as_deref() != Some(state.as_str()) {
+                return Ok(0);
+            }
+            insert_chat_row(c, chat)
+        })?;
+        Ok(inserted == 1)
+    }
+
     /// Inserts a chat forked from `source_id` with a copy of the source's stored events (their
     /// times kept), up to the one numbered `up_to` when given, in one transaction: the fork shows
     /// the conversation so far from its first read. `fork_sessions` are the agent sessions its

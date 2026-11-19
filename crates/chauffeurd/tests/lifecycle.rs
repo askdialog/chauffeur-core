@@ -3722,6 +3722,48 @@ async fn a_restore_that_fails_before_its_checkouts_leaves_the_workspace_to_resto
     assert_eq!(back.state, WorkspaceState::Ready, "{:?}", back.last_error);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_workspace_whose_restore_failed_takes_no_chat_and_no_message() {
+    let f = fixture(47550);
+    let d = &f.daemon;
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("failed".into()),
+            repos: vec!["repo-a".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let chat = new_chat(d, &ws.id).await;
+    // A restore that failed once a chat was read as opened in a workspace being restored.
+    d.store
+        .set_workspace_state(
+            &ws.id,
+            WorkspaceState::CleanupFailed,
+            Some("restore failed"),
+        )
+        .unwrap();
+    let late = chauffeur_protocol::model::ChatInfo {
+        id: uuid::Uuid::now_v7().to_string(),
+        ..chat.clone()
+    };
+    assert!(
+        !d.store
+            .insert_chat_while(&late, WorkspaceState::Creating)
+            .unwrap()
+    );
+    assert!(d.chats.resolve(&late.id).is_err());
+    let refused = d
+        .chats
+        .send(&chat.id, "hello")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("failed is cleanup_failed"), "{refused}");
+}
+
 async fn new_chat(d: &Daemon, workspace: &str) -> chauffeur_protocol::model::ChatInfo {
     d.chats
         .create(CreateChatParams {

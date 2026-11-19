@@ -3090,13 +3090,13 @@ impl WorkspaceManager {
         let (errors, groups) =
             restored.unwrap_or_else(|error| (vec![error.to_string()], Vec::new()));
         if !errors.is_empty() {
-            // Closed first: no message reaches a chat opened meanwhile once it failed.
-            d.chats.restore_failed(&row.id).await;
+            // Failed first: no chat is opened once its chats are closed.
             self.set_state(
                 &row.id,
                 WorkspaceState::CleanupFailed,
                 Some(format!("restore failed: {}", errors.join("; "))),
             )?;
+            d.chats.restore_failed(&row.id).await;
             return self.get(&row.id);
         }
         // Snapshots stay until expiry: restoring again after a new archive replaces them.
@@ -3193,8 +3193,7 @@ impl WorkspaceManager {
             self.unarchive_chats(&row.id)?;
             d.chats.workspace_ready(&row.id).await;
         } else {
-            // Closed first: no message reaches a chat opened meanwhile once it failed.
-            d.chats.restore_failed(&row.id).await;
+            // Failed first: no chat is opened once its chats are closed.
             self.set_state(
                 &row.id,
                 WorkspaceState::CleanupFailed,
@@ -3203,6 +3202,7 @@ impl WorkspaceManager {
                     failed.join("; ")
                 )),
             )?;
+            d.chats.restore_failed(&row.id).await;
         }
         self.get(&row.id)
     }

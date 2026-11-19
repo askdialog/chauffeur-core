@@ -494,9 +494,14 @@ impl ChatManager {
             last_activity_at: Some(chat.created_at.clone()),
             ..chat
         };
-        if !d.store.insert_chat(&chat)? {
-            // Its creation failed since the workspace was read, and took it away.
-            return Err(Error::not_found(format!("workspace {}", workspace.slug)));
+        if !d.store.insert_chat_while(&chat, workspace.state)? {
+            // Its creation failed since the workspace was read, and took it away; or its restore.
+            let now = d.workspaces.row(&workspace.id)?;
+            return Err(Error::Conflict(format!(
+                "{} is {}",
+                now.slug,
+                now.state.as_str()
+            )));
         }
         d.events
             .registry(RegistryEvent::ChatUpserted { chat: chat.clone() });
@@ -596,6 +601,17 @@ impl ChatManager {
             self.set_closed(&chat.id, false)?;
         }
         let workspace = d.workspaces.row(&chat.workspace_id)?;
+        // A chat opened while a restore ran that failed since: closing it races this message.
+        if !matches!(
+            workspace.state,
+            WorkspaceState::Ready | WorkspaceState::Creating
+        ) {
+            return Err(Error::Conflict(format!(
+                "{} is {}: its chats are read-only",
+                workspace.slug,
+                workspace.state.as_str()
+            )));
+        }
         let attachments = if images.is_empty() {
             Vec::new()
         } else {
