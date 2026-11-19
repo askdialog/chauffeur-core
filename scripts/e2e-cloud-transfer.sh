@@ -5,6 +5,9 @@
 # agent runs; nothing leaves the temporary folder.
 # REAL=1 adds a real Claude Haiku chat (this machine's login, a few cents): it remembers a word on
 # the source and must recall it on the destination. Its transcripts are forgotten afterwards.
+# VIBE=1 adds a real Mistral Vibe chat (this machine's Vibe login, on its plan): it goes to the
+# destination and comes back, recalling its word each time. Each daemon has a Vibe home of its own
+# in the temporary folder, as two machines would.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 cargo build -q -p chauffeurd -p chauffeur-cli
@@ -81,6 +84,7 @@ name = "vm"
 socket = "$T/dst/home/chauffeurd.sock"
 TOML
   fi
+  [ -z "${VIBE:-}" ] || export VIBE_HOME="$T/$name/vibe"
   # The source reminds of a workspace left idle on another machine after 4 s, not an hour.
   if [ "$name" = src ]; then
     CHAUFFEUR_IDLE_REMINDER_SECS=4 on "$name" daemon start >/dev/null
@@ -578,5 +582,28 @@ done
 on src --json show elder | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["state"]=="archived", w'
 on src --json show kid | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["state"]=="archived" and not w.get("moved_to"), w'
 if on dst show kid >/dev/null 2>&1; then echo "the archived child's copy is still on vm"; exit 1; fi
+
+if [ -n "${VIBE:-}" ]; then
+  # Needs Mistral Vibe installed and signed in here (its key is in the keychain, not its home).
+  echo "== vibe. a Mistral Vibe conversation goes, recalls its word there, and comes back"
+  on src new --name vibing >/dev/null
+  on src chat vibing --agent vibe --prompt "Remember the word papaya. Reply with the single word ok." >/dev/null
+  on src --json wait vibing --timeout 240 >/dev/null
+  VIBE_SESSION=$(on src --json chats vibing | python3 -c 'import sys,json; c=json.load(sys.stdin)["chats"][0]; assert c["agent"]=="vibe", c; print(c["agent_session_id"])')
+  transfer vibing >/dev/null 2>"$T/vibing.out" || { cat "$T/vibing.out"; exit 1; }
+  test -f "$T/dst/vibe/logs/session/unified/$VIBE_SESSION/CURRENT"
+  recall() {
+    on src send vibing "Which word did I ask you to remember? Reply with that word only." >/dev/null
+    on src --json wait vibing --timeout 240 | python3 -c 'import sys,json; t=json.load(sys.stdin)["last_text"]; print(t); assert "papaya" in (t or "").lower(), t'
+  }
+  recall
+  echo "== vibe. back, its session replaced the copy it left here, and nothing waits set aside"
+  on src cloud transfer vibing --back >/dev/null 2>"$T/vibing-back.out" || { cat "$T/vibing-back.out"; exit 1; }
+  test ! -e "$T/src/vibe/logs/session/chauffeur-replaced"
+  recall
+  # The copy it left there goes whole, with what Vibe wrote there beside the restored files.
+  for _ in $(seq 60); do [ -e "$T/dst/vibe/logs/session/unified/$VIBE_SESSION" ] || break; sleep 1; done
+  if [ -e "$T/dst/vibe/logs/session/unified/$VIBE_SESSION" ]; then echo "the Vibe session left on vm is still there"; exit 1; fi
+fi
 
 echo "E2E CLOUD TRANSFER OK"

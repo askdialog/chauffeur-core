@@ -161,7 +161,8 @@ export function createDispatcher(
     "context.restore": (params) => {
       const p = object(params);
       if (!Array.isArray(p.contexts) || p.contexts.length > 4096) throw new RpcError(ErrorCode.BAD_REQUEST, "Invalid native restoration entries");
-      return restoreContexts({ claude_home: string(p, "claude_home"), codex_home: string(p, "codex_home"), contexts: p.contexts.map((value: unknown) => {
+      const vibeHome = p.vibe_home === undefined || p.vibe_home === null ? undefined : string(p, "vibe_home");
+      return restoreContexts({ claude_home: string(p, "claude_home"), codex_home: string(p, "codex_home"), ...(vibeHome ? { vibe_home: vibeHome } : {}), contexts: p.contexts.map((value: unknown) => {
         const entry = object(value);
         if (typeof entry.bytes !== "number") throw new RpcError(ErrorCode.BAD_REQUEST, "Invalid native restoration size");
         return { agent: agentKind(entry.agent), session_id: string(entry, "session_id"), cwd: string(entry, "cwd"),

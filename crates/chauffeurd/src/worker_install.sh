@@ -44,6 +44,19 @@ if [ -d /etc/apparmor.d ]; then
     "$HOME/.local/lib/codex/codex-resources/bwrap" | sudo tee /etc/apparmor.d/chauffeur-codex-bwrap >/dev/null
   sudo apparmor_parser -r /etc/apparmor.d/chauffeur-codex-bwrap
 fi
+# Mistral Vibe from its standalone release, at the version the sidecar was tried with
+# (sidecar/src/version.ts), checked against the archive's SHA-256: the sidecar runs ~/.local/bin/vibe-acp.
+VIBE_VERSION=3.1.3
+VIBE_SHA256=b683cc19fc4c68f24eb1699c1b42aaad89d42fe69be37a45179542106b0d6342
+if [ "$(cat ~/.local/lib/vibe/version 2>/dev/null)" != "$VIBE_VERSION" ]; then
+  rm -rf ~/.local/lib/vibe /tmp/chauffeur-vibe.tar.gz && mkdir -p ~/.local/lib/vibe
+  curl -fsSL "https://github.com/mistralai/mistral-vibe/releases/download/v$VIBE_VERSION/vibe-acp-linux-x86_64-$VIBE_VERSION.tar.gz" -o /tmp/chauffeur-vibe.tar.gz
+  echo "$VIBE_SHA256  /tmp/chauffeur-vibe.tar.gz" | sha256sum -c --quiet -
+  tar -xzf /tmp/chauffeur-vibe.tar.gz -C ~/.local/lib/vibe
+  rm -f /tmp/chauffeur-vibe.tar.gz
+  echo "$VIBE_VERSION" > ~/.local/lib/vibe/version
+fi
+ln -sfn ~/.local/lib/vibe/vibe-acp ~/.local/bin/vibe-acp
 # Docker with compose, for the workspace's declared services (docs/workspace-development-services.md),
 # from Ubuntu's own packages. The daemon reaches it as a member of the `docker` group.
 if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then

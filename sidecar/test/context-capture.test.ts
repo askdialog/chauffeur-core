@@ -187,3 +187,20 @@ test("a backup carries a subagent transcript with no complete line yet as nothin
   expect(await f.dispatch("context.capture", params(f, { ...ask, output: join(f.out, "again.json") })))
     .toEqual(expect.objectContaining({ outcome: "blocked" }));
 });
+
+test("a Vibe chat's session is captured from its Vibe home and restored into the destination's, through the daemon's calls", async () => {
+  const f = fixture();
+  const vibeId = "4a65d61b-56bd-e9e8-85c9-4f35815089dc";
+  f.write(`home/.vibe/logs/session/unified/${vibeId}/CURRENT`, '{"generation":"1"}\n');
+  f.write(`home/.vibe/logs/session/unified/${vibeId}/journal/0000000000000001.jsonl`, "");
+  const output = join(f.out, "vibe.json");
+  expect(await f.dispatch("context.capture", params(f, { agent: "vibe", session_id: vibeId, output }))).toMatchObject({ outcome: "captured" });
+  const bytes = readFileSync(output);
+  const vibe_home = join(f.root, "machine", ".vibe");
+  const entry = { agent: "vibe", session_id: vibeId, cwd: f.cwd, path: output, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length };
+  const homes = { claude_home: join(f.root, "machine", ".claude"), codex_home: join(f.root, "machine", ".codex") };
+  // Without the destination's Vibe home, a Vibe conversation has nowhere to go.
+  await expect(f.dispatch("context.restore", { ...homes, contexts: [entry] })).rejects.toThrow("Native restoration is incomplete or unsafe");
+  await f.dispatch("context.restore", { ...homes, vibe_home, contexts: [entry] });
+  expect(readFileSync(join(vibe_home, `logs/session/unified/${vibeId}/CURRENT`), "utf8")).toBe('{"generation":"1"}\n');
+});

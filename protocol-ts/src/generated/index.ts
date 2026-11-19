@@ -443,6 +443,7 @@ export type { RenameChatParams } from "./RenameChatParams";
 export type { RenameSectionParams } from "./RenameSectionParams";
 export type { RenameTerminalParams } from "./RenameTerminalParams";
 export type { RenameWorkspaceParams } from "./RenameWorkspaceParams";
+export type { ReplacedFolder } from "./ReplacedFolder";
 export type { Replay } from "./Replay";
 export type { RepoDiff } from "./RepoDiff";
 export type { RepoInfo } from "./RepoInfo";

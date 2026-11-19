@@ -531,6 +531,10 @@ pub async fn destination_check(
                 AgentKind::Codex => ("Codex", "codex login"),
                 AgentKind::Vibe => ("Mistral Vibe", "vibe --setup"),
             };
+            if let Some(why) = daemon.usage.missing(agent) {
+                problems.push(format!("{name} is not installed on {machine}: {why}"));
+                continue;
+            }
             match usage.iter().find(|u| u.agent == agent) {
                 Some(u) if u.account == AccountStatus::SignedIn => {}
                 Some(u) if u.account == AccountStatus::SignedOut && params.sign_in_from_caller => {

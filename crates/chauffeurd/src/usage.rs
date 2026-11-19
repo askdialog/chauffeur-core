@@ -62,6 +62,11 @@ impl Usage {
     /// Why `agent` cannot take new work now, from the last reading (never read again here): it is
     /// not installed, signed out, or one of its plan's own windows (`5h`, `7d`, not a model's) is
     /// used up to `SPENT_PERCENT` and not reset yet. None when it can, or nothing is known.
+    /// Why the agent's CLI is not installed here, as the last read said; none when it is.
+    pub fn missing(&self, agent: AgentKind) -> Option<String> {
+        self.entries.lock().unwrap().get(&agent)?.missing.clone()
+    }
+
     pub fn spent(&self, agent: AgentKind) -> Option<String> {
         let entries = self.entries.lock().unwrap();
         let entry = entries.get(&agent)?;

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use chauffeur_protocol::events::RegistryEvent;
-use chauffeur_protocol::sidecar::ContextRestoreResult;
+use chauffeur_protocol::sidecar::{ContextRestoreResult, ReplacedFolder};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
@@ -55,14 +55,103 @@ pub(crate) struct NativeFiles {
     pub files: Vec<String>,
     /// Outermost first; removed only once empty.
     pub folders: Vec<String>,
+    /// Vibe session folders this restoration set aside for the conversations it carried back:
+    /// deleted once it succeeded, put back when the return fails.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaced: Vec<ReplacedFolder>,
 }
 
+/// Where the sidecar sets a replaced Vibe session folder aside, inside the Vibe home.
+const REPLACED_FOLDER: &str = "logs/session/chauffeur-replaced";
+
 impl NativeFiles {
-    pub(crate) fn new(homes: [String; 2], added: ContextRestoreResult) -> NativeFiles {
+    pub(crate) fn new(homes: Vec<String>, added: ContextRestoreResult) -> NativeFiles {
         NativeFiles {
-            homes: homes.into(),
+            homes,
             files: added.files,
             folders: added.folders,
+            replaced: added.replaced,
+        }
+    }
+
+    /// Whether `replaced` is a session folder of a home, set aside where the sidecar sets them.
+    fn set_aside_by_us(&self, replaced: &ReplacedFolder) -> bool {
+        let plain = |path: &Path| {
+            path.components()
+                .all(|c| matches!(c, Component::RootDir | Component::Normal(_)))
+        };
+        let (path, aside) = (Path::new(&replaced.path), Path::new(&replaced.aside));
+        plain(path)
+            && plain(aside)
+            && self.homes.iter().any(|home| {
+                let home = Path::new(home);
+                aside.parent() == Some(&home.join(REPLACED_FOLDER))
+                    && path.parent() == Some(&home.join("logs/session/unified"))
+            })
+    }
+
+    /// Whether `path` is a session folder of a Vibe home among the homes (`<home>/logs/session/
+    /// unified/<session id>`).
+    fn is_vibe_session(&self, path: &Path) -> bool {
+        let named = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name.len() == 36 && name.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+            });
+        named
+            && self
+                .homes
+                .iter()
+                .any(|home| path.parent() == Some(&Path::new(home).join("logs/session/unified")))
+    }
+
+    /// Deletes the folders set aside: the restoration that replaced them succeeded. One already
+    /// gone is fine; one that is not where the sidecar sets them aside stays.
+    pub(crate) fn drop_replaced(&self) {
+        for replaced in &self.replaced {
+            if !self.set_aside_by_us(replaced) {
+                tracing::warn!(
+                    path = replaced.aside,
+                    "a recorded replaced folder is not where Chauffeur sets them aside; it stays"
+                );
+                continue;
+            }
+            let aside = Path::new(&replaced.aside);
+            if std::fs::symlink_metadata(aside).is_ok_and(|m| m.is_dir())
+                && let Err(error) = std::fs::remove_dir_all(aside)
+            {
+                tracing::warn!(%error, path = replaced.aside, "could not delete a replaced Vibe session");
+            }
+            // The folder for them, once empty, goes too.
+            if let Some(parent) = aside.parent() {
+                let _ = std::fs::remove_dir(parent);
+            }
+        }
+    }
+
+    /// Puts the folders set aside back, once what the failed return wrote in their place is gone
+    /// (`remove`). A place still taken keeps its folder aside, logged.
+    pub(crate) fn put_back_replaced(&self) {
+        for replaced in self.replaced.iter().rev() {
+            if !self.set_aside_by_us(replaced) {
+                continue;
+            }
+            let (path, aside) = (Path::new(&replaced.path), Path::new(&replaced.aside));
+            if std::fs::symlink_metadata(aside).is_err() {
+                continue;
+            }
+            if std::fs::symlink_metadata(path).is_ok() {
+                tracing::warn!(
+                    path = replaced.path,
+                    aside = replaced.aside,
+                    "a Vibe session's place is taken; its earlier copy stays set aside"
+                );
+                continue;
+            }
+            if let Err(error) = std::fs::rename(aside, path) {
+                tracing::warn!(%error, path = replaced.path, "could not put a Vibe session back");
+            }
         }
     }
 
@@ -98,6 +187,7 @@ impl NativeFiles {
             homes: self.homes.clone(),
             files: kept(&self.files, old.map(|old| &old.files)),
             folders: kept(&self.folders, old.map(|old| &old.folders)),
+            replaced: self.replaced.clone(),
         }
     }
 
@@ -151,6 +241,21 @@ impl NativeFiles {
                 Err(error) => return Err(error).with_context(|| format!("could not read {file}")),
             }
         }
+        // A Vibe session folder the restoration made holds what Vibe wrote there since, beside
+        // what was restored (it rewrites its sessions): the whole folder goes with the copy.
+        for folder in &self.folders {
+            let path = Path::new(folder);
+            if inside(path)
+                && self.is_vibe_session(path)
+                && path
+                    .canonicalize()
+                    .is_ok_and(|resolved| resolved.as_path() == path)
+                && std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir())
+            {
+                std::fs::remove_dir_all(path)
+                    .with_context(|| format!("could not remove {folder}"))?;
+            }
+        }
         for folder in self.folders.iter().rev() {
             let path = Path::new(folder);
             // Through no symlink either: an ancestor's would lead outside the home.
@@ -166,6 +271,28 @@ impl NativeFiles {
         }
         Ok(())
     }
+}
+
+/// What the restoration `operation` of the workspace recorded it wrote into the native homes.
+pub(crate) fn recorded(
+    daemon: &Daemon,
+    workspace_id: &str,
+    operation: &str,
+) -> Option<NativeFiles> {
+    let raw: Option<String> = daemon
+        .store
+        .with(|c| {
+            c.query_row(
+                "SELECT native_files FROM workspace_restores WHERE workspace_id=?1 AND operation_id=?2",
+                params![workspace_id, operation],
+                |r| r.get(0),
+            )
+            .optional()
+            .map(Option::flatten)
+        })
+        .ok()
+        .flatten();
+    serde_json::from_str(&raw?).ok()
 }
 
 /// The committed transfer's packages, archive and preparation folder on this machine, plaintext
@@ -551,9 +678,10 @@ mod tests {
             homes: vec![text(&home)],
             files: vec![text(&empty.join("restored.jsonl"))],
             folders: vec![text(&empty)],
+            replaced: Vec::new(),
         };
         let files = NativeFiles::new(
-            [text(&home), text(&root.join("home/.codex"))],
+            vec![text(&home), text(&root.join("home/.codex"))],
             ContextRestoreResult {
                 files: vec![
                     text(&written),
@@ -567,6 +695,7 @@ mod tests {
                     text(&project),
                     text(&home.join("projects/through/empty")),
                 ],
+                ..Default::default()
             },
         )
         .merged(Some(&old));
@@ -587,5 +716,75 @@ mod tests {
         );
         assert!(home.is_dir(), "a home is never removed");
         files.remove().unwrap();
+    }
+
+    #[test]
+    fn vibe_sessions_set_aside_are_put_back_after_a_failed_return_or_deleted_after_a_success() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().canonicalize().unwrap().join("vibe");
+        let session = home.join("logs/session/unified/4a65d61b-56bd-e9e8-85c9-4f35815089dc");
+        let aside =
+            home.join("logs/session/chauffeur-replaced/4a65d61b-56bd-e9e8-85c9-4f35815089dc-abc");
+        let setup = || {
+            let _ = std::fs::remove_dir_all(&home);
+            std::fs::create_dir_all(&aside).unwrap();
+            std::fs::write(aside.join("CURRENT"), "before\n").unwrap();
+            std::fs::create_dir_all(home.join("logs/session/unified")).unwrap();
+        };
+        let text = |p: &Path| p.to_str().unwrap().to_owned();
+        let files = NativeFiles {
+            homes: vec![text(&home)],
+            replaced: vec![ReplacedFolder {
+                path: text(&session),
+                aside: text(&aside),
+            }],
+            ..Default::default()
+        };
+        setup();
+        files.put_back_replaced();
+        assert_eq!(
+            std::fs::read_to_string(session.join("CURRENT")).unwrap(),
+            "before\n"
+        );
+        assert!(!aside.exists());
+
+        setup();
+        std::fs::create_dir_all(&session).unwrap();
+        files.put_back_replaced();
+        assert!(aside.exists(), "a place still taken keeps its folder aside");
+
+        setup();
+        files.drop_replaced();
+        assert!(!aside.exists());
+        assert!(!home.join("logs/session/chauffeur-replaced").exists());
+
+        // Retired, a copy takes its whole Vibe session folder, with what Vibe wrote there since.
+        setup();
+        std::fs::create_dir_all(session.join("journal")).unwrap();
+        std::fs::write(
+            session.join("journal/0000000000000033.jsonl"),
+            "written there\n",
+        )
+        .unwrap();
+        let retired = NativeFiles {
+            homes: vec![text(&home)],
+            folders: vec![text(&session)],
+            ..Default::default()
+        };
+        retired.remove().unwrap();
+        assert!(!session.exists());
+
+        // A record that points elsewhere than where the sidecar sets folders aside is left alone.
+        setup();
+        let elsewhere = NativeFiles {
+            homes: vec![text(&home)],
+            replaced: vec![ReplacedFolder {
+                path: text(&session),
+                aside: text(&home.join("logs")),
+            }],
+            ..Default::default()
+        };
+        elsewhere.drop_replaced();
+        assert!(home.join("logs").exists());
     }
 }

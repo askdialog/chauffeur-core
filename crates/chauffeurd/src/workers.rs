@@ -687,7 +687,11 @@ async fn install(daemon: &Daemon, record: &Record, bundle: &Path) -> anyhow::Res
         "gcloud compute scp",
     )
     .await?;
-    log(daemon, name, "Installing Chauffeur, Claude Code and Codex");
+    log(
+        daemon,
+        name,
+        "Installing Chauffeur, Claude Code, Codex and Mistral Vibe",
+    );
     let output = ssh_script(daemon, record, INSTALL).await?;
     let home = output
         .lines()
@@ -3383,6 +3387,20 @@ sleep 60 & wait
         assert!(
             INSTALL.contains(&format!("\nCODEX_VERSION={version}\n")),
             "worker_install.sh installs another Codex than {version}"
+        );
+    }
+
+    #[test]
+    fn workers_install_the_vibe_the_sidecar_was_tried_with() {
+        let sidecar = include_str!("../../../sidecar/src/version.ts");
+        let version = sidecar
+            .lines()
+            .find_map(|l| l.strip_prefix("export const VIBE_VERSION = \""))
+            .and_then(|rest| rest.strip_suffix("\";"))
+            .expect("the sidecar names its Vibe version");
+        assert!(
+            INSTALL.contains(&format!("\nVIBE_VERSION={version}\n")),
+            "worker_install.sh installs another Vibe than {version}"
         );
     }
 

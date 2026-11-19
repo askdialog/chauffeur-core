@@ -8,17 +8,19 @@ import type { ContextRestoreParams, ContextRestoreResult } from "../protocol.ts"
 import { addContextFiles, canonicalDirectory, undoContextFiles, type Added } from "./context-files.ts";
 import { claudeContextFiles, claudeProjectKey, isClaudeProjectKey } from "./claude/context-bundle.ts";
 import { codexContextFiles } from "./codex/context-bundle.ts";
+import { missingVibeFiles, putBackVibeSessions, setAsideVibeSession, vibeContextFiles, type Replaced } from "./vibe/context-bundle.ts";
 
 const MAX_BYTES = 512 * 1024 * 1024;
 const failure = () => new Error("Native restoration is incomplete or unsafe; retain the package and inspect the native homes before retrying");
 
 /** Returns what it created, so that discarding the copy later removes exactly that. */
 export async function restoreContexts(params: ContextRestoreParams): Promise<ContextRestoreResult> {
-  for (const home of [params.claude_home, params.codex_home]) {
+  for (const home of [params.claude_home, params.codex_home, ...(params.vibe_home ? [params.vibe_home] : [])]) {
     if (!isAbsolute(home) || resolve(home) !== home) throw failure();
   }
   const claude = new Map<string, Map<string, { serialized: string; value: unknown }>>();
   const codex: unknown[] = [];
+  const vibe = new Map<string, Array<{ path: string; bytes: Buffer }>>();
   let total = 0;
   for (const entry of params.contexts) {
     if (!Number.isSafeInteger(entry.bytes) || entry.bytes <= 0 || (total += entry.bytes) > MAX_BYTES
@@ -52,10 +54,16 @@ export async function restoreContexts(params: ContextRestoreParams): Promise<Con
       sessions.set(entry.session_id, { serialized, value });
       claude.set(key, sessions);
     } else if (entry.agent === "codex") codex.push(value);
-    else throw failure();
+    else if (entry.agent === "vibe" && params.vibe_home) {
+      const { sessionId, files } = vibeContextFiles(value);
+      // Two copies of one conversation in a package: nothing says which one goes.
+      if (vibe.has(sessionId)) throw failure();
+      vibe.set(sessionId, files);
+    } else throw failure();
   }
   // Everything is validated before the first file is written; a failure takes back what it added.
   const added: Added = [];
+  const replaced: Replaced[] = [];
   try {
     if (claude.size) await home(params.claude_home, added);
     for (const [key, sessions] of claude) {
@@ -64,13 +72,23 @@ export async function restoreContexts(params: ContextRestoreParams): Promise<Con
       await addContextFiles(files.map((file) => ({ ...file, path: `projects/${key}/${file.path}` })), params.claude_home, added);
     }
     if (codex.length) await addContextFiles(codexContextFiles(codex), await home(params.codex_home, added), added);
+    if (vibe.size && params.vibe_home) {
+      const vibeHome = await home(params.vibe_home, added);
+      for (const [sessionId, files] of vibe) {
+        const aside = await setAsideVibeSession(vibeHome, sessionId, added);
+        if (aside) replaced.push(aside);
+        await addContextFiles(await missingVibeFiles(vibeHome, files), vibeHome, added);
+      }
+    }
   } catch (error) {
     await undoContextFiles(added);
+    await putBackVibeSessions(replaced);
     throw error;
   }
   return {
     files: added.filter((entry) => !entry.folder && entry.extendedFrom === undefined).map((entry) => entry.path),
     folders: added.filter((entry) => entry.folder && !entry.home).map((entry) => entry.path),
+    ...(replaced.length ? { replaced } : {}),
   };
 }
 

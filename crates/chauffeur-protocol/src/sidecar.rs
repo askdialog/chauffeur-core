@@ -408,6 +408,11 @@ pub struct ContextRestoreParams {
     /// conversations: files are added there, never replaced.
     pub claude_home: String,
     pub codex_home: String,
+    /// The destination's Vibe home (`VIBE_HOME`, else `~/.vibe`); absent from older daemons,
+    /// which carry no Vibe conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub vibe_home: Option<String>,
     pub contexts: Vec<ContextRestoreEntry>,
 }
 
@@ -434,6 +439,20 @@ pub struct ContextRestoreResult {
     /// The folders it created inside a home, absolute, outermost first.
     #[serde(default)]
     pub folders: Vec<String>,
+    /// Vibe session folders it set aside for the carried ones: a conversation coming back
+    /// replaces the copy it left, which Vibe rewrote (see docs/adr/mistral-vibe-third-agent.md).
+    /// The daemon deletes them once the transfer is done, or puts them back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<ReplacedFolder>>", optional)]
+    pub replaced: Vec<ReplacedFolder>,
+}
+
+/// A folder set aside, absolute, and where it waits.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[ts(export)]
+pub struct ReplacedFolder {
+    pub path: String,
+    pub aside: String,
 }
 
 /// A conversation that cannot be carried is `blocked`, with nothing written; a failure of the

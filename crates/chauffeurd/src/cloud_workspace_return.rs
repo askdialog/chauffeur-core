@@ -761,6 +761,8 @@ pub(crate) fn put_back(
         if let Err(error) = added.without(old.as_ref()).remove() {
             tracing::warn!(%error, "could not remove the conversation files a failed return added");
         }
+        // The Vibe sessions the attempt set aside come back to their place, now free.
+        added.put_back_replaced();
     }
     // The attempt's private folder is kept as evidence, out of the way of a retry.
     let attempt = daemon.paths.home.join("restorations").join(operation);

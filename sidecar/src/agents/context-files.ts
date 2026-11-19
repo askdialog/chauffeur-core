@@ -13,8 +13,9 @@ export async function canonicalDirectory(path: string): Promise<void> {
 }
 /** With `live`, a transcript still being appended (a running chat's, for a backup) is read as it
  * stood when opened, up to its last complete line (empty when it has none yet); any other file
- * must hold still as before. */
-export async function readContextFile(home: string, path: string, live = false): Promise<Buffer> {
+ * must hold still as before. `linked` accepts a file with several hard links (Vibe links its
+ * plugin store's files to their blobs): the caller then checks its content against its digest. */
+export async function readContextFile(home: string, path: string, live = false, linked = false): Promise<Buffer> {
   if (!safePath(path)) throw failure();
   const appended = live && path.endsWith(".jsonl");
   // The stopped source is trusted. Check ancestors plus O_NOFOLLOW on the file, then
@@ -24,7 +25,7 @@ export async function readContextFile(home: string, path: string, live = false):
   const file = await open(full, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = await file.stat();
-    if (!before.isFile() || before.size > MAX_FILE || before.nlink !== 1) throw failure();
+    if (!before.isFile() || before.size > MAX_FILE || (before.nlink !== 1 && !linked)) throw failure();
     if (before.size < 1 && !appended) throw failure();
     const bytes = Buffer.alloc(before.size + 1);
     let size = 0;

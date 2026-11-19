@@ -317,7 +317,10 @@ async fn restore_inner(
             }
         }
         let homes = native_homes(daemon, contexts)?;
-        let (claude_home, codex_home) = (homes.claude_home.clone(), homes.codex_home.clone());
+        let written_homes: Vec<String> = [Some(homes.claude_home.clone()), Some(homes.codex_home.clone()), homes.vibe_home.clone()]
+            .into_iter()
+            .flatten()
+            .collect();
         let added: ContextRestoreResult = serde_json::from_value(
             daemon
                 .chats
@@ -328,10 +331,7 @@ async fn restore_inner(
         .context("unexpected answer from the sidecar to a native restoration")?;
         // Recorded at once, with what the copy it replaces had added: discarding this copy one
         // day removes exactly those files, and a failure below takes back this attempt's.
-        let native_files = crate::cloud_workspace_discard::NativeFiles::new(
-            [claude_home, codex_home],
-            added,
-        )
+        let native_files = crate::cloud_workspace_discard::NativeFiles::new(written_homes, added)
         .merged(old_native_files.as_ref());
         daemon.store.durable(|c| {
             c.execute(
@@ -416,6 +416,16 @@ async fn restore_inner(
         Ok::<_, anyhow::Error>(restored)
     }
     .await;
+    if outcome.is_ok() {
+        // The Vibe sessions the carried ones replaced are no longer needed.
+        if let Some(written) = crate::cloud_workspace_discard::recorded(
+            daemon,
+            &manifest.workspace.id,
+            &transfer.operation_id,
+        ) {
+            written.drop_replaced();
+        }
+    }
     if let Some(retired) = &retired {
         return match outcome {
             Ok(mut restored) => {
@@ -458,10 +468,11 @@ fn path_text(path: &Path) -> anyhow::Result<String> {
         .to_owned())
 }
 
-/// The destination's own Claude and Codex homes, as its agents resolve them: the sidecar and
-/// its agents get exactly this scrubbed environment, so `CLAUDE_CONFIG_DIR` when set, else
-/// `~/.claude`; and `~/.codex`, since the scrub drops every `CODEX_` variable, `CODEX_HOME`
-/// included (looked up anyway, should that change). The user logs in there once per machine.
+/// The destination's own Claude, Codex and Vibe homes, as its agents resolve them: the sidecar
+/// and its agents get exactly this scrubbed environment, so `CLAUDE_CONFIG_DIR` when set, else
+/// `~/.claude`; `~/.codex`, since the scrub drops every `CODEX_` variable, `CODEX_HOME`
+/// included (looked up anyway, should that change); `VIBE_HOME` when set, else `~/.vibe`. The
+/// user logs in there once per machine.
 fn native_homes(
     daemon: &Daemon,
     contexts: Vec<ContextRestoreEntry>,
@@ -483,9 +494,11 @@ fn native_homes(
     };
     let claude = canonical(set("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")))?;
     let codex = canonical(set("CODEX_HOME").unwrap_or_else(|| home.join(".codex")))?;
+    let vibe = canonical(set("VIBE_HOME").unwrap_or_else(|| home.join(".vibe")))?;
     Ok(ContextRestoreParams {
         claude_home: path_text(&claude)?.to_owned(),
         codex_home: path_text(&codex)?.to_owned(),
+        vibe_home: Some(path_text(&vibe)?.to_owned()),
         contexts,
     })
 }

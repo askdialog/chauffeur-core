@@ -1159,7 +1159,7 @@ pub fn verify(package: &Path) -> anyhow::Result<Package> {
                 "Unexpected conversation file"
             );
             ensure!(
-                chat.info.agent == AgentKind::Claude || chat.info.agent == AgentKind::Codex,
+                AgentKind::ALL.contains(&chat.info.agent),
                 "Unsupported agent"
             );
             check(&context.file, MAX_CONTEXT_BYTES)?;

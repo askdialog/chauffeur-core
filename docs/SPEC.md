@@ -594,7 +594,11 @@ send (2026-10-31, see docs/adr/worker-github-and-aws-access.md), and its Claude 
 docs/adr/credential-vault-removed.md): the user runs `claude login` /
 `codex login` once on it, never an API key chosen silently. So restored conversations
 go into the destination's normal native homes (`~/.claude`, `~/.codex`, or the
-`CLAUDE_CONFIG_DIR` its agents get) as new files, never replacing one. On the way back
+`CLAUDE_CONFIG_DIR` its agents get) as new files, never replacing one; a Mistral Vibe
+conversation goes into `~/.vibe` (or `VIBE_HOME`) with the plugins it pins, and, since Vibe
+rewrites its session folder, coming back over the copy it left replaces that folder whole, set
+aside until the restoration succeeded and put back on a failed return (2026-11-18, see
+docs/adr/vibe-sessions-replaced-on-return.md). On the way back
 (2026-10-26), as the journal's next transfer after the one that retired a copy, the
 returning version replaces that retired copy: same folder and
 workspace, conversations continued; the copy is removed only once the return is

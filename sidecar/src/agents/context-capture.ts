@@ -8,19 +8,24 @@ import { constants } from "node:fs";
 import { lstat, open, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import type { ContextCaptureParams, ContextCaptureResult } from "../protocol.ts";
+import type { AgentKind, ContextCaptureParams, ContextCaptureResult } from "../protocol.ts";
 import { captureClaudeContext, claudeProjectKey } from "./claude/context-bundle.ts";
 import { captureCodexContext } from "./codex/context-bundle.ts";
+import { captureVibeContext } from "./vibe/context-bundle.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_SCAN = 100_000;
 const missing = () => new Error("The conversation's native history was not found exactly once; keep it on this computer and inspect the agent's sessions folder");
 
 /** The native folders a chat's agent uses: its own environment over the sidecar's. */
-export function nativeHome(agent: "claude" | "codex", env: Record<string, string | undefined>): string {
+export function nativeHome(agent: AgentKind, env: Record<string, string | undefined>): string {
   const home = env.HOME || homedir();
-  const dir = agent === "claude" ? (env.CLAUDE_CONFIG_DIR || join(home, ".claude")) : (env.CODEX_HOME || join(home, ".codex"));
-  return resolve(home, dir);
+  const dirs: Record<AgentKind, string> = {
+    claude: env.CLAUDE_CONFIG_DIR || join(home, ".claude"),
+    codex: env.CODEX_HOME || join(home, ".codex"),
+    vibe: env.VIBE_HOME || join(home, ".vibe"),
+  };
+  return resolve(home, dirs[agent]);
 }
 
 /** The single rollout file named for `sessionId` under `sessions/` or `archived_sessions/`. */
@@ -59,10 +64,10 @@ export async function captureContext(
   const parent = dirname(output);
   if (await realpath(parent).catch(() => "") !== parent || !(await lstat(parent)).isDirectory()) throw unusable();
   let bundle: unknown;
-  // Vibe keeps its sessions in ~/.vibe/logs/session, which a transfer does not carry yet.
-  if (params.agent === "vibe") return { outcome: "blocked", reason: "Mistral Vibe chats do not move to another machine yet: keep this workspace on this computer" };
   try {
-    if (params.agent === "claude") {
+    if (params.agent === "vibe") {
+      bundle = await captureVibeContext(await existing(nativeHome("vibe", env)), params.session_id, params.live === true);
+    } else if (params.agent === "claude") {
       const projects = join(await existing(nativeHome("claude", env)), "projects");
       bundle = await captureClaudeContext(projects, await claudeProjectKey(params.cwd), params.session_id, params.live === true);
     } else {

@@ -6,4 +6,9 @@ export type ContextRestoreParams = {
  * The destination's own native homes, where its agents read their login and
  * conversations: files are added there, never replaced.
  */
-claude_home: string, codex_home: string, contexts: Array<ContextRestoreEntry>, };
+claude_home: string, codex_home: string, 
+/**
+ * The destination's Vibe home (`VIBE_HOME`, else `~/.vibe`); absent from older daemons,
+ * which carry no Vibe conversation.
+ */
+vibe_home?: string, contexts: Array<ContextRestoreEntry>, };
