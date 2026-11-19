@@ -41,6 +41,9 @@ pub struct WorkspaceManager {
 /// How long a new workspace's worktrees wait for its name before keeping the generated one; the
 /// repos are fetched meanwhile.
 const NAMING_WAIT: Duration = Duration::from_secs(15);
+/// `kv` key prefix of an exploration's last reactivation, by workspace: when, and the commit each
+/// checkout was at before (`{"at": …, "commits": {<worktree id>: <commit or null>}}`).
+pub const REACTIVATION_KEY: &str = "reactivated:";
 /// `kv` key prefix of the last local-settings notice said, by workspace and repo.
 const LOCAL_SETTINGS_NOTICE_KEY: &str = "local-settings-notice:";
 /// A fetch this recent is not repeated.
@@ -1747,17 +1750,8 @@ impl WorkspaceManager {
         let lock = d.repos.lock_for(&repo.clone_path);
         let _guard = lock.lock().await;
         if !self.fetched_lately(&repo.clone_path) {
-            self.progress(&row.id, format!("fetching {}", repo.name));
-            match git.fetch(&repo.clone_path, &repo.default_branch).await {
-                Ok(_) => self.mark_fetched(&repo.clone_path),
-                Err(error) => self.warn(
-                    &row.id,
-                    format!(
-                        "could not fetch {}, using the local state: {error:#}",
-                        repo.name
-                    ),
-                ),
-            }
+            self.fetch_base(&row.id, &repo.clone_path, &repo.name, &repo.default_branch)
+                .await;
         }
         if row.explore {
             return self.add_explore_worktree(row, &repo, path).await;
@@ -1885,6 +1879,18 @@ impl WorkspaceManager {
             },
         );
         Ok(worktree)
+    }
+
+    /// Fetches a clone's base `branch`; a failure is said, the local state used.
+    async fn fetch_base(&self, workspace: &str, clone: &Path, repo: &str, branch: &str) {
+        self.progress(workspace, format!("fetching {repo}"));
+        match self.git().fetch(clone, branch).await {
+            Ok(_) => self.mark_fetched(clone),
+            Err(error) => self.warn(
+                workspace,
+                format!("could not fetch {repo}, using the local state: {error:#}"),
+            ),
+        }
     }
 
     /// Checks a clone's base branch out at `path`, detached, as its remote has it when known: an
@@ -3023,8 +3029,29 @@ impl WorkspaceManager {
 
     /// Brings an archived exploration back (docs/adr/reactivate-archived-explorations.md): its
     /// folder and notes, each repo fetched and checked out detached at its base branch as it is
-    /// now, its chats idle; no setup and no ports, as a new exploration.
+    /// now, its chats idle; no setup and no ports, as a new exploration. Whatever fails leaves it
+    /// `cleanup_failed`, to reactivate again.
     async fn reactivate(&self, row: WorkspaceRow) -> Result<WorkspaceInfo> {
+        self.set_state(&row.id, WorkspaceState::Creating, None)?;
+        let failed = match self.reactivate_checkouts(&row).await {
+            Ok(failed) => failed,
+            Err(error) => vec![error.to_string()],
+        };
+        if failed.is_empty() {
+            self.set_state(&row.id, WorkspaceState::Ready, None)?;
+        } else {
+            self.set_state(
+                &row.id,
+                WorkspaceState::CleanupFailed,
+                Some(format!("reactivation failed: {}", failed.join("; "))),
+            )?;
+        }
+        self.get(&row.id)
+    }
+
+    /// The checkouts of a reactivation, and its chats set idle once they are all back; the repos
+    /// that could not be checked out.
+    async fn reactivate_checkouts(&self, row: &WorkspaceRow) -> Result<Vec<String>> {
         let d = self.d();
         let checkouts: Vec<WorktreeRow> = d
             .store
@@ -3032,28 +3059,36 @@ impl WorkspaceManager {
             .into_iter()
             .filter(|w| w.removed && w.origin == WorktreeOrigin::Workspace)
             .collect();
-        self.set_state(&row.id, WorkspaceState::Creating, None)?;
-        self.bring_back_folder(&row)?;
+        self.bring_back_folder(row)?;
+        // The commits the chats talked about, for the agents to be told what moved since.
+        let before: BTreeMap<&str, Option<&str>> = checkouts
+            .iter()
+            .map(|w| (w.id.as_str(), w.base_commit.as_deref()))
+            .collect();
+        d.store.kv_set(
+            &format!("{REACTIVATION_KEY}{}", row.id),
+            &serde_json::json!({ "at": now(), "commits": before }).to_string(),
+        )?;
         let git = self.git();
-        let mut errors = Vec::new();
+        let mut failed = Vec::new();
         for worktree in &checkouts {
             let clone = Path::new(&worktree.clone_path);
             let lock = d.repos.lock_for(clone);
             let _guard = lock.lock().await;
-            self.progress(&row.id, format!("fetching {}", worktree.repo));
-            match git.fetch(clone, &worktree.base_branch).await {
-                Ok(()) => self.mark_fetched(clone),
-                Err(error) => self.warn(
-                    &row.id,
-                    format!(
-                        "could not fetch {} ({error:#}): its checkout is at {} as the clone last saw it",
-                        worktree.repo, worktree.base_branch
-                    ),
-                ),
-            }
-            let checkout = self
-                .checkout_base_detached(clone, Path::new(&worktree.path), &worktree.base_branch)
+            self.fetch_base(&row.id, clone, &worktree.repo, &worktree.base_branch)
                 .await;
+            // A checkout removed by hand before the archive is still registered in the clone.
+            let checkout = match git.run(clone, &["worktree", "prune"]).await {
+                Ok(_) => {
+                    self.checkout_base_detached(
+                        clone,
+                        Path::new(&worktree.path),
+                        &worktree.base_branch,
+                    )
+                    .await
+                }
+                Err(error) => Err(error),
+            };
             match checkout {
                 Ok(commit) => {
                     d.store
@@ -3068,21 +3103,14 @@ impl WorkspaceManager {
                         },
                     );
                 }
-                Err(error) => errors.push(format!("{}: {error:#}", worktree.repo)),
+                Err(error) => failed.push(format!("{}: {error:#}", worktree.repo)),
             }
         }
         self.regenerate_config(&row.id)?;
-        if !errors.is_empty() {
-            self.set_state(
-                &row.id,
-                WorkspaceState::CleanupFailed,
-                Some(format!("reactivation failed: {}", errors.join("; "))),
-            )?;
-            return self.get(&row.id);
+        if failed.is_empty() {
+            self.unarchive_chats(&row.id)?;
         }
-        self.unarchive_chats(&row.id)?;
-        self.set_state(&row.id, WorkspaceState::Ready, None)?;
-        self.get(&row.id)
+        Ok(failed)
     }
 
     /// An archived workspace's folder made again, its notes brought back from the archive.

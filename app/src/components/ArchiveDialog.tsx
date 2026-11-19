@@ -87,7 +87,7 @@ export function ArchiveDialog({
           {workspace.explore ? (
             <p>
               Archiving stops the exploration's agents and processes and removes its checkouts; your clones are untouched.
-              Chats stay readable. To explore again, start a new exploration.
+              Chats stay readable. Restore brings it back on its repos' base branches as they are then.
             </p>
           ) : (
             <p>

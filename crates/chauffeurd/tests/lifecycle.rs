@@ -3079,6 +3079,9 @@ async fn an_archived_exploration_is_reactivated_on_its_base_branch_as_it_is_now(
     let checkout = root.join("repo-a");
     std::fs::write(root.join(".chauffeur/findings.md"), "a finding\n").unwrap();
     let chat = new_chat(d, &ws.id).await;
+    let at_archive = git(&checkout, &["rev-parse", "HEAD"]).trim().to_string();
+    // A checkout removed by hand: still registered in the clone.
+    std::fs::remove_dir_all(&checkout).unwrap();
     d.workspaces.archive(&ws.slug, false).await.unwrap();
     eventually("the exploration to be archived", || {
         d.workspaces.get(&ws.id).unwrap().state == WorkspaceState::Archived
@@ -3121,8 +3124,59 @@ async fn an_archived_exploration_is_reactivated_on_its_base_branch_as_it_is_now(
     let status = chats.iter().find(|c| c.id == chat.id).unwrap().status;
     assert_eq!(status, ChatStatus::Idle);
     // As a new exploration: no setup, no ports.
-    assert!(!checkout.join("setup-ran.txt").exists());
+    assert!(
+        d.procs
+            .list(&ws.id)
+            .iter()
+            .all(|p| p.kind != chauffeur_protocol::events::ProcessKind::Setup),
+        "{:?}",
+        d.procs.list(&ws.id)
+    );
     assert_eq!(restored.port_count, 0);
+    // What the chats talked about, kept for their agents to be told what moved.
+    let kept: serde_json::Value = serde_json::from_str(
+        &d.store
+            .kv_get(&format!(
+                "{}{}",
+                chauffeurd::workspaces::REACTIVATION_KEY,
+                ws.id
+            ))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        kept["commits"][&worktrees[0].id],
+        serde_json::json!(at_archive)
+    );
+
+    // A repo that cannot be checked out leaves it cleanup_failed, to reactivate again.
+    d.workspaces.archive(&ws.slug, true).await.unwrap();
+    eventually("the exploration to be archived again", || {
+        d.workspaces.get(&ws.id).unwrap().state == WorkspaceState::Archived
+    })
+    .await;
+    // Its folder cannot be made again (a file in its way): cleanup_failed too, never creating.
+    std::fs::write(&root, "in the way").unwrap();
+    let blocked = d.workspaces.restore(&ws.slug).await.unwrap();
+    assert_eq!(blocked.state, WorkspaceState::CleanupFailed);
+    std::fs::remove_file(&root).unwrap();
+    let clone = f.root.join("clones/repo-a");
+    let away = f.root.join("clones/repo-a-away");
+    std::fs::rename(&clone, &away).unwrap();
+    let failed = d.workspaces.restore(&ws.slug).await.unwrap();
+    assert_eq!(failed.state, WorkspaceState::CleanupFailed);
+    assert!(
+        failed
+            .last_error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("reactivation failed: repo-a")),
+        "{:?}",
+        failed.last_error
+    );
+    std::fs::rename(&away, &clone).unwrap();
+    let again = d.workspaces.restore(&ws.slug).await.unwrap();
+    assert_eq!(again.state, WorkspaceState::Ready, "{:?}", again.last_error);
 }
 
 async fn new_chat(d: &Daemon, workspace: &str) -> chauffeur_protocol::model::ChatInfo {

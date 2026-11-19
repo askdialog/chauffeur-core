@@ -226,7 +226,8 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
-    /// Restore an archived workspace from its snapshots.
+    /// Restore an archived workspace from its snapshots, or reactivate an archived exploration on
+    /// its base branches as they are now.
     Restore { workspace: String },
     /// Change the name a workspace is shown with (its folder and branch keep theirs); no name
     /// shows the folder name again.

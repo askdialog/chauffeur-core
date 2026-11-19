@@ -78,8 +78,10 @@ function Header({ workspace, session }: { workspace: WorkspaceInfo; session: Wor
   const restore = async () => {
     setRestoring(true);
     try {
-      upsertWorkspace(await client.call("workspace.restore", { workspace: workspace.id }));
-      toast(`${workspaceName(workspace)} restored`);
+      const restored = await client.call("workspace.restore", { workspace: workspace.id });
+      upsertWorkspace(restored);
+      if (restored.state === "cleanup_failed") toast(`Could not restore ${workspaceName(workspace)}: ${restored.last_error ?? "see its log"}`, "error");
+      else toast(`${workspaceName(workspace)} restored`);
     } catch (error) {
       toast(`Could not restore: ${errorMessage(error)}`, "error");
     } finally {

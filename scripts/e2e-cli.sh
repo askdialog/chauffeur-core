@@ -566,7 +566,7 @@ c --json show e2e-back | python3 -c 'import sys,json; w=json.load(sys.stdin); as
 test "$(git -C "$BACK/alpha" rev-parse HEAD)" = "$LATER"
 test "$(git -C "$BACK/alpha" rev-parse --abbrev-ref HEAD)" = HEAD
 test "$(cat "$BACK/.chauffeur/finding.md")" = "a finding"
-test ! -e "$BACK/alpha/.conductor-setup-ran"
+c --json show e2e-back | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["port_count"] == 0, w'
 c archive e2e-back --force >/dev/null
 
 echo "== update. a newer release replaces the app the daemon runs from"
