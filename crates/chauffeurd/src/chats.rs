@@ -494,7 +494,13 @@ impl ChatManager {
             last_activity_at: Some(chat.created_at.clone()),
             ..chat
         };
-        if !d.store.insert_chat_while(&chat, workspace.state)? {
+        // Being created, it may be ready by now: the chat then starts below.
+        let open: &[WorkspaceState] = if creating {
+            &[WorkspaceState::Creating, WorkspaceState::Ready]
+        } else {
+            &[WorkspaceState::Ready]
+        };
+        if !d.store.insert_chat_while(&chat, open)? {
             // Its creation failed since the workspace was read, and took it away; or its restore.
             let now = d.workspaces.row(&workspace.id)?;
             return Err(Error::Conflict(format!(
@@ -515,7 +521,11 @@ impl ChatManager {
             if prompt.is_some() || !images.is_empty() {
                 self.hold_first_message(&chat, &workspace, prompt.unwrap_or_default(), &images)?;
             }
-            return Ok(chat);
+            // Ready since it was read: its readiness may have gone by without this chat.
+            if d.workspaces.row(&workspace.id)?.state == WorkspaceState::Ready {
+                self.workspace_ready(&workspace.id).await;
+            }
+            return self.current(&chat.id);
         }
         if prompt.is_some() || !images.is_empty() {
             let prompt = prompt.unwrap_or_default();

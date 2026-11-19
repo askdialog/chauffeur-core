@@ -3105,12 +3105,17 @@ impl WorkspaceManager {
         }
         // Ready first: a message to a chat back from the archive never waits for a ready state.
         self.set_state(&row.id, WorkspaceState::Ready, None)?;
-        self.unarchive_chats(&row.id)?;
-        self.start_setup_scripts(&row.id, None)?;
-        for group in &groups {
-            self.start_setup_scripts(&row.id, Some(group))?;
-        }
+        let back = (|| {
+            self.unarchive_chats(&row.id)?;
+            self.start_setup_scripts(&row.id, None)?;
+            for group in &groups {
+                self.start_setup_scripts(&row.id, Some(group))?;
+            }
+            Ok::<_, Error>(())
+        })();
+        // Whatever failed since, the chats opened meanwhile start.
         d.chats.workspace_ready(&row.id).await;
+        back?;
         self.get(&row.id)
     }
 
@@ -3190,8 +3195,10 @@ impl WorkspaceManager {
         if failed.is_empty() {
             // Ready first: a message to a chat back from the archive never waits for a ready state.
             self.set_state(&row.id, WorkspaceState::Ready, None)?;
-            self.unarchive_chats(&row.id)?;
+            let back = self.unarchive_chats(&row.id);
+            // Whatever failed since, the chats opened meanwhile start.
             d.chats.workspace_ready(&row.id).await;
+            back?;
         } else {
             // Failed first: no chat is opened once its chats are closed.
             self.set_state(

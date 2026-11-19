@@ -3737,6 +3737,13 @@ async fn a_workspace_whose_restore_failed_takes_no_chat_and_no_message() {
         .unwrap()
         .workspace;
     let chat = new_chat(d, &ws.id).await;
+    // Read as being created, it may be ready by now: the chat is taken.
+    let open = [WorkspaceState::Creating, WorkspaceState::Ready];
+    let early = chauffeur_protocol::model::ChatInfo {
+        id: uuid::Uuid::now_v7().to_string(),
+        ..chat.clone()
+    };
+    assert!(d.store.insert_chat_while(&early, &open).unwrap());
     // A restore that failed once a chat was read as opened in a workspace being restored.
     d.store
         .set_workspace_state(
@@ -3749,11 +3756,7 @@ async fn a_workspace_whose_restore_failed_takes_no_chat_and_no_message() {
         id: uuid::Uuid::now_v7().to_string(),
         ..chat.clone()
     };
-    assert!(
-        !d.store
-            .insert_chat_while(&late, WorkspaceState::Creating)
-            .unwrap()
-    );
+    assert!(!d.store.insert_chat_while(&late, &open).unwrap());
     assert!(d.chats.resolve(&late.id).is_err());
     let refused = d
         .chats
