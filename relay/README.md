@@ -276,6 +276,11 @@ mobile sessions. Authorized Macs re-register their remembered devices
 automatically. A removed address can no longer register devices or generate
 pairing codes. UI sign-in and approval on the Mac remain required to pair a new
 phone. Existing operator clients can continue using the relay during rollout.
+After the Macs have upgraded, set `MOBILE_REQUIRE_GOOGLE=true` and restart the
+relay to require a Google grant for new pairing and device renewals. This stops
+older builds from registering with the shared operator credential. For the
+cloud smoke test in this mode, supply an authorized desktop Google ID token
+in `RELAY_GOOGLE_ID_TOKEN`.
 
 ```sh
 bun run build:host

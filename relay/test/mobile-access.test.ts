@@ -103,11 +103,21 @@ test("applying a policy without a former guest disconnects a live phone and bloc
     original.stop();
     expect(await disconnected).toBeInstanceOf(Error);
 
-    const updated = startRelay({ adminToken, port: 0, mobileAccess: accessWith([]) });
+    const updated = startRelay({ adminToken, port: 0, mobileAccess: accessWith([]), requireGoogle: true });
     try {
       const updatedAddress = `127.0.0.1:${updated.server.port}`;
       expect((await register(updatedAddress)).status).toBe(401);
       expect((await fetch(`http://${updatedAddress}/v1/devices/${device.deviceId}`)).status).toBe(404);
+      const createRoom = (token: string) => fetch(`http://${updatedAddress}/v1/rooms`, {
+        method: "POST", headers: { Authorization: `Bearer ${token}` },
+      });
+      expect((await createRoom(adminToken)).status).toBe(401);
+      expect((await fetch(`http://${updatedAddress}/v1/devices`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify(device),
+      })).status).toBe(401);
+      expect((await createRoom(await sign(member))).status).toBe(201);
     } finally { updated.stop(); }
   } finally { original.stop(); }
 });

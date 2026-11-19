@@ -37,7 +37,7 @@ export type RelayLog = {
   reason?: "invalid_frame" | "peer_unavailable" | "backpressure" | "send_failed" | "peer_timeout" | "push_unregistered" | "push_delivery_failed";
 };
 
-export function startRelay(options: { adminToken: string; mobileAccess?: (token: string) => Promise<MobileGrant | null>; hostname?: string; port?: number; maxRooms?: number; roomLifetimeMs?: number; diagnostic?: (message: string) => void; telemetry?: (event: RelayLog) => void; peerTimeoutMs?: number; voice?: (signal: AbortSignal) => Promise<string>; voiceTimeoutMs?: number; push?: (message: PushMessage) => Promise<"ok"|"unregistered"> }) {
+export function startRelay(options: { adminToken: string; mobileAccess?: (token: string) => Promise<MobileGrant | null>; requireGoogle?: boolean; hostname?: string; port?: number; maxRooms?: number; roomLifetimeMs?: number; diagnostic?: (message: string) => void; telemetry?: (event: RelayLog) => void; peerTimeoutMs?: number; voice?: (signal: AbortSignal) => Promise<string>; voiceTimeoutMs?: number; push?: (message: PushMessage) => Promise<"ok"|"unregistered"> }) {
   if (!/^[A-Za-z0-9_-]{43,128}$/.test(options.adminToken)) {
     throw new Error("RELAY_ADMIN_TOKEN must be a randomly generated token of at least 32 bytes");
   }
@@ -105,7 +105,9 @@ export function startRelay(options: { adminToken: string; mobileAccess?: (token:
   }
 
   async function hostGrant(request: Request) {
-    return isAdmin(request) ? { subject: undefined, expiresAt: Infinity } : mobileGrant(request);
+    return !options.requireGoogle && isAdmin(request)
+      ? { subject: undefined, expiresAt: Infinity }
+      : mobileGrant(request);
   }
 
   const server = Bun.serve<SocketData>({
@@ -226,9 +228,11 @@ export function startRelay(options: { adminToken: string; mobileAccess?: (token:
       const match = /^\/v1\/(rooms|devices)\/([A-Za-z0-9_-]{22})$/.exec(url.pathname);
       const key = match ? `${match[1]}/${match[2]}` : "";
       if (request.method === "DELETE" && match?.[1] === "devices") {
-        const grant = await hostGrant(request);
-        const room = rooms.get(key);
-        if (!grant || (grant.subject && room && room.owner !== grant.subject)) return new Response("Unauthorized", { status: 401, headers });
+        if (!isAdmin(request)) {
+          const grant = await mobileGrant(request);
+          const room = rooms.get(key);
+          if (!grant || (room && room.owner !== grant.subject)) return new Response("Unauthorized", { status: 401, headers });
+        }
         endRoom(key); return new Response("ok", { headers });
       }
       if (request.method === "GET" && match && !url.search) {

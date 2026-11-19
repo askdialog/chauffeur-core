@@ -115,6 +115,7 @@ if [[ -e /etc/chauffeur-relay.env ]]; then
       MOBILE_GOOGLE_CLIENT_ID) [[ "$value" =~ ^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$ ]] || exit 1 ;;
       MOBILE_GOOGLE_WORKSPACE) [[ "$value" =~ ^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$ ]] || exit 1 ;;
       MOBILE_INVITED_EMAILS) [[ "$value" =~ ^[a-zA-Z0-9_.+@,-]*$ ]] || exit 1 ;;
+      MOBILE_REQUIRE_GOOGLE) [[ "$value" == true || "$value" == false ]] || exit 1 ;;
       *) continue ;;
     esac
     printf '%s=%s\n' "$name" "$value" >> "$relay_env"

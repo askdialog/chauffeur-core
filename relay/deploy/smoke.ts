@@ -1,5 +1,5 @@
 // Explicit cloud probe: ephemeral identities and synthetic data only. The
-// operator credential is supplied via the environment, never printed.
+// host credential is supplied via the environment, never printed.
 import { strict as assert } from "node:assert";
 import {
   generateIdentity, joinRelay, peerIdFromPrivateKey, randomToken, relayUrl,
@@ -7,13 +7,14 @@ import {
 } from "@chauffeur/remote";
 
 const origin = relayUrl(process.env.RELAY_ORIGIN ?? "").origin;
-const token = process.env.RELAY_ADMIN_TOKEN;
-assert(token, "RELAY_ADMIN_TOKEN required");
+const token = process.env.RELAY_GOOGLE_ID_TOKEN || process.env.RELAY_ADMIN_TOKEN;
+assert(token, "Set RELAY_GOOGLE_ID_TOKEN for a managed relay or RELAY_ADMIN_TOKEN for an operator relay");
 const http = origin.replace(/^ws/, "http");
 assert.equal((await fetch(`${http}/health`)).status, 200);
 assert.equal((await fetch(`${http}/v1/rooms`, { method: "POST" })).status, 401);
 const response = await fetch(`${http}/v1/rooms`, {
   method: "POST", headers: { Authorization: `Bearer ${token}` },
+  redirect: "error",
 });
 assert.equal(response.status, 201);
 const room = await response.json() as { room: string; hostToken: string; phoneToken: string; expiresAt: number };

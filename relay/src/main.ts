@@ -63,13 +63,18 @@ const apns = appleFields.every(Boolean)
 const mobileAudience = process.env.MOBILE_GOOGLE_CLIENT_ID;
 const mobileWorkspace = process.env.MOBILE_GOOGLE_WORKSPACE;
 const mobileInvitations = process.env.MOBILE_INVITED_EMAILS;
-if ((mobileAudience || mobileWorkspace || mobileInvitations) && (!mobileAudience || !mobileWorkspace))
+const googleRequired = process.env.MOBILE_REQUIRE_GOOGLE;
+if (googleRequired !== undefined && googleRequired !== "true" && googleRequired !== "false")
+  throw new Error("Set MOBILE_REQUIRE_GOOGLE to true or false.");
+const requireGoogle = googleRequired === "true";
+if ((mobileAudience || mobileWorkspace || mobileInvitations || requireGoogle) && (!mobileAudience || !mobileWorkspace))
   throw new Error("Set MOBILE_GOOGLE_CLIENT_ID and MOBILE_GOOGLE_WORKSPACE together.");
 const relay = startRelay({
   adminToken,
   port,
   hostname: process.env.RELAY_HOST ?? "127.0.0.1",
   telemetry: log,
+  requireGoogle,
   mobileAccess: mobileAudience && mobileWorkspace
     ? googleMobileAccess(mobileAudience, mobileWorkspace.toLowerCase(), mobileInvitations?.split(",") ?? [])
     : undefined,
