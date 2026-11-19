@@ -3118,6 +3118,7 @@ impl WorkspaceManager {
                 .collect();
             self.bring_back_folder(&row)?;
             let mut record = self.start_reactivation(&row, &checkouts)?;
+            self.keep_reactivations(&row.id, &record)?;
             let git = self.git();
             let mut failed = Vec::new();
             for worktree in &checkouts {
@@ -3190,13 +3191,13 @@ impl WorkspaceManager {
     }
 
     /// The record of a reactivation that starts: the commits the chats talked about, for their
-    /// agents to be told what moved. A try again of one that did not end keeps its record.
+    /// agents to be told what moved. A try again of one that did not end gets its record back.
     fn start_reactivation(
         &self,
         row: &WorkspaceRow,
         checkouts: &[WorktreeRow],
     ) -> Result<Reactivations> {
-        let record = match self.reactivations(&row.id)? {
+        Ok(match self.reactivations(&row.id)? {
             Some(unfinished) if !unfinished.done => unfinished,
             before => Reactivations {
                 last: Reactivation {
@@ -3212,9 +3213,7 @@ impl WorkspaceManager {
                     .map(|before| [before.earlier, vec![before.last]].concat())
                     .unwrap_or_default(),
             },
-        };
-        self.keep_reactivations(&row.id, &record)?;
-        Ok(record)
+        })
     }
 
     fn keep_reactivations(&self, workspace: &str, record: &Reactivations) -> Result<()> {
@@ -3268,7 +3267,8 @@ impl WorkspaceManager {
                 missed.commits.get(&worktree.id),
                 worktree.base_commit.as_deref(),
             ) {
-                lines.push(moved_line(&git, &worktree, was.as_deref(), now, missed).await);
+                let archived_at = missed.archived_at.as_deref();
+                lines.push(moved_line(&git, &worktree, was.as_deref(), now, archived_at).await);
             }
         }
         if lines.is_empty() {
@@ -3459,23 +3459,20 @@ pub fn activity(statuses: impl Iterator<Item = ChatStatus>) -> Activity {
     }
 }
 
-/// What moved in one repo since the archive `missed` followed: the commit at archive (`was`),
-/// the one checked out now, and how to read the commits between them.
+/// What moved in one repo since its archive (`archived_at`): the commit then (`was`), the one
+/// checked out now, and how to read the commits between them.
 async fn moved_line(
     git: &Git,
     worktree: &WorktreeRow,
     was: Option<&str>,
     now: &str,
-    missed: &Reactivation,
+    archived_at: Option<&str>,
 ) -> String {
     let (repo, branch) = (&worktree.repo, &worktree.base_branch);
     let Some(was) = was else {
-        let archived = missed
-            .archived_at
-            .as_deref()
-            .map_or("its archive date is unknown too".to_string(), |at| {
-                format!("archived on {}", day(at))
-            });
+        let archived = archived_at.map_or("its archive date is unknown too".to_string(), |at| {
+            format!("archived on {}", day(at))
+        });
         return format!(
             "- `{repo}`: its commit at archive was not recorded ({archived}); it is now at `{now}` on `{branch}`"
         );
