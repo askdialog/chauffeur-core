@@ -24,9 +24,11 @@ cleanup() { "$BIN/chauffeur" daemon stop >/dev/null 2>&1 || true; rm -rf "$T"; }
 trap cleanup EXIT
 
 for name in alpha beta; do
-  mkdir -p "$T/seed/$name" && git -C "$T/seed/$name" init -q -b main
+  mkdir -p "$T/seed/$name"
+  git -C "$T/seed/$name" init -q -b main
   echo "$name" > "$T/seed/$name/README.md"
-  git -C "$T/seed/$name" add -A && git -C "$T/seed/$name" commit -q -m init
+  git -C "$T/seed/$name" add -A
+  git -C "$T/seed/$name" commit -q -m init
   git clone -q --bare "$T/seed/$name" "$T/origin/$name.git"
   git clone -q "$T/origin/$name.git" "$T/clones/$name"
 done
@@ -275,7 +277,9 @@ if c chat e2e-one --from "$FIRST" 2>/dev/null; then echo "a chat that is not a d
 # Its canvas: canvas.json read from its folder, the screens served on their own origin only.
 c canvas "$DESIGN" | has "no screens yet"
 DDIR="$CHAUFFEUR_WORKSPACES_DIR/e2e-one/.chauffeur/designs/$DESIGN"
-mkdir -p "$DDIR" && echo '<p>signed out</p>' > "$DDIR/signed-out.html" && echo 'x' > "$DDIR/notes.txt"
+mkdir -p "$DDIR"
+echo '<p>signed out</p>' > "$DDIR/signed-out.html"
+echo 'x' > "$DDIR/notes.txt"
 echo '{"pages": [{"name": "Login", "sections": [{"title": "Sign in", "screens": [{"file": "signed-out.html", "label": "Signed out"}, {"file": "gone.html"}]}]}]}' > "$DDIR/canvas.json"
 c canvas "$DESIGN" | has "gone.html  390×844  \[missing\]"
 URL=$(c --json canvas "$DESIGN" | python3 -c '
@@ -290,11 +294,11 @@ test "$(curl -s -o /dev/null -w '%{http_code}' "${URL%signed-out.html}notes.txt"
 if EXPORT_ERROR=$(c export "$DESIGN" gone.html 2>&1); then
   echo "an export of a missing screen was accepted"; exit 1
 fi
-printf '%s\n' "$EXPORT_ERROR" | has "gone.html is missing from the design folder"
+grep -q "gone.html is missing from the design folder" <<< "$EXPORT_ERROR"
 if EXPORT_ERROR=$(c export "$DESIGN" other.html 2>&1); then
   echo "an export of an unlisted screen was accepted"; exit 1
 fi
-printf '%s\n' "$EXPORT_ERROR" | has "other.html is not a screen of this design"
+grep -q "other.html is not a screen of this design" <<< "$EXPORT_ERROR"
 if c export "$DESIGN" 2>/dev/null; then echo "an export without screens was accepted"; exit 1; fi
 # Comments (story 51): on a screen of the canvas, in comments.json, listed by screen; a reply follows its thread.
 c comments "$DESIGN" | has "no comments yet"
@@ -337,7 +341,8 @@ if c share-file e2e-one .chauffeur/plans/plan.md --with bob@example.com 2>/dev/n
 if c share-file e2e-one .chauffeur/comments.json 2>/dev/null; then echo "a file that is not markdown had a share state"; exit 1; fi
 if c share-file e2e-one .chauffeur/plans/plan.md --stop 2>/dev/null; then echo "an unshared file was stopped"; exit 1; fi
 # The capture script only on a screen framed by the app (capture=1), never on the file nor on a plain fetch.
-curl -s "$URL" | has "chauffeur:element" && { echo "the capture script was served without capture=1"; exit 1; }
+PLAIN=$(curl -sf "$URL")
+if has "chauffeur:element" <<< "$PLAIN"; then echo "the capture script was served without capture=1"; exit 1; fi
 curl -s "$URL?capture=1" | has "chauffeur:element"
 grep -q "chauffeur:element" "$DDIR/signed-out.html" && { echo "the capture script was written into the file"; exit 1; }
 c chat delete "$DESIGN" --yes >/dev/null
@@ -468,7 +473,9 @@ sleep 1.5
 c new --name e2e-prs >/dev/null
 for sub in sub-1 sub-2; do
   SUB=$(c --json worktree add --workspace e2e-prs --repo alpha --name $sub | python3 -c 'import sys,json; print(json.load(sys.stdin)["path"])')
-  echo $sub > "$SUB/alpha/$sub.txt" && git -C "$SUB/alpha" add -A && git -C "$SUB/alpha" commit -q -m $sub
+  echo $sub > "$SUB/alpha/$sub.txt"
+  git -C "$SUB/alpha" add -A
+  git -C "$SUB/alpha" commit -q -m $sub
 done
 c --json prs e2e-prs | python3 -c '
 import sys, json
@@ -522,7 +529,8 @@ c archive e2e-prs --force >/dev/null
 c new --explore --name e2e-look >/dev/null
 LOOK="$CHAUFFEUR_WORKSPACES_DIR/e2e-look"
 echo scribble >> "$LOOK/alpha/README.md"
-mkdir -p "$LOOK/beta/.cache" && touch "$LOOK/beta/.cache/out"
+mkdir -p "$LOOK/beta/.cache"
+touch "$LOOK/beta/.cache/out"
 if c promote e2e-look 2> "$T/promote.err"; then echo "promoted with leftovers"; exit 1; fi
 # Creation timestamps and saved repo order can change the display order of leftovers.
 python3 - "$T/promote.err" <<'PY_CHECK'

@@ -32,7 +32,8 @@ trap cleanup EXIT
 echo "throwaway folder: $T"
 # gamma is in no workspace at first: an agent proposes it (step 3c).
 for name in alpha beta gamma; do
-  mkdir -p "$T/seed/$name" && git -C "$T/seed/$name" init -q -b main
+  mkdir -p "$T/seed/$name"
+  git -C "$T/seed/$name" init -q -b main
   echo "# $name" > "$T/seed/$name/README.md"
   if [ "$name" = alpha ]; then
     # A repo's own skill: sessions start above the repos and must still see it.
@@ -49,7 +50,8 @@ for name in alpha beta gamma; do
 def chunk(kind, data): return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 rows = b"".join(b"\x00" + b"\xff\x00\x00" * 8 for _ in range(8))
 sys.stdout.buffer.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 8, 8, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))' > "$T/seed/alpha/pixel.png"
-  git -C "$T/seed/$name" add -A && git -C "$T/seed/$name" commit -q -m init
+  git -C "$T/seed/$name" add -A
+  git -C "$T/seed/$name" commit -q -m init
   git clone -q --bare "$T/seed/$name" "$T/origin/$name.git"
   git clone -q "$T/origin/$name.git" "$T/clones/$name"
 done
@@ -611,7 +613,9 @@ print(len(hits), "matching messages in the closed fork")' "$TURN_FORK"
 # must see it.
 git clone -q "$T/origin/alpha.git" "$T/pusher"
 echo "The secret word is MARKER-42." > "$T/pusher/STAGING.md"
-git -C "$T/pusher" add -A && git -C "$T/pusher" commit -q -m "staging marker" && git -C "$T/pusher" push -q origin main
+git -C "$T/pusher" add -A
+git -C "$T/pusher" commit -q -m "staging marker"
+git -C "$T/pusher" push -q origin main
 CLONE_HEAD=$(git -C "$T/clones/alpha" rev-parse HEAD)
 # Its checkouts' HEADs, to tell that nothing moved them.
 heads() { for r in alpha beta; do git -C "$CHAUFFEUR_WORKSPACES_DIR/$1/$r" rev-parse HEAD; done; }
@@ -630,7 +634,8 @@ c send explore-one "Use your Write tool (not the shell) to create alpha/scratch.
 c wait explore-one --timeout 240 | tail -4
 test ! -e "$CHAUFFEUR_WORKSPACES_DIR/explore-one/alpha/scratch.txt"
 test "$(heads explore-one)" = "$BEFORE"
-if git -C "$T/clones/alpha" log --all --format=%s | has explore-commit; then echo "the exploration's commit reached the clone"; exit 1; fi
+CLONE_LOG=$(git -C "$T/clones/alpha" log --all --format=%s)
+if has explore-commit <<< "$CLONE_LOG"; then echo "the exploration's commit reached the clone"; exit 1; fi
 c --json chats explore-one | python3 -c '
 import sys,json; chats=json.load(sys.stdin)["chats"]
 assert all(c["permission_mode"] == "plan" for c in chats), chats'
@@ -715,7 +720,8 @@ assert not again, ("asked again after Always allow", again)' "$REQ"
 test -s "$PLANS/notes-a.md" || { echo "notes-a.md was not written"; exit 1; }
 test -s "$PLANS/notes-b.md" || { echo "notes-b.md was not written though Write was called and not asked"; exit 1; }
 # A new agent session of the chat (here after a daemon restart) keeps the rule.
-c daemon stop >/dev/null && c daemon start >/dev/null
+c daemon stop >/dev/null
+c daemon start >/dev/null
 insist_write notes-c.md \
   "Use your Write tool to create $PLANS/notes-c.md containing c. $INSIST Do not call ExitPlanMode. Reply with the single word written." \
   "You did not call your Write tool. $INSIST Use it now to create $PLANS/notes-c.md containing c. Do not call ExitPlanMode. Reply with the single word written."
