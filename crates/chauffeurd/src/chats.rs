@@ -494,9 +494,20 @@ impl ChatManager {
             last_activity_at: Some(chat.created_at.clone()),
             ..chat
         };
-        if !d.store.insert_chat(&chat)? {
-            // Its creation failed since the workspace was read, and took it away.
-            return Err(Error::not_found(format!("workspace {}", workspace.slug)));
+        // Being created, it may be ready by now: the chat then starts below.
+        let open: &[WorkspaceState] = if creating {
+            &[WorkspaceState::Creating, WorkspaceState::Ready]
+        } else {
+            &[WorkspaceState::Ready]
+        };
+        if !d.store.insert_chat_while(&chat, open)? {
+            // Its creation failed since the workspace was read, and took it away; or its restore.
+            let now = d.workspaces.row(&workspace.id)?;
+            return Err(Error::Conflict(format!(
+                "{} is {}",
+                now.slug,
+                now.state.as_str()
+            )));
         }
         d.events
             .registry(RegistryEvent::ChatUpserted { chat: chat.clone() });
@@ -510,7 +521,11 @@ impl ChatManager {
             if prompt.is_some() || !images.is_empty() {
                 self.hold_first_message(&chat, &workspace, prompt.unwrap_or_default(), &images)?;
             }
-            return Ok(chat);
+            // Ready since it was read: its readiness may have gone by without this chat.
+            if d.workspaces.row(&workspace.id)?.state == WorkspaceState::Ready {
+                self.workspace_ready(&workspace.id).await;
+            }
+            return self.current(&chat.id);
         }
         if prompt.is_some() || !images.is_empty() {
             let prompt = prompt.unwrap_or_default();
@@ -596,6 +611,17 @@ impl ChatManager {
             self.set_closed(&chat.id, false)?;
         }
         let workspace = d.workspaces.row(&chat.workspace_id)?;
+        // A chat opened while a restore ran that failed since: closing it races this message.
+        if !matches!(
+            workspace.state,
+            WorkspaceState::Ready | WorkspaceState::Creating
+        ) {
+            return Err(Error::Conflict(format!(
+                "{} is {}: its chats are read-only",
+                workspace.slug,
+                workspace.state.as_str()
+            )));
+        }
         let attachments = if images.is_empty() {
             Vec::new()
         } else {
@@ -615,9 +641,17 @@ impl ChatManager {
                 self.publish_queue(&chat)?;
                 return self.current(&chat.id);
             }
-            // Failed, it took the chat away (not found); done, the message goes as to a ready
-            // workspace.
+            // A creation that failed took the chat away (not found), a restore that failed left the
+            // workspace archived; done, the message goes as to a ready workspace.
             chat = self.current(&chat.id)?;
+            let workspace = d.workspaces.row(&chat.workspace_id)?;
+            if workspace.state != WorkspaceState::Ready {
+                return Err(Error::Conflict(format!(
+                    "{} is {}: its chats are read-only",
+                    workspace.slug,
+                    workspace.state.as_str()
+                )));
+            }
         }
         let busy = matches!(
             chat.status,
@@ -2541,8 +2575,8 @@ impl ChatManager {
         Ok(())
     }
 
-    /// The workspace is ready: the agents of the chats opened while it was created start, on
-    /// their first message, then on the messages sent meanwhile.
+    /// The workspace is ready, created or restored: the agents of the chats opened meanwhile
+    /// start, on their first message, then on the messages sent to them since.
     pub async fn workspace_ready(&self, workspace_id: &str) {
         let d = self.d();
         let firsts = self
@@ -2574,6 +2608,41 @@ impl ChatManager {
             if chat.status == ChatStatus::Starting && !self.is_live(&chat.id) {
                 self.set_status(&chat, ChatStatus::Idle);
                 self.send_next_queued(chat.id.clone());
+            }
+        }
+    }
+
+    /// A restore (or an exploration's reactivation) that failed: the chats opened meanwhile are
+    /// closed with the others, and those whose messages never reached their agent (a first message
+    /// held, messages queued) are told so.
+    pub async fn restore_failed(&self, workspace_id: &str) {
+        let d = self.d();
+        let held: HashSet<String> = self
+            .first_messages
+            .lock()
+            .unwrap()
+            .remove(workspace_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|first| first.chat_id)
+            .collect();
+        // Opened meanwhile: starting, where the archive left the others closed.
+        let opened: Vec<ChatInfo> = d
+            .store
+            .chats_of(workspace_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|chat| chat.status == ChatStatus::Starting)
+            .collect();
+        self.close_workspace(workspace_id).await;
+        for chat in opened {
+            let queued = !d.store.queue_of(&chat.id).unwrap_or_default().is_empty();
+            if held.contains(&chat.id) || queued {
+                self.notice(
+                    &chat,
+                    NoticeLevel::Warning,
+                    "The workspace could not be restored before the agent got the messages sent here: send them again once it is back".into(),
+                );
             }
         }
     }
