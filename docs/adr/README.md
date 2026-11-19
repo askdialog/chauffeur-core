@@ -178,6 +178,7 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [GitHub by default, a self-hosted GitLab when the installation is set to it](gitlab-as-the-forge.md) | 2026-11-18 | accepted |
 | [Mistral Vibe is a third agent, driven through ACP, on the user's Mistral plan](mistral-vibe-third-agent.md) | 2026-11-18 | accepted |
 | [A Mistral Vibe conversation coming back replaces the copy it left](vibe-sessions-replaced-on-return.md) | 2026-11-18 | accepted |
+| [Add connectors from the composer](add-connectors-from-the-composer.md) | 2026-11-19 | accepted |
 | [Load the selected Codex model before the first turn](codex-first-turn-model-catalog.md) | 2026-11-19 | accepted |
 | [Pilot GitHub's merge queue on Core](core-merge-queue-pilot.md) | 2026-11-19 | accepted |
 | [A fork's clone reads its base and its PRs from the parent](fork-clones.md) | 2026-11-19 | proposed, awaiting Justin |

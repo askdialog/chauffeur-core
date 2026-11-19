@@ -110,6 +110,7 @@ import { drafts } from "@/lib/drafts";
 import { inShellMode, messageText, shellCommand } from "@/lib/shell";
 import { type BriefBanner, briefBanner, briefFill, briefMemos } from "@/lib/designBrief";
 import { AttachButton, DropOverlay, ImageStrip, useImageAttachments } from "./ImageAttachments";
+import { ComposerAddMenu } from "./ComposerAddMenu";
 import { ComposerEditor, type ComposerEditorHandle } from "./ComposerEditor";
 import { ContextMeter } from "./ContextMeter";
 import { McpServers } from "./McpServers";
@@ -123,6 +124,7 @@ import { ChatFind, textRanges } from "./ChatFind";
 import { hasMod, kbd, stepTab } from "../../lib/keys";
 import { chatJump, onceIn, tabKey } from "../../lib/shortcuts";
 import { dismissedSuggestions, shownSuggestion, type Suggestion, suggestionKey } from "@/lib/suggestions";
+import { hasSlackMessageLink } from "@/lib/connectors";
 
 type ChatPanelProps = {
   workspace: WorkspaceInfo;
@@ -825,6 +827,7 @@ function NoChat({
           working={false}
           placeholder={explore ? "How does… work? Where is… handled?" : "Ask the agent to do something…"}
           commandsFor={{ workspaceId, agent: choice.agent }}
+          connectorSetup={!remote && !explore && !choice.model?.startsWith("ollama/")}
           onSend={(text, images) => onSend(text, choice, images)}
           onInterrupt={() => {}}
           controls={
@@ -865,6 +868,7 @@ export function ChatConversation({
   /** Only the end of the conversation is here yet: what counts or looks through all of it waits. */
   partial?: boolean;
 }) {
+  const remote = useRemoteCatalog();
   const list = useRef<VirtuosoHandle>(null);
   const listHeight = useRef(0);
   const scrollerElement = useRef<HTMLElement | null>(null);
@@ -1420,6 +1424,8 @@ export function ChatConversation({
                   : "Message the agent…"
           }
           commandsFor={commandsFor}
+          connectorSetup={!remote && !design && !explore && !chat.model?.startsWith("ollama/")}
+          sessionStarted={chat.agent_session_id !== null || working}
           shell={shellOffered}
           brief={design ? chat.brief : undefined}
           suggestion={settingUp ? null : view.suggestion}
@@ -1657,6 +1663,8 @@ const ComposerBox = memo(function ComposerBox({
   disabled,
   placeholder,
   commandsFor,
+  connectorSetup,
+  sessionStarted = false,
   suggestion = null,
   shell: shellOffered = false,
   brief,
@@ -1670,7 +1678,9 @@ const ComposerBox = memo(function ComposerBox({
   disabled?: boolean;
   placeholder: string;
   /** Whose commands `/` lists. */
-  commandsFor: CommandsSource;
+  commandsFor: Extract<CommandsSource, { workspaceId: string }>;
+  connectorSetup: boolean;
+  sessionStarted?: boolean;
   /** The agent's suggested next message, offered while the composer is empty and the chat idle. */
   suggestion?: Suggestion | null;
   /** A text starting with "!" runs as a shell command: the composer shows its shell mode. */
@@ -1794,7 +1804,16 @@ const ComposerBox = memo(function ComposerBox({
           placeholder={ghost ? ghost.text : placeholder}
         />
         <div className="flex flex-wrap items-center gap-1.5 px-2 pb-2">
-          <AttachButton onFiles={(files) => void attachments.addFiles(files)} disabled={disabled} />
+          {connectorSetup ? (
+            <ComposerAddMenu
+              workspaceId={commandsFor.workspaceId}
+              agent={commandsFor.agent}
+              slackSuggested={hasSlackMessageLink(text)}
+              sessionStarted={sessionStarted}
+              disabled={disabled}
+              onFiles={(files) => void attachments.addFiles(files)}
+            />
+          ) : <AttachButton onFiles={(files) => void attachments.addFiles(files)} disabled={disabled} />}
           {controls}
           <div className="ml-auto flex items-center gap-1.5">
             {ghost && (

@@ -4,9 +4,11 @@ import {
   awaitedAfterReload,
   brokenConnectors,
   exportLine,
+  hasSlackMessageLink,
   lacksEnv,
   loginCommand,
   mcpLoginCommand,
+  mcpSetupCommand,
   mcpStatusText,
   newlyNeeded,
   profileName,
@@ -15,6 +17,35 @@ import {
   signedOutSince,
   sortedServers,
 } from "./connectors";
+
+test("a Slack message link suggests Slack without matching lookalike hosts", () => {
+  expect(hasSlackMessageLink("Check [the thread](https://team.slack.com/archives/C0AB/p123?thread_ts=12).")).toBe(true);
+  expect(hasSlackMessageLink("Check https://team.slack.com.example.com/archives/C0AB/p123")).toBe(false);
+  expect(hasSlackMessageLink("Check https://team.slack.com/help")).toBe(false);
+});
+
+test("each connector is set up through the chat agent's native MCP command", () => {
+  const url = "https://example.com/mcp";
+  expect(mcpSetupCommand("claude", "example", url)).toEqual({
+    command: `claude mcp add --transport http --scope user example '${url}' && claude /mcp`,
+  });
+  expect(mcpSetupCommand("codex", "example", url)).toEqual({
+    command: `codex mcp get example >/dev/null 2>&1 && printf '%s\\n' 'MCP server example is already configured. Choose a different name to add another server.' || codex mcp add example --url '${url}'`,
+  });
+  expect(mcpSetupCommand("vibe", "example", url)).toEqual({ command: `vibe mcp add example --url '${url}'` });
+});
+
+test("names cannot pass CLI flags and endpoints are treated as a single shell argument", () => {
+  expect(mcpSetupCommand("codex", "--help", "https://example.com")).toHaveProperty("error");
+  expect(mcpSetupCommand("vibe", "example", "http://example.com")).toHaveProperty("error");
+  expect(mcpSetupCommand("vibe", "example", "https://user:secret@example.com")).toHaveProperty("error");
+  expect(mcpSetupCommand("vibe", "example", "https://example.com/a'$(pwd)")).toEqual({
+    command: "vibe mcp add example --url 'https://example.com/a'\\''$(pwd)'",
+  });
+  expect(mcpSetupCommand("vibe", "example", "http://127.0.0.1:8080/mcp")).toEqual({
+    command: "vibe mcp add example --url 'http://127.0.0.1:8080/mcp'",
+  });
+});
 
 const server = (name: string, status: McpServer["status"], more: Partial<McpServer> = {}): McpServer => ({
   name,
