@@ -1088,7 +1088,9 @@ describe("hooks", () => {
         const denials = outputs.filter((o) => JSON.stringify(o).includes('"deny"'));
         return denials.length > 0 ? JSON.stringify(denials) : "null";
       };
-      for (const params of [{}, { read_only: true }]) {
+      const design = join(root, "ws", ".chauffeur", "designs", "d1");
+      mkdirSync(design, { recursive: true });
+      for (const params of [{}, { read_only: true }, { design_dir: design }]) {
         const { query } = await started({ ...params, cwd: join(root, "ws"), source_clones: [{ clone, worktree }] });
         expect(await deny(query, "Edit", { file_path: join(clone, "a.ts"), old_string: "a", new_string: "b" })).toContain(join(worktree, "a.ts"));
         expect(await deny(query, "Write", { file_path: join(realpathSync(join(root, "real", "web")), "a.ts"), content: "x" })).toContain("agents never change it");
