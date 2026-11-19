@@ -523,11 +523,10 @@ async fn push_target(git: &Git, clone: &Path, branch: &str) -> PushTarget {
     let same_repo = |(a, b): &(String, String), (c, d): &(String, String)| {
         a.eq_ignore_ascii_case(c) && b.eq_ignore_ascii_case(d)
     };
-    let to_base = remote == base
-        || repo
-            .as_ref()
-            .zip(base_repo.as_ref())
-            .is_some_and(|(r, b)| same_repo(r, b));
+    let to_base = repo
+        .as_ref()
+        .zip(base_repo.as_ref())
+        .map_or(remote == base, |(r, b)| same_repo(r, b));
     PushTarget { to_base, repo }
 }
 
@@ -1471,6 +1470,33 @@ refs/heads/local-only\0.\0refs/heads/main";
         assert!(!head_is_ours(&fork_pr, &PushTarget::default()));
         assert!(head_is_ours(&json!({}), &own));
         assert!(!head_is_ours(&json!({}), &fork));
+    }
+
+    #[tokio::test]
+    async fn a_push_url_to_a_fork_excludes_the_parents_pr() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = Git::new(ShellEnv::new());
+        let clone = dir.path();
+        git.run(clone, &["init", "-q"]).await.unwrap();
+        for (key, url) in [
+            ("remote.origin.url", "https://github.com/acme/web.git"),
+            ("remote.origin.pushurl", "git@github.com:stan/web.git"),
+        ] {
+            git.run(clone, &["config", key, url]).await.unwrap();
+        }
+        let push = push_target(&git, clone, "feature").await;
+        let parent = json!({"isCrossRepository": false});
+        let fork = json!({
+            "isCrossRepository": true,
+            "headRepositoryOwner": {"login": "stan"},
+            "headRepository": {"name": "web"},
+        });
+        assert_eq!(
+            [parent, fork.clone()]
+                .into_iter()
+                .find(|pr| head_is_ours(pr, &push)),
+            Some(fork),
+        );
     }
 
     #[test]
