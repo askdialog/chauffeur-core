@@ -8,24 +8,10 @@ import type { WorkspaceInfo } from "@chauffeur/protocol";
 import { XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { workspaceName } from "@/lib/format";
-import { errorMessage } from "@/lib/rpc";
-import { transferCopy } from "@/lib/transfer";
-import { client, toast, upsertWorkspace, useApp } from "@/state/app";
+import { archiveWorkspace, useApp } from "@/state/app";
 import { Button, Modal } from "./ui";
 
-/** Starts archiving `workspace` in the background; the daemon's refusal, if any. */
-export async function archiveWorkspace(workspace: WorkspaceInfo, force = false): Promise<string | null> {
-  try {
-    const archiving = await client.call("workspace.archive", { workspace: workspace.id, force, background: true });
-    upsertWorkspace(archiving);
-    if (archiving.moved_to) {
-      toast(transferCopy(navigator.language.startsWith("fr")).archivingStarted(workspaceName(archiving), archiving.moved_to));
-    }
-    return null;
-  } catch (err) {
-    return errorMessage(err);
-  }
-}
+export { archiveWorkspace } from "@/state/app";
 
 export function ArchiveDialog({
   open,

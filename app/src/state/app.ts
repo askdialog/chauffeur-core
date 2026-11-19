@@ -1183,6 +1183,20 @@ export function upsertWorkspace(workspace: WorkspaceInfo) {
   leaveWhenArchiving(before, workspace);
 }
 
+/** Starts archiving the workspace in the background and returns any refusal. */
+export async function archiveWorkspace(workspace: WorkspaceInfo, force = false): Promise<string | null> {
+  try {
+    const archiving = await client.call("workspace.archive", { workspace: workspace.id, force, background: true });
+    upsertWorkspace(archiving);
+    if (archiving.moved_to) {
+      toast(transferCopy(navigator.language.startsWith("fr")).archivingStarted(workspaceName(archiving), archiving.moved_to));
+    }
+    return null;
+  } catch (error) {
+    return errorMessage(error);
+  }
+}
+
 /**
  * A workspace leaves the sidebar as soon as it starts archiving (that goes on in the background):
  * the one the user was looking at gives way to its neighbour in the list.
@@ -1526,7 +1540,15 @@ function onRegistry(envelope: EventEnvelope) {
     // Archiving runs in the background: say how it ended.
     if (before?.state === "archiving" && workspace.state === "archived") toast(`${workspaceName(workspace)} archived`, "info", { label: "View archive", run: () => selectWorkspace(workspace.id) });
     if (before?.state === "archiving" && workspace.state === "cleanup_failed") {
-      toast(`Could not archive ${workspaceName(workspace)}: ${workspace.last_error ?? "a cleanup step failed"}`, "error");
+      toast(`Could not archive ${workspaceName(workspace)}: ${workspace.last_error ?? "a cleanup step failed"}`, "error", {
+        label: "Retry archive",
+        run: async () => {
+          const current = get().workspaces[workspace.id];
+          if (current?.state !== "cleanup_failed") return;
+          const refusal = await archiveWorkspace(current);
+          if (refusal) toast(`Could not archive ${workspaceName(current)}: ${refusal}`, "error");
+        },
+      });
     }
     if (workspace.state !== "creating") forgetCreation(workspace.id);
     // News in the workspace the user is looking at is read at once.
