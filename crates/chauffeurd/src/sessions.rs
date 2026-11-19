@@ -8,8 +8,11 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chauffeur_protocol::client::{LoginSessionInfo, LoginSessionLogin, LoginSessionState};
-use chauffeur_protocol::events::WorkspaceEvent;
+use chauffeur_protocol::client::{
+    LoginSessionEnsureParams, LoginSessionInfo, LoginSessionLogin, LoginSessionState,
+};
+use chauffeur_protocol::events::{ChatEvent, WorkspaceEvent};
+use chauffeur_protocol::model::{ChatInfo, ChatKind, ChatStatus};
 use tokio::io::AsyncBufReadExt;
 
 use crate::error::{Error, Result};
@@ -28,6 +31,8 @@ pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(600);
 const AFTER_LINK: Duration = Duration::from_secs(2);
 /// What a login printed, at most, shown with its link.
 const LOGIN_OUTPUT_LINES: usize = 20;
+/// How long a request to log in waits for the user.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
 type Key = (String, String);
 
@@ -35,6 +40,25 @@ type Key = (String, String);
 pub struct Sessions {
     checked: Mutex<HashMap<Key, Checked>>,
     logging_in: Mutex<HashSet<Key>>,
+    /// The open request of each session that does not hold.
+    requests: Mutex<HashMap<Key, Arc<Request>>>,
+    /// Woken at each check, for the requests waiting on one.
+    checked_again: tokio::sync::Notify,
+}
+
+/// A request asking the user to log in to a session: open until the session holds, the user
+/// declines, or nobody answers within `REQUEST_TIMEOUT`.
+struct Request {
+    id: String,
+    declined: tokio::sync::Notify,
+    outcome: tokio::sync::watch::Sender<Option<Outcome>>,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Outcome {
+    Holds,
+    Declined,
+    Unanswered,
 }
 
 #[derive(Clone)]
@@ -46,6 +70,7 @@ struct Checked {
 }
 
 /// A session of a workspace, with where its commands run.
+#[derive(Clone)]
 struct Declared {
     name: String,
     spec: SessionSpec,
@@ -149,6 +174,140 @@ impl Sessions {
             .unwrap()
             .insert((row.id.clone(), session.name.clone()), checked);
         self.publish(d, &row.id, session);
+        self.checked_again.notify_waiters();
+    }
+
+    fn holds(&self, workspace_id: &str, name: &str) -> bool {
+        self.checked(workspace_id, name)
+            .is_some_and(|checked| checked.holds)
+    }
+
+    /// Answers once the session holds, asking the user to log in when it does not.
+    pub async fn ensure(
+        self: &Arc<Self>,
+        d: &Arc<Daemon>,
+        params: LoginSessionEnsureParams,
+    ) -> Result<LoginSessionInfo> {
+        let (row, declared) = declared(d, &params.workspace)?;
+        let session = find(&row, declared, &params.name)?;
+        self.run_check(d, &row, &session).await;
+        if self.holds(&row.id, &session.name) {
+            return Ok(self.info(&row.id, &session));
+        }
+        let mut outcome = self.request(d, &row, &session, params.chat.as_deref())?;
+        let outcome = loop {
+            if let Some(outcome) = *outcome.borrow_and_update() {
+                break outcome;
+            }
+            if outcome.changed().await.is_err() {
+                break Outcome::Unanswered;
+            }
+        };
+        let label = &session.spec.label;
+        match outcome {
+            Outcome::Holds => Ok(self.info(&row.id, &session)),
+            Outcome::Declined => Err(Error::Conflict(format!(
+                "the user declined to log in to {label}: stop what needed it, without working around it"
+            ))),
+            Outcome::Unanswered => Err(Error::Conflict(format!(
+                "nobody logged in to {label} within 15 minutes: stop what needed it, and say so"
+            ))),
+        }
+    }
+
+    /// The session's open request, or a new one asked in `chat`.
+    fn request(
+        self: &Arc<Self>,
+        d: &Arc<Daemon>,
+        row: &WorkspaceRow,
+        session: &Declared,
+        chat: Option<&str>,
+    ) -> Result<tokio::sync::watch::Receiver<Option<Outcome>>> {
+        let key = (row.id.clone(), session.name.clone());
+        let mut requests = self.requests.lock().unwrap();
+        if let Some(open) = requests.get(&key) {
+            return Ok(open.outcome.subscribe());
+        }
+        let chat = asked_in(d, row, chat)?;
+        let (outcome, receiver) = tokio::sync::watch::channel(None);
+        let request = Arc::new(Request {
+            id: format!("session-{}", uuid::Uuid::new_v4()),
+            declined: tokio::sync::Notify::new(),
+            outcome,
+        });
+        requests.insert(key.clone(), request.clone());
+        drop(requests);
+        d.chats.on_event(
+            &chat.id,
+            ChatEvent::SessionRequest {
+                request_id: request.id.clone(),
+                session: session.name.clone(),
+                label: session.spec.label.clone(),
+            },
+        );
+        let (sessions, d, row, session) = (self.clone(), d.clone(), row.clone(), session.clone());
+        tokio::spawn(async move {
+            let outcome = sessions.wait_for(&d, &row, &session, &request).await;
+            sessions.requests.lock().unwrap().remove(&key);
+            let resolved = match outcome {
+                Outcome::Holds => "answered",
+                Outcome::Declined => "denied",
+                Outcome::Unanswered => "cancelled",
+            };
+            d.chats.on_event(
+                &chat.id,
+                ChatEvent::RequestResolved {
+                    request_id: request.id.clone(),
+                    outcome: resolved.into(),
+                    rules: None,
+                },
+            );
+            request.outcome.send_replace(Some(outcome));
+        });
+        Ok(receiver)
+    }
+
+    /// Waits for the session to hold, checking it again each minute: the user may log in from
+    /// a terminal of their own.
+    async fn wait_for(
+        &self,
+        d: &Arc<Daemon>,
+        row: &WorkspaceRow,
+        session: &Declared,
+        request: &Request,
+    ) -> Outcome {
+        let deadline = tokio::time::Instant::now() + REQUEST_TIMEOUT;
+        loop {
+            let checked = self.checked_again.notified();
+            if self.holds(&row.id, &session.name) {
+                return Outcome::Holds;
+            }
+            tokio::select! {
+                _ = checked => {}
+                _ = request.declined.notified() => return Outcome::Declined,
+                _ = tokio::time::sleep(CHECK_FRESH) => self.run_check(d, row, session).await,
+                _ = tokio::time::sleep_until(deadline) => return Outcome::Unanswered,
+            }
+        }
+    }
+
+    /// Whether a chat's request is a session request, which the daemon answers itself.
+    pub fn is_request(&self, request_id: &str) -> bool {
+        self.requests
+            .lock()
+            .unwrap()
+            .values()
+            .any(|request| request.id == request_id)
+    }
+
+    /// The user declined a session request; false when it is not open.
+    pub fn decline(&self, request_id: &str) -> bool {
+        let requests = self.requests.lock().unwrap();
+        let Some(request) = requests.values().find(|request| request.id == request_id) else {
+            return false;
+        };
+        request.declined.notify_one();
+        true
     }
 
     fn checked(&self, workspace_id: &str, name: &str) -> Option<Checked> {
@@ -264,6 +423,41 @@ fn env_of(d: &Daemon, own: BTreeMap<String, String>) -> BTreeMap<String, String>
     let mut env = d.shell_env.vars();
     env.extend(own);
     env
+}
+
+/// The chat a request is asked in: the caller's, or the workspace's chat that waits on nothing
+/// and was active last.
+fn asked_in(d: &Daemon, row: &WorkspaceRow, chat: Option<&str>) -> Result<ChatInfo> {
+    if let Some(key) = chat {
+        let chat = d.chats.resolve(key)?;
+        if chat.workspace_id != row.id {
+            return Err(Error::BadRequest(format!(
+                "chat {key} is not a chat of {}",
+                row.slug
+            )));
+        }
+        return Ok(chat);
+    }
+    d.store
+        .chats_of(&row.id)?
+        .into_iter()
+        .filter(|chat| {
+            !chat.closed && chat.kind == ChatKind::Chat && chat.status != ChatStatus::NeedsInput
+        })
+        .max_by(|a, b| {
+            let at = |chat: &ChatInfo| {
+                chat.last_activity_at
+                    .clone()
+                    .unwrap_or(chat.created_at.clone())
+            };
+            at(a).cmp(&at(b))
+        })
+        .ok_or_else(|| {
+            Error::Conflict(format!(
+                "{} has no chat to ask the user in: log in with chauffeur session login",
+                row.slug
+            ))
+        })
 }
 
 fn find(row: &WorkspaceRow, declared: Vec<Declared>, name: &str) -> Result<Declared> {

@@ -903,7 +903,7 @@ export function ChatConversation({
   const childQuestion = readOnly || question
     ? null
     : (childRequests.find((r) => r.item.kind === "question" && !asideQuestions.has(r.item.requestId)) ?? null);
-  const permissions = requests.filter((r) => r.kind === "permission" || r.kind === "elicitation");
+  const permissions = requests.filter((r) => r.kind === "permission" || r.kind === "elicitation" || r.kind === "session");
   // An AskUserQuestion call answered through its question is shown there only.
   const items = useMemo(() => view.items.filter((item) => !(item.kind === "tool" && item.asked)), [view.items]);
   // Tool calls and thinking between two messages fold into one line, opened on demand.

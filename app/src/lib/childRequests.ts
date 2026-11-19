@@ -3,12 +3,20 @@
 // as the cards the child's own chat shows.
 
 import type { WaitResult, WorkspaceInfo } from "@chauffeur/protocol";
-import { type ElicitationItem, emptyChatView, openRequests, type PermissionItem, type QuestionItem, reduceChat } from "./chat";
+import {
+  type ElicitationItem,
+  emptyChatView,
+  openRequests,
+  type PermissionItem,
+  type QuestionItem,
+  reduceChat,
+  type SessionRequestItem,
+} from "./chat";
 
 export type ChildRequest = {
   workspace: WorkspaceInfo;
   chatId: string;
-  item: PermissionItem | QuestionItem | ElicitationItem;
+  item: PermissionItem | QuestionItem | ElicitationItem | SessionRequestItem;
 };
 
 /** The requests a child's `workspace.wait` lists, oldest first in each chat. */

@@ -9,10 +9,12 @@ use std::time::Duration;
 
 use chauffeur_protocol::client::{
     AddWorktreeParams, ConfigureChatParams, CreateChatParams, CreateWorkspaceParams, Forge,
-    LoginSessionState, SearchFilters, SearchResult,
+    LoginSessionEnsureParams, LoginSessionState, SearchFilters, SearchResult,
 };
-use chauffeur_protocol::events::{Event, WorkspaceEvent};
-use chauffeur_protocol::model::{AgentKind, LoadoutEntry, WorkspaceState, WorktreeOrigin};
+use chauffeur_protocol::events::{ChatEvent, Event, WorkspaceEvent};
+use chauffeur_protocol::model::{
+    AgentKind, ChatStatus, LoadoutEntry, RequestResponse, WorkspaceState, WorktreeOrigin,
+};
 use chauffeurd::Daemon;
 use chauffeurd::paths::Paths;
 use chauffeurd::store::EventFilter;
@@ -21211,4 +21213,143 @@ label = "No check nor login"
 
     let unknown = d.sessions.check(d, &ws.id, "nope").await.unwrap_err();
     assert!(unknown.to_string().contains("session nope"), "{unknown}");
+}
+
+/// The `session_request` events of a chat, newest last.
+fn session_requests(d: &chauffeurd::Daemon, chat: &str) -> Vec<(String, String)> {
+    d.store
+        .events_of_type_after(chat, "session_request", 0)
+        .unwrap()
+        .into_iter()
+        .filter_map(|envelope| match envelope.event {
+            Event::Chat {
+                event:
+                    ChatEvent::SessionRequest {
+                        request_id, label, ..
+                    },
+                ..
+            } => Some((request_id, label)),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn until_requested(d: &chauffeurd::Daemon, chat: &str, count: usize) -> String {
+    for _ in 0..100 {
+        let requests = session_requests(d, chat);
+        if requests.len() == count {
+            return requests[count - 1].0.clone();
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("no session request was asked in the chat");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ensure_asks_the_user_once_and_answers_when_the_session_holds_or_is_declined() {
+    let marker = tempfile::tempdir().unwrap();
+    let on = marker.path().join("svc-on");
+    let f = fixture_with(
+        49930,
+        &format!(
+            r#"
+[repos.repo-a.sessions.svc]
+label = "Service (staging)"
+check = "test -f {on}"
+login = "echo 'Open https://login.example/device'; sleep 1; touch {on}"
+
+[sessions.everywhere]
+label = "Always"
+check = "true"
+login = "true"
+"#,
+            on = on.display()
+        ),
+    );
+    let d = &f.daemon;
+    let log = f.root.join("sidecar.log");
+    d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams::default())
+        .await
+        .unwrap()
+        .workspace;
+    let chat = d
+        .chats
+        .create(CreateChatParams {
+            workspace: ws.id.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let ensure = |name: &str| {
+        let d = d.clone();
+        let params = LoginSessionEnsureParams {
+            workspace: ws.id.clone(),
+            name: name.into(),
+            chat: Some(chat.id.clone()),
+        };
+        tokio::spawn(async move { d.sessions.ensure(&d, params).await })
+    };
+
+    let holds = ensure("everywhere").await.unwrap().unwrap();
+    assert_eq!(holds.state, LoginSessionState::Holds);
+    assert!(session_requests(d, &chat.id).is_empty(), "nothing asked");
+
+    // Two callers wait on one request.
+    let first = ensure("svc");
+    let request = until_requested(d, &chat.id, 1).await;
+    let second = ensure("svc");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(
+        session_requests(d, &chat.id).len(),
+        1,
+        "joined, not asked again"
+    );
+    assert_eq!(
+        d.store.chat(&chat.id).unwrap().unwrap().status,
+        ChatStatus::NeedsInput
+    );
+    let allowed = d
+        .chats
+        .respond(&chat.id, &request, RequestResponse::Allow { always: false })
+        .await
+        .unwrap_err();
+    assert!(allowed.to_string().contains("logging in"), "{allowed}");
+
+    d.sessions.login(d, &ws.id, "svc").await.unwrap();
+    for waiter in [first, second] {
+        let session = tokio::time::timeout(Duration::from_secs(10), waiter)
+            .await
+            .expect("answered once the login ended")
+            .unwrap()
+            .unwrap();
+        assert_eq!(session.state, LoginSessionState::Holds);
+    }
+    assert_ne!(
+        d.store.chat(&chat.id).unwrap().unwrap().status,
+        ChatStatus::NeedsInput
+    );
+
+    // Declined: the caller is told to stop.
+    std::fs::remove_file(&on).unwrap();
+    let declined = ensure("svc");
+    let request = until_requested(d, &chat.id, 2).await;
+    d.chats
+        .respond(&chat.id, &request, RequestResponse::Deny { message: None })
+        .await
+        .unwrap();
+    let error = tokio::time::timeout(Duration::from_secs(10), declined)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(error.to_string().contains("declined"), "{error}");
+    let again = d
+        .chats
+        .respond(&chat.id, &request, RequestResponse::Deny { message: None })
+        .await
+        .unwrap_err();
+    assert!(again.to_string().contains("no open request"), "{again}");
 }

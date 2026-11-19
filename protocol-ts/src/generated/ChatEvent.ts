@@ -81,7 +81,11 @@ agent?: RequestAgent, } | { "type": "mcp_elicitation", request_id: string, serve
  * What Always allow on it would keep allowing in the chat, offered for a confirmation with
  * nothing to fill in (`cua_repl: Allow Computer Use to use "Google Chrome"?`).
  */
-rule?: string, } | { "type": "question", request_id: string, questions: Array<Question>, } | { "type": "request_resolved", request_id: string, outcome: string, 
+rule?: string, } | { "type": "question", request_id: string, questions: Array<Question>, } | { "type": "session_request", request_id: string, 
+/**
+ * The session's name, as `session.login` takes it.
+ */
+session: string, label: string, } | { "type": "request_resolved", request_id: string, outcome: string, 
 /**
  * Allowed with Always allow: the rules the chat now keeps allowing (Claude:
  * `mcp__linear__save_issue`, `Bash(npm test:*)`; Codex, what its session approval

@@ -667,6 +667,7 @@ fn suggestions_from(
             model: newest.model.clone(),
             effort: newest.effort.clone(),
             permission_mode: Default::default(),
+            sessions: Vec::new(),
             schedule: schedule(&proposal.schedule, first_day),
         };
         let file = crate::routines::render(&spec);

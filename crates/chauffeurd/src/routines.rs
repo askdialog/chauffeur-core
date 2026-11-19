@@ -6,7 +6,9 @@
 
 use std::{path::Path, sync::Arc, time::Duration};
 
-use chauffeur_protocol::client::{CreateChatParams, CreateWorkspaceParams};
+use chauffeur_protocol::client::{
+    CreateChatParams, CreateWorkspaceParams, LoginSessionEnsureParams, LoginSessionState,
+};
 use chauffeur_protocol::events::{ChatEvent, Event, RegistryEvent};
 use chauffeur_protocol::model::{ChatStatus, WorkspaceState, WorktreeOrigin};
 use chauffeur_protocol::routines::{
@@ -583,6 +585,12 @@ pub(crate) fn render(spec: &RoutineSpec) -> String {
         "# auto, default, accept_edits, plan or bypass_permissions\npermission_mode = {}\n\n",
         quote(spec.permission_mode.as_str())
     ));
+    if !spec.sessions.is_empty() {
+        out.push_str(&format!(
+            "# Declared sessions a run needs; it waits for the user to log in to one that expired.\nsessions = [{}]\n\n",
+            list(spec.sessions.iter().map(|s| quote(s)).collect())
+        ));
+    }
     out.push_str(
         "# When it runs once activated: days mon…sun, or every_days from a date (from),\n",
     );
@@ -694,6 +702,7 @@ pub async fn create(d: &Arc<Daemon>, params: RoutineCreateParams) -> Result<Rout
         model: source.model.clone(),
         effort: source.effort.clone(),
         permission_mode: Default::default(),
+        sessions: Vec::new(),
         schedule: RoutineSchedule {
             days: vec![
                 Weekday::Mon,
@@ -1019,6 +1028,8 @@ async fn run(d: &Arc<Daemon>, row: &Row, trigger: RoutineTrigger) -> Result<Rout
     // machine is not touched.
     let _admission = d.execution.admit(&workspace.id)?;
     let left = refresh_worktrees(d, &workspace.id).await?;
+    let expired = expired_sessions(d, &workspace.id, &spec.sessions).await?;
+    let prompt = run_prompt(&spec, row.version, trigger, &left);
     let started_at = now();
     let chat = d
         .chats
@@ -1028,7 +1039,7 @@ async fn run(d: &Arc<Daemon>, row: &Row, trigger: RoutineTrigger) -> Result<Rout
             model: spec.model.clone(),
             effort: spec.effort.clone(),
             permission_mode: Some(spec.permission_mode),
-            prompt: Some(run_prompt(&spec, row.version, trigger, &left)),
+            prompt: expired.is_empty().then(|| prompt.clone()),
             title: Some(format!("Run {}", Local::now().format("%Y-%m-%d %H:%M"))),
             ..Default::default()
         })
@@ -1040,6 +1051,9 @@ async fn run(d: &Arc<Daemon>, row: &Row, trigger: RoutineTrigger) -> Result<Rout
         started_at,
     };
     d.store.insert_routine_run(&row.id, &run)?;
+    if !expired.is_empty() {
+        start_once_logged_in(d.clone(), row.id.clone(), chat.id.clone(), expired, prompt);
+    }
     for earlier in d.store.routine_runs(&row.id)?.into_iter().skip(1) {
         let Some(earlier) = d.store.chat(&earlier.chat_id)? else {
             continue;
@@ -1053,6 +1067,77 @@ async fn run(d: &Arc<Daemon>, row: &Row, trigger: RoutineTrigger) -> Result<Rout
     }
     publish(d, &row.id)?;
     run_info(d, run, false)
+}
+
+/// The sessions of a routine's list that do not hold now.
+async fn expired_sessions(
+    d: &Arc<Daemon>,
+    workspace: &str,
+    names: &[String],
+) -> Result<Vec<String>> {
+    let mut expired = Vec::new();
+    for name in names {
+        let session = d.sessions.check(d, workspace, name).await?;
+        if session.state != LoginSessionState::Holds {
+            expired.push(session.name);
+        }
+    }
+    Ok(expired)
+}
+
+/// Asks the user in the run's chat to log in to each expired session, then sends the run's
+/// prompt; a session declined or left unanswered ends the run there, and the routine says why.
+fn start_once_logged_in(
+    d: Arc<Daemon>,
+    routine: String,
+    chat: String,
+    expired: Vec<String>,
+    prompt: String,
+) {
+    tokio::spawn(async move {
+        let Ok(workspace) = d
+            .store
+            .chat(&chat)
+            .map(|chat| chat.map(|chat| chat.workspace_id))
+        else {
+            return;
+        };
+        let Some(workspace) = workspace else { return };
+        for name in expired {
+            let ensured = d
+                .sessions
+                .ensure(
+                    &d,
+                    LoginSessionEnsureParams {
+                        workspace: workspace.clone(),
+                        name,
+                        chat: Some(chat.clone()),
+                    },
+                )
+                .await;
+            if let Err(error) = ensured {
+                let recorded = d.store.routines().and_then(|rows| {
+                    let Some(row) = rows.into_iter().find(|row| row.id == routine) else {
+                        return Ok(());
+                    };
+                    let why = format!("the run did not start: {error}");
+                    d.store.set_routine(
+                        &row.id,
+                        row.state,
+                        row.checked_until.as_deref(),
+                        Some(&why),
+                    )
+                });
+                if let Err(error) = recorded.and_then(|()| publish(&d, &routine).map(|_| ())) {
+                    tracing::warn!(%error, routine, "could not record why a run did not start");
+                }
+                return;
+            }
+        }
+        if let Err(error) = d.chats.send(&chat, &prompt).await {
+            tracing::warn!(%error, routine, "could not send a run's prompt once logged in");
+        }
+    });
 }
 
 /// The scheduler: never on a cloud worker (nor a transfer controller, which does not start it).
@@ -1331,6 +1416,7 @@ mod tests {
             model: None,
             effort: None,
             permission_mode: Default::default(),
+            sessions: Vec::new(),
             schedule: RoutineSchedule {
                 times: vec!["09:00".into()],
                 every_days: Some(3),
@@ -1368,9 +1454,11 @@ mod tests {
             model: Some("gpt-5".into()),
             effort: None,
             permission_mode: Default::default(),
+            sessions: vec!["aws-staging".into()],
             schedule: weekdays_at_eight(),
         };
         let parsed = parse(&render(&spec)).unwrap();
+        assert_eq!(parsed.sessions, ["aws-staging"]);
         assert_eq!(parsed.prompt, "Read the new tickets.\nSay which matter.\n");
         assert_eq!(
             RoutineSpec {

@@ -81,6 +81,10 @@ pub struct RoutineSpec {
     pub effort: Option<String>,
     #[serde(default)]
     pub permission_mode: PermissionMode,
+    /// The declared sessions a run needs: one that does not hold holds the run back until the
+    /// user logs in (docs/adr/declared-sessions.md).
+    #[serde(default)]
+    pub sessions: Vec<String>,
     #[serde(default)]
     pub schedule: RoutineSchedule,
 }

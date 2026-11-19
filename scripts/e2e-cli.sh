@@ -186,6 +186,30 @@ r = json.load(sys.stdin)
 assert r["url"] == "https://login.example/device" and "Code: E2E1" in r["output"], r'
 for _ in $(seq 1 50); do c session check e2e --workspace e2e-sessions >/dev/null 2>&1 && break; sleep 0.1; done
 c session check e2e --workspace e2e-sessions | grep -q "holds until 2030-01-01"
+echo "== sessions. ensure asks the user in the chat; declined it fails, logged in it answers"
+rm -f "$T/e2e-session"
+c chat e2e-sessions >/dev/null
+open_session_request() {
+  for _ in $(seq 1 100); do
+    id=$(c --json status e2e-sessions | python3 -c '
+import sys, json
+r = json.load(sys.stdin)
+ids = [o["request"]["request_id"] for o in r.get("open_requests", []) if o["request"]["type"] == "session_request"]
+print(ids[0] if ids else "")')
+    [ -n "$id" ] && { echo "$id"; return; }
+    sleep 0.1
+  done
+  echo "no session request was asked" >&2; exit 1
+}
+c session ensure e2e --workspace e2e-sessions >/dev/null 2>"$T/ensure.err" & ensure=$!
+request=$(open_session_request)
+c respond e2e-sessions "$request" deny >/dev/null
+if wait $ensure; then echo "ensure answered though the user declined"; exit 1; fi
+grep -q "declined" "$T/ensure.err"
+c session ensure e2e --workspace e2e-sessions >/dev/null & ensure=$!
+open_session_request >/dev/null
+c session login e2e --workspace e2e-sessions >/dev/null
+wait $ensure
 echo "== a brief read from standard input keeps its backticks and \$ as written"
 c new --name e2e-stdin-brief --prompt - >/dev/null <<'EOF'
 Accept old links in `share_id_of` and in `chauffeur new --workspace-share`, with $HOME untouched.

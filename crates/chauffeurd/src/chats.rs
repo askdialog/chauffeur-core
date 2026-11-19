@@ -1024,6 +1024,7 @@ impl ChatManager {
             ChatKind::Chat => None,
         };
         let mut env = d.workspaces.agent_env(&workspace, design_dir.is_some())?;
+        env.insert("CHAUFFEUR_CHAT_ID".into(), chat.id.clone());
         // An exploration's Claude Code keeps its temporary files, and its sandboxed commands
         // theirs, in a folder of the exploration's own, removed at archive and promote.
         if workspace.explore && chat.agent == AgentKind::Claude {
@@ -1207,6 +1208,7 @@ impl ChatManager {
         )?;
         let mut env = d.shell_env.vars();
         env.extend(d.workspaces.agent_env(&workspace, false)?);
+        env.insert("CHAUFFEUR_CHAT_ID".into(), chat.id.clone());
         let running = {
             let _admission = d.execution.admit(&workspace.id)?;
             crate::chat_shell::spawn(command, std::path::Path::new(&workspace.path), &env)
@@ -1511,6 +1513,19 @@ impl ChatManager {
     ) -> Result<ChatInfo> {
         let chat = self.resolve(key)?;
         let _admission = self.d().execution.admit(&chat.workspace_id)?;
+        if self.d().sessions.is_request(request_id) {
+            return match response {
+                RequestResponse::Deny { .. } if self.d().sessions.decline(request_id) => {
+                    self.current(&chat.id)
+                }
+                RequestResponse::Deny { .. } => Err(Error::NotFound(format!(
+                    "no open request {request_id} in this chat: it was answered already"
+                ))),
+                _ => Err(Error::BadRequest(
+                    "a session request is answered by logging in (chauffeur session login <name>) or by declining it".into(),
+                )),
+            };
+        }
         let open = self
             .pending
             .lock()
@@ -1741,7 +1756,8 @@ impl ChatManager {
                 }
                 ChatEvent::PermissionRequest { request_id, .. }
                 | ChatEvent::Question { request_id, .. }
-                | ChatEvent::McpElicitation { request_id, .. } => {
+                | ChatEvent::McpElicitation { request_id, .. }
+                | ChatEvent::SessionRequest { request_id, .. } => {
                     if chat.parent_chat.is_some() {
                         self.taken_part.lock().unwrap().insert(chat.id.clone());
                     }
@@ -2196,6 +2212,9 @@ impl ChatManager {
     fn cancel_open_requests(&self, chat: &ChatInfo) {
         let d = self.d();
         for request_id in open_requests(&d.store, &chat.id) {
+            if d.sessions.is_request(&request_id) {
+                continue;
+            }
             d.events.chat(
                 &chat.workspace_id,
                 &chat.id,
@@ -4767,7 +4786,8 @@ fn request_id(event: &ChatEvent) -> Option<&str> {
     match event {
         ChatEvent::PermissionRequest { request_id, .. }
         | ChatEvent::McpElicitation { request_id, .. }
-        | ChatEvent::Question { request_id, .. } => Some(request_id),
+        | ChatEvent::Question { request_id, .. }
+        | ChatEvent::SessionRequest { request_id, .. } => Some(request_id),
         _ => None,
     }
 }
@@ -4781,7 +4801,12 @@ pub(crate) fn open_request_events(store: &crate::store::Store, chat_id: &str) ->
             .and_then(|envelope| envelope.seq)
             .unwrap_or(0);
         let mut open: Vec<(i64, ChatEvent)> = Vec::new();
-        for kind in ["permission_request", "mcp_elicitation", "question"] {
+        for kind in [
+            "permission_request",
+            "mcp_elicitation",
+            "question",
+            "session_request",
+        ] {
             for envelope in store.events_of_type_after(chat_id, kind, turn_end)? {
                 if let Event::Chat { event, .. } = envelope.event
                     && request_id(&event).is_some()

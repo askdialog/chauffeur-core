@@ -109,6 +109,19 @@ export type QuestionItem = Base & {
   /** The answers given, by question, read from the AskUserQuestion tool result. */
   answers: Record<string, string> | null;
 };
+/**
+ * A declared session a command waits on does not hold (docs/adr/declared-sessions.md): the user
+ * logs in, or declines. Posted and closed by the daemon, so a turn's end leaves it open.
+ */
+export type SessionRequestItem = Base & {
+  kind: "session";
+  requestId: string;
+  /** Its name, as `session.login` takes it. */
+  session: string;
+  label: string;
+  state: RequestState;
+  outcome: string | null;
+};
 /** `count` is how many identical notices in a row it stands for; absent for a single one. */
 export type NoticeItem = Base & { kind: "notice"; level: NoticeLevel; message: string; badge?: string; count?: number };
 /** A command the user ran from the chat (`!`): running until its `shell_ended`. */
@@ -146,6 +159,7 @@ export type ChatItem =
   | PermissionItem
   | ElicitationItem
   | QuestionItem
+  | SessionRequestItem
   | NoticeItem
   | ShellItem
   | TurnItem;
@@ -555,18 +569,32 @@ function apply(current: ChatView, event: ChatEvent, envelope: EventEnvelope): Ch
       });
     }
 
+    case "session_request":
+      return push(view, {
+        kind: "session",
+        key: key("session"),
+        ts,
+        depth: 0,
+        requestId: event.request_id,
+        session: event.session,
+        label: event.label,
+        state: "open",
+        outcome: null,
+      });
+
     case "request_resolved": {
       const index = findLast(
         view.items,
         (item) =>
-          (item.kind === "permission" || item.kind === "question" || item.kind === "elicitation") && item.requestId === event.request_id,
+          (item.kind === "permission" || item.kind === "question" || item.kind === "elicitation" || item.kind === "session") &&
+          item.requestId === event.request_id,
       );
       if (index < 0) return view;
-      const item = view.items[index] as PermissionItem | QuestionItem | ElicitationItem;
+      const item = view.items[index] as PermissionItem | QuestionItem | ElicitationItem | SessionRequestItem;
       return replace(
         view,
         index,
-        item.kind === "question"
+        item.kind === "question" || item.kind === "session"
           ? { ...item, state: "resolved", outcome: event.outcome }
           : { ...item, state: "resolved", outcome: event.outcome, rules: event.rules?.length ? event.rules : null },
       );
@@ -956,11 +984,12 @@ export function delegatedAgent(item: Pick<ToolItem, "input">, chat: ChatInfo | n
   return input?.agent === "codex" || input?.agent === "vibe" ? input.agent : "claude";
 }
 
-/** Open permission requests and questions, oldest first. */
-export function openRequests(view: ChatView): Array<PermissionItem | QuestionItem | ElicitationItem> {
+/** Open permission requests, questions and session requests, oldest first. */
+export function openRequests(view: ChatView): Array<PermissionItem | QuestionItem | ElicitationItem | SessionRequestItem> {
   return view.items.filter(
-    (item): item is PermissionItem | QuestionItem | ElicitationItem =>
-      (item.kind === "permission" || item.kind === "question" || item.kind === "elicitation") && item.state === "open",
+    (item): item is PermissionItem | QuestionItem | ElicitationItem | SessionRequestItem =>
+      (item.kind === "permission" || item.kind === "question" || item.kind === "elicitation" || item.kind === "session") &&
+      item.state === "open",
   );
 }
 

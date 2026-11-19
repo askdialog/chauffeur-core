@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { createContext, memo, type ReactNode, useContext, useState } from "react";
 import { ElicitationCard } from "./ElicitationCard";
+import { SessionRequestCard } from "./SessionRequestCard";
 import { ShareCommentCards } from "./ShareComments";
 import { ChatHostContext } from "./chatHost";
 import type {
@@ -36,6 +37,7 @@ import type {
   NoticeItem,
   PermissionItem,
   QuestionItem,
+  SessionRequestItem,
   ShellItem,
   ThinkingItem,
   ToolItem,
@@ -148,9 +150,21 @@ export const ChatRowView = memo(function ChatRowView({
   );
 });
 
-/** A permission request or an MCP confirmation, as the chat shows it: also shown in a parent's chat. */
-export function RequestCard({ item, readOnly, respond }: { item: PermissionItem | ElicitationItem; readOnly: boolean; respond: Respond }) {
+/**
+ * A permission request, an MCP confirmation or a session request, as the chat shows it: also shown
+ * in a parent's chat.
+ */
+export function RequestCard({
+  item,
+  readOnly,
+  respond,
+}: {
+  item: PermissionItem | ElicitationItem | SessionRequestItem;
+  readOnly: boolean;
+  respond: Respond;
+}) {
   if (item.kind === "elicitation") return <ElicitationCard item={item} readOnly={readOnly} respond={respond} />;
+  if (item.kind === "session") return <SessionRequestCard item={item} readOnly={readOnly} respond={respond} />;
   const proposal = repoProposal(item);
   return proposal ? (
     <AddRepoCard item={item} proposal={proposal} readOnly={readOnly} respond={respond} />
@@ -187,6 +201,7 @@ function ItemBody({
         );
       case "permission":
       case "elicitation":
+      case "session":
         return <RequestCard item={item} readOnly={readOnly} respond={respond} />;
       case "question":
         return <QuestionRecord item={item} />;
@@ -804,7 +819,7 @@ function Pre({ label, children, tone }: { label: string; children: ReactNode; to
   );
 }
 
-function RequestFrame({
+export function RequestFrame({
   icon,
   title,
   state,

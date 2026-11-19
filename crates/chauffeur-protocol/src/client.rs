@@ -621,6 +621,13 @@ methods! {
         #[access(User)]
         #[relay(Act)]
         SessionLogin(LoginSessionParams) -> LoginSessionLogin,
+        /// Answers once the session holds. When it does not, asks the user to log in, in `chat` or
+        /// the workspace's first chat that waits on nothing, and waits up to 15 minutes; a request
+        /// already open for the session is joined. Declined or unanswered, it fails.
+        #[serde(rename = "session.ensure")]
+        #[access(Any)]
+        #[relay(Act)]
+        SessionEnsure(LoginSessionEnsureParams) -> LoginSessionInfo,
         #[serde(rename = "process.stop")]
         #[access(Any)]
         #[relay(Act)]
@@ -2203,6 +2210,17 @@ pub struct LoginSessionsResult {
 pub struct LoginSessionParams {
     pub workspace: String,
     pub name: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct LoginSessionEnsureParams {
+    pub workspace: String,
+    pub name: String,
+    /// The chat the request is asked in: the caller's (`CHAUFFEUR_CHAT_ID`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub chat: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]

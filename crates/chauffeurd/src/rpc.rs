@@ -332,6 +332,9 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
                 .check(daemon, &params.workspace, &params.name)
                 .await?,
         ),
+        ClientCall::SessionEnsure(params) => {
+            to_value(daemon.sessions.ensure(daemon, params).await?)
+        }
         ClientCall::SessionLogin(params) => to_value(
             daemon
                 .sessions

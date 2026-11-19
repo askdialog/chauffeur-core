@@ -919,6 +919,11 @@ fn chat_event(event: &ChatEvent, chat_hint: &str) -> Option<String> {
                 summarize_input(input)
             )
         }
+        ChatEvent::SessionRequest {
+            request_id, label, ..
+        } => format!(
+            "? log in to {label}? The user logs in from the app or the phone.\n  decline: chauffeur respond {chat_hint} {request_id} deny"
+        ),
         ChatEvent::McpElicitation {
             request_id,
             server_name,

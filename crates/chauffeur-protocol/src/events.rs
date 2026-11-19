@@ -433,6 +433,14 @@ pub enum ChatEvent {
         request_id: String,
         questions: Vec<Question>,
     },
+    /// A declared session a command waits on does not hold: the user logs in, or declines
+    /// (docs/adr/declared-sessions.md). Posted and closed by the daemon, never by the agent.
+    SessionRequest {
+        request_id: String,
+        /// The session's name, as `session.login` takes it.
+        session: String,
+        label: String,
+    },
     /// A permission request or a question was answered. `outcome`: `allowed`, `denied`,
     /// `answered` or `cancelled` (by an interrupt).
     RequestResolved {

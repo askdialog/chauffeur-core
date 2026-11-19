@@ -2,8 +2,8 @@
 //! (docs/adr/declared-sessions.md). Inside a workspace, it is that workspace by default.
 use crate::client::Client;
 use chauffeur_protocol::client::{
-    ClientCall, LoginSessionInfo, LoginSessionLogin, LoginSessionParams, LoginSessionState,
-    LoginSessionsResult, WorkspaceParams,
+    ClientCall, LoginSessionEnsureParams, LoginSessionInfo, LoginSessionLogin, LoginSessionParams,
+    LoginSessionState, LoginSessionsResult, WorkspaceParams,
 };
 use clap::Subcommand;
 
@@ -19,6 +19,17 @@ pub enum Action {
         name: String,
         #[arg(long, env = "CHAUFFEUR_WORKSPACE_ID")]
         workspace: String,
+    },
+    /// Wait until a session holds. When it does not, ask the user in this chat to log in, and
+    /// wait up to 15 minutes; exits 1 when they decline or do not answer. An agent runs it in the
+    /// background, and stops what needed the session when it fails.
+    Ensure {
+        name: String,
+        #[arg(long, env = "CHAUFFEUR_WORKSPACE_ID")]
+        workspace: String,
+        /// The chat to ask in; by default the caller's, else the workspace's last active one.
+        #[arg(long, env = "CHAUFFEUR_CHAT_ID")]
+        chat: Option<String>,
     },
     /// Start a session's login, and print the link it gives to open. Refused to agents.
     Login {
@@ -86,6 +97,20 @@ pub async fn run(client: &mut Client, action: Action, json: bool) -> anyhow::Res
             if session.state != LoginSessionState::Holds {
                 std::process::exit(1);
             }
+        }
+        Action::Ensure {
+            name,
+            workspace,
+            chat,
+        } => {
+            let session: LoginSessionInfo = client
+                .call(ClientCall::SessionEnsure(LoginSessionEnsureParams {
+                    workspace,
+                    name,
+                    chat,
+                }))
+                .await?;
+            print_or(json, &session, || line(&session));
         }
         Action::Login { name, workspace } => {
             let result: LoginSessionLogin = client

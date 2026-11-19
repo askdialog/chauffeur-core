@@ -14,4 +14,9 @@ repos: Array<string>, agent: AgentKind,
 /**
  * None: the agent's default model.
  */
-model?: string, effort?: string, permission_mode: PermissionMode, schedule: RoutineSchedule, };
+model?: string, effort?: string, permission_mode: PermissionMode, 
+/**
+ * The declared sessions a run needs: one that does not hold holds the run back until the
+ * user logs in (docs/adr/declared-sessions.md).
+ */
+sessions: Array<string>, schedule: RoutineSchedule, };

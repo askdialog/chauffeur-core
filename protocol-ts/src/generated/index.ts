@@ -301,6 +301,7 @@ export type { LinearUpdate } from "./LinearUpdate";
 export type { ListWorkspacesParams } from "./ListWorkspacesParams";
 export type { LoadoutEntry } from "./LoadoutEntry";
 export type { LoadoutParams } from "./LoadoutParams";
+export type { LoginSessionEnsureParams } from "./LoginSessionEnsureParams";
 export type { LoginSessionInfo } from "./LoginSessionInfo";
 export type { LoginSessionLogin } from "./LoginSessionLogin";
 export type { LoginSessionParams } from "./LoginSessionParams";

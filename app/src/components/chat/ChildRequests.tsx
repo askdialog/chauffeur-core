@@ -10,7 +10,7 @@ import { type ChildRequest, childRequests, childrenNeedingInput } from "@/lib/ch
 import { workspaceName } from "@/lib/format";
 import { errorMessage } from "@/lib/rpc";
 import { client, selectChat, selectWorkspace, toast, useApp } from "@/state/app";
-import { RequestCard, WorkspacePathContext } from "./ChatItems";
+import { RequestCard, WorkspaceIdContext, WorkspacePathContext } from "./ChatItems";
 
 /** The events after which a child's open requests may have changed. */
 const REQUEST_EVENTS = new Set(["question", "permission_request", "mcp_elicitation", "request_resolved", "status_changed"]);
@@ -121,9 +121,11 @@ function ChildRequestRow({ request, shown, onAnswer }: { request: ChildRequest; 
         </button>
       </div>
       {item.kind !== "question" && (
-        <WorkspacePathContext.Provider value={request.workspace.path}>
-          <RequestCard item={item} readOnly={false} respond={respond} />
-        </WorkspacePathContext.Provider>
+        <WorkspaceIdContext.Provider value={request.workspace.id}>
+          <WorkspacePathContext.Provider value={request.workspace.path}>
+            <RequestCard item={item} readOnly={false} respond={respond} />
+          </WorkspacePathContext.Provider>
+        </WorkspaceIdContext.Provider>
       )}
     </div>
   );

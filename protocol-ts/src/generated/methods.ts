@@ -188,6 +188,7 @@ import type { LinearSetStateParams } from "./LinearSetStateParams";
 import type { LinearStatesResult } from "./LinearStatesResult";
 import type { ListWorkspacesParams } from "./ListWorkspacesParams";
 import type { LoadoutParams } from "./LoadoutParams";
+import type { LoginSessionEnsureParams } from "./LoginSessionEnsureParams";
 import type { LoginSessionInfo } from "./LoginSessionInfo";
 import type { LoginSessionLogin } from "./LoginSessionLogin";
 import type { LoginSessionParams } from "./LoginSessionParams";
@@ -510,6 +511,7 @@ export type ClientMethods = {
   "session.list": [WorkspaceParams, LoginSessionsResult];
   "session.check": [LoginSessionParams, LoginSessionInfo];
   "session.login": [LoginSessionParams, LoginSessionLogin];
+  "session.ensure": [LoginSessionEnsureParams, LoginSessionInfo];
   "process.stop": [StopProcessParams, ProcessInfo];
   "chat.create": [CreateChatParams, ChatInfo];
   "chat.list": [ChatListParams, ChatsResult];
@@ -914,6 +916,7 @@ export const METHOD_NAMES = [
   "session.list",
   "session.check",
   "session.login",
+  "session.ensure",
   "process.stop",
   "chat.create",
   "chat.list",
