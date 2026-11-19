@@ -1,4 +1,5 @@
-# Checks shared by the e2e scripts, sourced by each: `source "$(dirname "$0")/e2e-lib.sh"`.
+# Checks shared by the e2e scripts, sourced by each: `source scripts/e2e-lib.sh` from the repo's
+# root, `source "$(dirname "$0")/e2e-lib.sh"` before a script changes folder.
 
 # A check on a command's output (`c ls | has "^name"`): reads all of it first, so that under
 # pipefail the command never dies of SIGPIPE when grep stops at its first match.

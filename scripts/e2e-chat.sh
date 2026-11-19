@@ -71,7 +71,7 @@ search = { semantic = false }
 url = ""
 TOML
 c() { "$BIN/chauffeur" "$@"; }
-source "$(dirname "$0")/e2e-lib.sh"
+source scripts/e2e-lib.sh
 events() { sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "select payload from events where chat_id = '$1' order by seq"; }
 
 check_design_request() {

@@ -476,8 +476,7 @@ test "$(opened)" = "--remote ssh-remote+$HOST $T/wrk/workspaces/moving"
 : > "$T/opened"
 on src open moving --repo alpha >/dev/null
 test "$(opened)" = "--remote ssh-remote+$HOST $T/wrk/workspaces/moving/alpha"
-if on src open moving --app finder 2>"$T/refused"; then echo "Finder opened a workspace on a worker"; exit 1; fi
-grep -q "Only Cursor and VS Code open moving on w1" "$T/refused"
+refuses "Only Cursor and VS Code open moving on w1" on src open moving --app finder
 # The user takes the Include out: the worker says why it no longer opens, with the line to add back,
 # and opening is refused; once the line is back, it opens again.
 issue() { on src --json worker list | python3 -c 'import sys,json; print(json.load(sys.stdin)["workers"][0]["ssh_issue"])'; }
@@ -522,8 +521,7 @@ test "$(count)" = 3
 on src cloud backup moving --status | has "3 kept"
 
 echo "== delete. refused while a workspace runs there"
-if on src worker delete w1 --yes 2>"$T/refused"; then echo "a worker running a workspace was deleted"; exit 1; fi
-grep -q "moving runs on w1: bring it back before deleting w1" "$T/refused"
+refuses "moving runs on w1: bring it back before deleting w1" on src worker delete w1 --yes
 test -f "$T/fake/instances/chauffeur-worker-w1"
 
 echo "== restart. the forward comes back with the daemon"
@@ -562,13 +560,14 @@ if [ -n "${RECOVERY:-}" ]; then
   cp "$BACKUP" "$T/backup.keep"
   echo "newer than the backup" > "$T/wrk/workspaces/moving/alpha/README.md"
   on_worker daemon stop >/dev/null
-  echo corrupted > "$BACKUP"
-  if on src cloud recover moving --backup "$BACKUP_ID" --yes 2>"$T/refused"; then echo "a corrupted backup recovered"; exit 1; fi
+  # Same size, sixteen bytes changed in its middle: only its authentication can tell.
+  SIZE=$(wc -c < "$BACKUP")
+  printf 'corrupted bytes!' | dd of="$BACKUP" bs=1 seek=$((SIZE / 2)) conv=notrunc 2>/dev/null
+  refuses "incomplete or unauthenticated" on src cloud recover moving --backup "$BACKUP_ID" --yes
   test -f "$T/fake/instances/chauffeur-worker-w1"
   cp "$T/backup.keep" "$BACKUP"
   touch "$T/fake/disk-attached"
-  if on src cloud recover moving --backup "$BACKUP_ID" --yes 2>"$T/refused"; then echo "an attached disk let agents resume"; exit 1; fi
-  grep -q "attached" "$T/refused" || { cat "$T/refused"; exit 1; }
+  refuses "attached" on src cloud recover moving --backup "$BACKUP_ID" --yes
   test ! -f "$T/fake/instances/chauffeur-worker-w1"
   on src --json show moving | python3 -c 'import sys,json; assert json.load(sys.stdin)["moved_to"] == "w1"'
   on src daemon stop >/dev/null
@@ -576,8 +575,7 @@ if [ -n "${RECOVERY:-}" ]; then
   rm "$T/fake/disk-attached"
   # The next retry restores the files, then the API refuses the final pre-commit disk check.
   echo 3 > "$T/fake/fail-disk-check-at"
-  if on src cloud recover moving --backup "$BACKUP_ID" --yes 2>"$T/refused"; then echo "an unproved final fence activated"; exit 1; fi
-  grep -q "PERMISSION_DENIED" "$T/refused" || { cat "$T/refused"; exit 1; }
+  refuses "PERMISSION_DENIED" on src cloud recover moving --backup "$BACKUP_ID" --yes
   on src --json show moving | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["moved_to"] == "w1", w'
   on src daemon stop >/dev/null
   on src daemon start >/dev/null
@@ -590,8 +588,7 @@ if [ -n "${RECOVERY:-}" ]; then
   on src --json show moving | python3 -c 'import sys,json; w=json.load(sys.stdin); assert not w.get("moved_to") and not w.get("backup"), w'
   grep -q "instances delete chauffeur-worker-w1 --keep-disks=all" "$T/fake/calls"
   refute grep -q -- "--delete-disks" "$T/fake/calls"
-  if on src worker create w1 --yes 2>"$T/refused"; then echo "a retained worker was recreated"; exit 1; fi
-  grep -q "retained for backup recovery" "$T/refused"
+  refuses "retained for backup recovery" on src worker create w1 --yes
   echo "e2e-cloud-workers recovery: ok"
   exit 0
 fi

@@ -163,10 +163,7 @@ echo "== interrupted. a transfer failing once the source stopped leaves it stopp
 # The destination cannot create the workspace's folder: its restoration fails, after the seal.
 chmod 555 "$T/dst/workspaces"
 refuses "the destination could not restore it" transfer moving
-if on src worktree add --workspace moving --repo alpha --name probe 2>"$T/fenced"; then
-  echo "a source stopped for a transfer ran a command"; exit 1
-fi
-grep -q "fenced for handoff" "$T/fenced"
+refuses "fenced for handoff" on src worktree add --workspace moving --repo alpha --name probe
 on src cloud transfer moving --to vm --cancel | has "^Cancelled; moving runs on the source again.$"
 on src worktree add --workspace moving --repo alpha --name probe >/dev/null
 on src worktree remove probe --workspace moving >/dev/null
@@ -209,8 +206,7 @@ on dst rename moving Worked elsewhere >/dev/null
 echo "== source. the workspace stays, read-only and marked moved"
 test "$(cat "$SOURCE_PATH/alpha/README.md")" = "edited before the transfer"
 # A machine declared by hand has no SSH entry: no editor of this machine opens it there.
-if on src open moving 2>"$T/refused"; then echo "a workspace moved to a declared machine opened"; exit 1; fi
-grep -q "moving runs on vm, a machine declared by hand: only a GCP worker's workspaces open in this machine's editors" "$T/refused" || { cat "$T/refused"; exit 1; }
+refuses "moving runs on vm, a machine declared by hand: only a GCP worker's workspaces open in this machine's editors" on src open moving
 
 echo "== relay. from the source, the moved workspace's chats are the destination's"
 ids() { python3 -c 'import sys,json; print(sorted(c["id"] for c in json.load(sys.stdin)["chats"]))'; }
@@ -259,8 +255,7 @@ on src attach moving > "$T/follow.out" 2>&1 &
 FOLLOW=$!
 following "$T/follow.out"
 on dst daemon stop >/dev/null
-if on src chats moving 2>"$T/down"; then echo "a call reached a stopped destination"; exit 1; fi
-grep -q "vm does not answer" "$T/down"
+refuses "vm does not answer" on src chats moving
 # Followed while it does not answer, as the app opening the workspace: said at once.
 on src attach moving > "$T/late.out" 2>&1 &
 LATE=$!
@@ -293,8 +288,7 @@ for _ in $(seq 1 40); do [ -n "$(find "$MOVED" -name typed-here.txt 2>/dev/null)
 grep -q from-the-source "$(find "$MOVED" -name typed-here.txt | sed -n 1p)"
 app terminal.close "{\"terminal\": \"$TERM_ID\"}" >/dev/null
 # Opening one of its files with an app of this machine is refused: its copy here is not the one that runs.
-if app files.open '{"workspace": "moving", "path": "alpha/README.md"}' 2>"$T/opened"; then echo "a moved file opened here"; exit 1; fi
-grep -q "its files are there" "$T/opened"
+refuses "its files are there" app files.open '{"workspace": "moving", "path": "alpha/README.md"}'
 # An HTML page written there previews here: its rendering, and what it loads, read there.
 printf '<link rel="stylesheet" href="page.css"><p>rendered there</p>\n' > "$MOVED/alpha/page.html"
 echo "p { color: teal }" > "$MOVED/alpha/page.css"
@@ -383,8 +377,7 @@ on src stop "$PROC" >/dev/null
 rm -r "$MOVED/alpha/.chauffeur"
 # Only a workspace that runs elsewhere has a reminder to put off.
 on src new --name local >/dev/null
-if app workspace.remind_later '{"workspaces": ["local"]}' 2>"$T/snooze"; then echo "a local workspace was snoozed"; exit 1; fi
-grep -q "runs on this machine" "$T/snooze"
+refuses "runs on this machine" app workspace.remind_later '{"workspaces": ["local"]}'
 on src archive local >/dev/null
 
 echo "== phone. a declared preview of the moved workspace opens on the phone through the Mac only"
@@ -453,7 +446,7 @@ wait "$HELD" 2>/dev/null || true
 returned_preview() { app previews.list '{"workspace": "moving"}' | python3 -c 'import sys,json; p=json.load(sys.stdin); assert p["machine"] is None and [(x["name"],x["state"]) for x in p["previews"]]==[("web","stopped")], p' 2>"$T/preview-state"; }
 for _ in $(seq 1 60); do returned_preview && break; sleep 0.25; done
 returned_preview || { echo "the returned workspace's preview still answers here"; cat "$T/preview-state"; exit 1; }
-refuses "unexpected previews: {\"machine\":null" bun "$ROOT/scripts/e2e-phone-preview.ts" check "$SRC_SOCKET" moving
+refuses "unexpected previews" bun "$ROOT/scripts/e2e-phone-preview.ts" check "$SRC_SOCKET" moving
 kill "$DEV"; wait "$DEV" 2>/dev/null || true
 
 echo "== cleanup. the machine it left deleted its copy; no transfer's package or archive is left"

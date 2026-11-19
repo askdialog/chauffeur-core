@@ -59,7 +59,7 @@ login_remote = "echo 'Open https://phone.example/device'; echo 'Code: E2E2'"
 TOML
 
 c() { "$BIN/chauffeur" "$@"; }
-source "$(dirname "$0")/e2e-lib.sh"
+source scripts/e2e-lib.sh
 c daemon start
 echo "== reviews. history is empty on a fresh daemon and no model runs without reports"
 bun scripts/app-call.ts reviews.info '{}' | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["reports"] == [] and r["followups"] == [] and r["projection"] is None and not r["running"] and not r["auto_refresh_enabled"], r'
@@ -266,7 +266,7 @@ test "$(chat_ids)" = "$FIRST $SECOND"
 refuses "Pass --yes to go ahead without being asked" c chat delete "$SECOND" </dev/null
 c chat delete "$SECOND" --yes >/dev/null
 test "$(chat_ids --all)" = "$FIRST"
-refuses "not found" c chat rename "$SECOND" again
+refuses "$SECOND not found" c chat rename "$SECOND" again
 # A shell command (`!`), the app's way (the Unix socket the CLI uses refuses it): run in the
 # workspace folder, no agent started.
 shell_params() { python3 -c 'import sys,json; print(json.dumps({"chat": sys.argv[1], "command": sys.argv[2]}))' "$@"; }
@@ -290,7 +290,7 @@ import sys,json; c=json.load(sys.stdin)
 assert c["kind"] == "design" and c["agent"] == "codex" and c["permission_mode"] == "auto", c
 print(c["id"])')
 c chat delete "$CODEX_DESIGN" --yes >/dev/null
-refuses "Usage: chauffeur chat --design --from" c chat e2e-one --from "$FIRST"
+refuses "Usage: chauffeur chat --design --from <CHAT> <WORKSPACE>" c chat e2e-one --from "$FIRST"
 # Its canvas: canvas.json read from its folder, the screens served on their own origin only.
 c canvas "$DESIGN" | has "no screens yet"
 DDIR="$CHAUFFEUR_WORKSPACES_DIR/e2e-one/.chauffeur/designs/$DESIGN"
@@ -316,7 +316,7 @@ if EXPORT_ERROR=$(c export "$DESIGN" other.html 2>&1); then
   echo "an export of an unlisted screen was accepted"; exit 1
 fi
 grep -q "other.html is not a screen of this design" <<< "$EXPORT_ERROR"
-refuses "Usage: chauffeur export <CHAT> <FILES>" c export "$DESIGN"
+refuses "Usage: chauffeur export <CHAT> <FILES>..." c export "$DESIGN"
 # Comments (story 51): on a screen of the canvas, in comments.json, listed by screen; a reply follows its thread.
 c comments "$DESIGN" | has "no comments yet"
 # Sharing (story 51): off without a share service (Core names none); with one, the state of an
@@ -658,8 +658,7 @@ if grep -rq "s3cret-fixture-value" "$T/conductor-plan" "$T/conductor-plan.json" 
 fi
 [ "$(conductor_files)" = "$before" ] || { echo "the dry run changed Conductor's files"; exit 1; }
 # Without --yes and nobody to answer, nothing is imported.
-if c import conductor --db "$CDB" </dev/null 2>"$T/conductor-refused"; then echo "the import ran without asking"; exit 1; fi
-grep -q "Pass --yes" "$T/conductor-refused"
+refuses "Pass --yes" c import conductor --db "$CDB" </dev/null
 [ "$(conductor_files)" = "$before" ] || { echo "a refused import changed Conductor's files"; exit 1; }
 lima_files() { (cd "$LIMA" && find . -type f -print0 | sort -z | xargs -0 shasum | shasum); }
 lima_before=$(lima_files)
@@ -730,8 +729,7 @@ c import conductor --yes --include-archived --db "$CDB" | has "^Old work: alread
 cp "$CDB" "$T/conductor-other.db"
 sqlite3 "$T/conductor-other.db" "ALTER TABLE workspaces DROP COLUMN linked_directory_paths"
 settings_before=$(shasum < "$CHAUFFEUR_HOME/settings.toml")
-if c import conductor --yes --db "$T/conductor-other.db" 2>"$T/conductor-schema"; then echo "an unknown schema was imported"; exit 1; fi
-grep -q "is not one this Chauffeur knows (no column workspaces.linked_directory_paths)" "$T/conductor-schema"
+refuses "is not one this Chauffeur knows (no column workspaces.linked_directory_paths)" c import conductor --yes --db "$T/conductor-other.db"
 test "$(shasum < "$CHAUFFEUR_HOME/settings.toml")" = "$settings_before"
 c archive pricing-filters --force >/dev/null
 c archive linked-work --force >/dev/null
