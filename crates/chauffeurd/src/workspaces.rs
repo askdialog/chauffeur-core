@@ -1854,15 +1854,12 @@ impl WorkspaceManager {
         path: &Path,
     ) -> Result<WorktreeRow> {
         let d = self.d();
-        let git = self.git();
-        let remote = format!("origin/{}", repo.default_branch);
-        let start = if git.rev_parse(&repo.clone_path, &remote).await.is_ok() {
-            remote
-        } else {
-            repo.default_branch.clone()
-        };
-        self.progress(&row.id, format!("checking out {} at {start}", repo.name));
-        git.worktree_add_detached(&repo.clone_path, path, &start)
+        self.progress(
+            &row.id,
+            format!("checking out {} at {}", repo.name, repo.default_branch),
+        );
+        let base_commit = self
+            .checkout_base_detached(&repo.clone_path, path, &repo.default_branch)
             .await
             .map_err(|e| Error::Internal(e.context(format!("checkout of {}", repo.name))))?;
         let worktree = WorktreeRow {
@@ -1873,7 +1870,7 @@ impl WorkspaceManager {
             path: path.to_string_lossy().into_owned(),
             branch: String::new(),
             base_branch: repo.default_branch.clone(),
-            base_commit: git.rev_parse(path, "HEAD").await.ok(),
+            base_commit,
             origin: WorktreeOrigin::Workspace,
             group: None,
             removed: false,
@@ -1888,6 +1885,24 @@ impl WorkspaceManager {
             },
         );
         Ok(worktree)
+    }
+
+    /// Checks a clone's base branch out at `path`, detached, as its remote has it when known: an
+    /// exploration's checkout. Returns the commit checked out.
+    async fn checkout_base_detached(
+        &self,
+        clone: &Path,
+        path: &Path,
+        base: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let git = self.git();
+        let remote = format!("origin/{base}");
+        let start = match git.rev_parse(clone, &remote).await {
+            Ok(_) => remote,
+            Err(_) => base.to_string(),
+        };
+        git.worktree_add_detached(clone, path, &start).await?;
+        Ok(git.rev_parse(path, "HEAD").await.ok())
     }
 
     async fn rollback(&self, row: &WorkspaceRow) {
@@ -2895,10 +2910,6 @@ impl WorkspaceManager {
     pub async fn restore(&self, key: &str) -> Result<WorkspaceInfo> {
         let d = self.d();
         let row = self.row(key)?;
-        read_only(
-            &row,
-            "start a new exploration rather than restoring this one",
-        )?;
         if !matches!(
             row.state,
             WorkspaceState::Archived | WorkspaceState::CleanupFailed
@@ -2908,6 +2919,9 @@ impl WorkspaceManager {
                 row.slug,
                 row.state.as_str()
             )));
+        }
+        if row.explore {
+            return self.reactivate(row).await;
         }
         let restorable: Vec<WorktreeRow> = d
             .store
@@ -2923,18 +2937,7 @@ impl WorkspaceManager {
             )));
         }
         self.set_state(&row.id, WorkspaceState::Creating, None)?;
-        let root = PathBuf::from(&row.path);
-        std::fs::create_dir_all(&root)?;
-        let archived_notes = d.paths.archive_dir.join(&row.slug);
-        let notes = root.join(NOTES_DIR);
-        if archived_notes.exists()
-            && !notes.exists()
-            && std::fs::rename(&archived_notes, &notes).is_err()
-        {
-            copy_dir(&archived_notes, &notes)?;
-            std::fs::remove_dir_all(&archived_notes)?;
-        }
-        std::fs::create_dir_all(&notes)?;
+        self.bring_back_folder(&row)?;
         crate::ports::allocate(
             &d.store,
             &row.id,
@@ -3009,17 +3012,106 @@ impl WorkspaceManager {
         for worktree in &restorable {
             d.store.clear_snapshot_ref(&worktree.id)?;
         }
-        for chat in d.store.chats_of(&row.id)? {
-            if chat.status == ChatStatus::Closed {
-                d.chats.unarchive(&chat.id)?;
-            }
-        }
+        self.unarchive_chats(&row.id)?;
         self.set_state(&row.id, WorkspaceState::Ready, None)?;
         self.start_setup_scripts(&row.id, None)?;
         for group in &groups {
             self.start_setup_scripts(&row.id, Some(group))?;
         }
         self.get(&row.id)
+    }
+
+    /// Brings an archived exploration back (docs/adr/reactivate-archived-explorations.md): its
+    /// folder and notes, each repo fetched and checked out detached at its base branch as it is
+    /// now, its chats idle; no setup and no ports, as a new exploration.
+    async fn reactivate(&self, row: WorkspaceRow) -> Result<WorkspaceInfo> {
+        let d = self.d();
+        let checkouts: Vec<WorktreeRow> = d
+            .store
+            .worktrees_of(&row.id)?
+            .into_iter()
+            .filter(|w| w.removed && w.origin == WorktreeOrigin::Workspace)
+            .collect();
+        self.set_state(&row.id, WorkspaceState::Creating, None)?;
+        self.bring_back_folder(&row)?;
+        let git = self.git();
+        let mut errors = Vec::new();
+        for worktree in &checkouts {
+            let clone = Path::new(&worktree.clone_path);
+            let lock = d.repos.lock_for(clone);
+            let _guard = lock.lock().await;
+            self.progress(&row.id, format!("fetching {}", worktree.repo));
+            match git.fetch(clone, &worktree.base_branch).await {
+                Ok(()) => self.mark_fetched(clone),
+                Err(error) => self.warn(
+                    &row.id,
+                    format!(
+                        "could not fetch {} ({error:#}): its checkout is at {} as the clone last saw it",
+                        worktree.repo, worktree.base_branch
+                    ),
+                ),
+            }
+            let checkout = self
+                .checkout_base_detached(clone, Path::new(&worktree.path), &worktree.base_branch)
+                .await;
+            match checkout {
+                Ok(commit) => {
+                    d.store
+                        .reactivate_worktree(&worktree.id, commit.as_deref())?;
+                    let mut back = worktree.clone();
+                    back.removed = false;
+                    back.base_commit = commit;
+                    d.events.workspace(
+                        &row.id,
+                        WorkspaceEvent::WorktreeAdded {
+                            worktree: worktree_info(back),
+                        },
+                    );
+                }
+                Err(error) => errors.push(format!("{}: {error:#}", worktree.repo)),
+            }
+        }
+        self.regenerate_config(&row.id)?;
+        if !errors.is_empty() {
+            self.set_state(
+                &row.id,
+                WorkspaceState::CleanupFailed,
+                Some(format!("reactivation failed: {}", errors.join("; "))),
+            )?;
+            return self.get(&row.id);
+        }
+        self.unarchive_chats(&row.id)?;
+        self.set_state(&row.id, WorkspaceState::Ready, None)?;
+        self.get(&row.id)
+    }
+
+    /// An archived workspace's folder made again, its notes brought back from the archive.
+    fn bring_back_folder(&self, row: &WorkspaceRow) -> Result<()> {
+        let d = self.d();
+        let root = PathBuf::from(&row.path);
+        std::fs::create_dir_all(&root)?;
+        let archived_notes = d.paths.archive_dir.join(&row.slug);
+        let notes = root.join(NOTES_DIR);
+        if archived_notes.exists()
+            && !notes.exists()
+            && std::fs::rename(&archived_notes, &notes).is_err()
+        {
+            copy_dir(&archived_notes, &notes)?;
+            std::fs::remove_dir_all(&archived_notes)?;
+        }
+        std::fs::create_dir_all(&notes)?;
+        Ok(())
+    }
+
+    /// The chats an archive closed, back to idle.
+    fn unarchive_chats(&self, workspace: &str) -> Result<()> {
+        let d = self.d();
+        for chat in d.store.chats_of(workspace)? {
+            if chat.status == ChatStatus::Closed {
+                d.chats.unarchive(&chat.id)?;
+            }
+        }
+        Ok(())
     }
 
     /// Deletes archive snapshots past their retention.

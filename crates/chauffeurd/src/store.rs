@@ -1541,6 +1541,17 @@ impl Store {
         })
     }
 
+    /// A removed worktree checked out again, at `base_commit` (an exploration reactivated).
+    pub fn reactivate_worktree(&self, id: &str, base_commit: Option<&str>) -> Result<()> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE worktrees SET removed = 0, base_commit = ?2 WHERE id = ?1",
+                params![id, base_commit],
+            )
+        })?;
+        Ok(())
+    }
+
     pub fn set_worktree_removed(
         &self,
         id: &str,
