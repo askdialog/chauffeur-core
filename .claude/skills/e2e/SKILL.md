@@ -53,8 +53,8 @@ The scripts run real daemons in a throwaway `CHAUFFEUR_HOME` (a `mktemp -d` fold
   ```bash
   c --json show my-ws | python3 -c 'import sys,json; w=json.load(sys.stdin); assert not w["explore"], w'
   ```
-- `set -e` does not stop on `! command`: write `if command; then echo "<what should not happen>"; exit 1; fi`.
-- Match a command's output with the script's `has` (`c ls | has "^my-ws "`), never `| grep -q` or `| head`: under `pipefail` they can stop the command with SIGPIPE and fail at random (exit 141). For a negative match, capture first (`out=$(c …)`, then `if has x <<< "$out"; then …`), so that a failing command fails the step.
+- A command that must be refused: `refuses "<part of its message>" c …` (from `scripts/e2e-lib.sh`, with `has`). It fails the step when the command succeeds or fails for another reason (a usage error, a crash); `set -e` does not stop on `! command`, and `if c …; then …; exit 1; fi` passes on any failure. For a state that must not hold, write `if command; then echo "<what should not happen>"; exit 1; fi`.
+- Match a command's output with `has` (`scripts/e2e-lib.sh`) (`c ls | has "^my-ws "`), never `| grep -q` or `| head`: under `pipefail` they can stop the command with SIGPIPE and fail at random (exit 141). For a negative match, capture first (`out=$(c …)`, then `if has x <<< "$out"; then …`), so that a failing command fails the step.
 - One check per line: `set -e` does not stop on the first command of `a && b`, so `test -f x && grep -q y x` goes on when `x` is missing. The same for setup chains: write each step on its own line.
 - To change the daemon's environment for one step, restart it around the step and back (`c daemon stop; CHAUFFEUR_IDLE_SESSION_SECS=3 c daemon start`).
 - To test what calls `gh` without real pull requests, see the fake gh in `scripts/e2e-cli.sh` (`login-shell`) or the verify-in-app skill.

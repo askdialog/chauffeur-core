@@ -9,6 +9,7 @@
 # destination and comes back, recalling its word each time. Each daemon has a Vibe home of its own
 # in the temporary folder, as two machines would.
 set -euo pipefail
+source "$(dirname "$0")/e2e-lib.sh"
 cd "$(dirname "$0")/.."
 cargo build -q -p chauffeurd -p chauffeur-cli
 (cd sidecar && bun run build >/dev/null)
@@ -128,7 +129,7 @@ if transfer moving 2>"$T/refused"; then echo "a workspace with a link in no repo
 grep -q "stray-link in the workspace folder is a link" "$T/refused" || { cat "$T/refused"; exit 1; }
 grep -q "nothing was stopped" "$T/refused"
 # Refused before the controller prepared it: cancelling it only ends it here.
-on src cloud transfer moving --to vm --cancel | grep -q "^Cancelled; moving runs on the source again.$"
+on src cloud transfer moving --to vm --cancel | has "^Cancelled; moving runs on the source again.$"
 on src worktree add --workspace moving --repo alpha --name probe >/dev/null
 on src worktree remove probe --workspace moving >/dev/null
 rm "$SOURCE_PATH/stray-link"
@@ -161,17 +162,14 @@ git -C "$SOURCE_PATH/alpha" config remote.origin.url "https://x-access-token:sec
 echo "== interrupted. a transfer failing once the source stopped leaves it stopped; cancelled, it runs there again"
 # The destination cannot create the workspace's folder: its restoration fails, after the seal.
 chmod 555 "$T/dst/workspaces"
-if transfer moving 2>"$T/failed"; then echo "a destination that cannot write took the workspace"; exit 1; fi
-if on src worktree add --workspace moving --repo alpha --name probe 2>"$T/fenced"; then
-  echo "a source stopped for a transfer ran a command"; exit 1
-fi
-grep -q "fenced for handoff" "$T/fenced"
-on src cloud transfer moving --to vm --cancel | grep -q "^Cancelled; moving runs on the source again.$"
+refuses "the destination could not restore it" transfer moving
+refuses "fenced for handoff" on src worktree add --workspace moving --repo alpha --name probe
+on src cloud transfer moving --to vm --cancel | has "^Cancelled; moving runs on the source again.$"
 on src worktree add --workspace moving --repo alpha --name probe >/dev/null
 on src worktree remove probe --workspace moving >/dev/null
 
 echo "== resumed. failing again, the transfer goes on from where it stopped once the destination can write"
-if transfer moving 2>"$T/failed"; then echo "a destination that cannot write took the workspace"; exit 1; fi
+refuses "the destination could not restore it" transfer moving
 chmod 755 "$T/dst/workspaces"
 # Its progress goes to standard error.
 transfer moving 2>&1 | tee "$T/transfer.out"
@@ -208,8 +206,7 @@ on dst rename moving Worked elsewhere >/dev/null
 echo "== source. the workspace stays, read-only and marked moved"
 test "$(cat "$SOURCE_PATH/alpha/README.md")" = "edited before the transfer"
 # A machine declared by hand has no SSH entry: no editor of this machine opens it there.
-if on src open moving 2>"$T/refused"; then echo "a workspace moved to a declared machine opened"; exit 1; fi
-grep -q "moving runs on vm, a machine declared by hand: only a GCP worker's workspaces open in this machine's editors" "$T/refused" || { cat "$T/refused"; exit 1; }
+refuses "moving runs on vm, a machine declared by hand: only a GCP worker's workspaces open in this machine's editors" on src open moving
 
 echo "== relay. from the source, the moved workspace's chats are the destination's"
 ids() { python3 -c 'import sys,json; print(sorted(c["id"] for c in json.load(sys.stdin)["chats"]))'; }
@@ -218,11 +215,12 @@ if [ -n "${REAL:-}" ]; then
   # A chat this machine has no row of: created, renamed and deleted there through this daemon.
   # (Without a Claude login here, a chat left there would refuse the way back.)
   NEW=$(on src --json chat moving --model haiku | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
-  on dst --json chats moving | grep -q "$NEW"
+  on dst --json chats moving | has "$NEW"
   on src chat rename "$NEW" relayed >/dev/null
   on dst --json chats moving | python3 -c 'import sys,json; assert any(c["id"]=="'"$NEW"'" and c["title"]=="relayed" for c in json.load(sys.stdin)["chats"])'
   on src chat delete "$NEW" --yes >/dev/null
-  if on dst --json chats moving --all | grep -q "$NEW"; then echo "the relayed delete left the chat"; exit 1; fi
+  LEFT=$(on dst --json chats moving --all)
+  if has "$NEW" <<< "$LEFT"; then echo "the relayed delete left the chat"; exit 1; fi
 fi
 
 echo "== relay. the moved workspace's events and unread mark are the destination's"
@@ -257,8 +255,7 @@ on src attach moving > "$T/follow.out" 2>&1 &
 FOLLOW=$!
 following "$T/follow.out"
 on dst daemon stop >/dev/null
-if on src chats moving 2>"$T/down"; then echo "a call reached a stopped destination"; exit 1; fi
-grep -q "vm does not answer" "$T/down"
+refuses "vm does not answer" on src chats moving
 # Followed while it does not answer, as the app opening the workspace: said at once.
 on src attach moving > "$T/late.out" 2>&1 &
 LATE=$!
@@ -281,33 +278,32 @@ on dst --json show moving | python3 -c 'import sys,json; w=json.load(sys.stdin);
 on src worktree remove --workspace moving probe >/dev/null
 on dst --json show moving | python3 -c 'import sys,json; w=json.load(sys.stdin); assert not any("probe" in t["path"] and not t["removed"] for t in w["worktrees"]), w["worktrees"]'
 echo "written there" > "$MOVED/alpha/there.md"
-on src --json files moving | grep -q "there.md"
-on src --json diff moving --stat | grep -q "README.md"
+on src --json files moving | has "there.md"
+on src --json diff moving --stat | has "README.md"
 # A terminal opened from here runs there, its input too.
 app() { CHAUFFEUR_HOME="$T/src/home" bun "$ROOT/scripts/app-call.ts" "$@"; }
 TERM_ID=$(app terminal.open '{"workspace": "moving", "cols": 80, "rows": 24}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
 app terminal.input "{\"terminal\": \"$TERM_ID\", \"data\": \"echo from-the-source > typed-here.txt\\n\"}" >/dev/null
 for _ in $(seq 1 40); do [ -n "$(find "$MOVED" -name typed-here.txt 2>/dev/null)" ] && break; sleep 0.25; done
-grep -q from-the-source "$(find "$MOVED" -name typed-here.txt | head -1)"
+grep -q from-the-source "$(find "$MOVED" -name typed-here.txt | sed -n 1p)"
 app terminal.close "{\"terminal\": \"$TERM_ID\"}" >/dev/null
 # Opening one of its files with an app of this machine is refused: its copy here is not the one that runs.
-if app files.open '{"workspace": "moving", "path": "alpha/README.md"}' 2>"$T/opened"; then echo "a moved file opened here"; exit 1; fi
-grep -q "its files are there" "$T/opened"
+refuses "its files are there" app files.open '{"workspace": "moving", "path": "alpha/README.md"}'
 # An HTML page written there previews here: its rendering, and what it loads, read there.
 printf '<link rel="stylesheet" href="page.css"><p>rendered there</p>\n' > "$MOVED/alpha/page.html"
 echo "p { color: teal }" > "$MOVED/alpha/page.css"
 PREVIEW=$(app files.read '{"workspace": "moving", "path": "alpha/page.html"}' | python3 -c 'import sys,json; print(json.load(sys.stdin)["preview_url"] or "")')
 case "$PREVIEW" in http://127.0.0.1:*) ;; *) echo "no preview here: $PREVIEW"; exit 1 ;; esac
-curl -sf "$PREVIEW" | grep -q "rendered there"
-curl -sf "${PREVIEW%page.html}page.css" | grep -q teal
+curl -sf "$PREVIEW" | has "rendered there"
+curl -sf "${PREVIEW%page.html}page.css" | has teal
 rm "$MOVED/alpha/page.html" "$MOVED/alpha/page.css"
 # An image an answer shows, read there through this daemon's own HTTP route.
 python3 -c 'import base64,sys; open(sys.argv[1],"wb").write(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="))' "$MOVED/alpha/pixel.png"
 SRC_PORT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["port"])' "$T/src/home/daemon.json")
 SRC_TOKEN=$(cat "$T/src/home/token")
-curl -sf -o "$T/pixel.png" -w '%{content_type}' "http://127.0.0.1:$SRC_PORT/images/moving?path=alpha/pixel.png&token=$SRC_TOKEN" | grep -q image/png
+curl -sf -o "$T/pixel.png" -w '%{content_type}' "http://127.0.0.1:$SRC_PORT/images/moving?path=alpha/pixel.png&token=$SRC_TOKEN" | has image/png
 cmp -s "$T/pixel.png" "$MOVED/alpha/pixel.png"
-rm "$MOVED/alpha/pixel.png" "$MOVED/alpha/there.md" "$(find "$MOVED" -name typed-here.txt | head -1)"
+rm "$MOVED/alpha/pixel.png" "$MOVED/alpha/there.md" "$(find "$MOVED" -name typed-here.txt | sed -n 1p)"
 on src --json models --workspace moving | python3 -c 'import sys,json; assert "agents" in json.load(sys.stdin)'
 # A run script started from here runs there, and stops from here by its id alone.
 mkdir -p "$MOVED/alpha/.chauffeur" && printf '[scripts]\nrun = "sleep 300"\n' > "$MOVED/alpha/.chauffeur/settings.toml"
@@ -381,8 +377,7 @@ on src stop "$PROC" >/dev/null
 rm -r "$MOVED/alpha/.chauffeur"
 # Only a workspace that runs elsewhere has a reminder to put off.
 on src new --name local >/dev/null
-if app workspace.remind_later '{"workspaces": ["local"]}' 2>"$T/snooze"; then echo "a local workspace was snoozed"; exit 1; fi
-grep -q "runs on this machine" "$T/snooze"
+refuses "runs on this machine" app workspace.remind_later '{"workspaces": ["local"]}'
 on src archive local >/dev/null
 
 echo "== phone. a declared preview of the moved workspace opens on the phone through the Mac only"
@@ -391,7 +386,7 @@ DEV=$!
 for _ in $(seq 1 40); do curl -s -o /dev/null "http://127.0.0.1:$DST_BASE/" && break; sleep 0.25; done
 # Detected there from here, the port that answers HTTP; declared, by its place in the block.
 on src --json services moving detect | python3 -c 'import sys,json; p=json.load(sys.stdin)["previews"]; assert [(x["port"],x["listening"],x["declared"]) for x in p]==[('"$DST_BASE"',True,False)], p'
-on src services moving save --preview "web=$DST_BASE" | grep -q "^preview web  port $DST_BASE$"
+on src services moving save --preview "web=$DST_BASE" | has "^preview web  port $DST_BASE$"
 # Listed here on this machine's port that reaches it, with what its port does there.
 app previews.list '{"workspace": "moving"}' | python3 -c 'import sys,json; p=json.load(sys.stdin); assert p["machine"]=="vm" and [(x["name"],x["port"],x["state"]) for x in p["previews"]]==[("web",'"$SRC_BASE"',"ready")], p'
 # Through the phone's loopback, the mobile host and the Mac: the login's redirects and session
@@ -451,11 +446,11 @@ wait "$HELD" 2>/dev/null || true
 returned_preview() { app previews.list '{"workspace": "moving"}' | python3 -c 'import sys,json; p=json.load(sys.stdin); assert p["machine"] is None and [(x["name"],x["state"]) for x in p["previews"]]==[("web","stopped")], p' 2>"$T/preview-state"; }
 for _ in $(seq 1 60); do returned_preview && break; sleep 0.25; done
 returned_preview || { echo "the returned workspace's preview still answers here"; cat "$T/preview-state"; exit 1; }
-if bun "$ROOT/scripts/e2e-phone-preview.ts" check "$SRC_SOCKET" moving 2>"$T/refused-preview"; then echo "a returned workspace's preview opened"; exit 1; fi
+refuses "unexpected previews" bun "$ROOT/scripts/e2e-phone-preview.ts" check "$SRC_SOCKET" moving
 kill "$DEV"; wait "$DEV" 2>/dev/null || true
 
 echo "== cleanup. the machine it left deleted its copy; no transfer's package or archive is left"
-if on dst show moving >/dev/null 2>&1; then echo "the copy it left is still there"; exit 1; fi
+refuses "workspace moving not found" on dst show moving
 test ! -e "$MOVED"
 test -z "$(ls -A "$T/dst/home/restorations")"
 for name in src dst; do
@@ -491,9 +486,9 @@ mkdir -p "$LOCKED" && touch "$LOCKED/file" && chmod 500 "$LOCKED"
 echo "== round trip. a return cancelled once the source stopped leaves the copy here replaceable"
 # This machine cannot set its retired copy aside: the return fails after the seal, then is cancelled.
 chmod 555 "$T/src/workspaces"
-if on src cloud transfer trip --back 2>"$T/trip-failed"; then echo "a return replaced a copy it could not move"; exit 1; fi
+refuses "the destination could not restore it" on src cloud transfer trip --back
 chmod 755 "$T/src/workspaces"
-on src cloud transfer trip --back --cancel | grep -q "^Cancelled; trip runs on the source again.$"
+on src cloud transfer trip --back --cancel | has "^Cancelled; trip runs on the source again.$"
 on dst --json show trip | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["state"]=="ready", w'
 on src --json cloud transfer trip --back 2>"$T/trip.err" >"$T/trip.json" || { cat "$T/trip.err"; exit 1; }
 python3 -c 'import sys,json; t=json.load(open(sys.argv[1])); assert t["returned"] and "could not remove" in t.get("discard_pending",""), t' "$T/trip.json"
@@ -504,10 +499,10 @@ test "$(git -C "$T/clones/alpha" rev-parse "$BRANCH")" = "$AWAY"
 test "$(git -C "$TRIP/alpha" status --porcelain --untracked-files=no)" = "A  staged.md"
 test "$(git -C "$T/clones/alpha" worktree list --porcelain | grep -c "^worktree $TRIP_REAL/alpha$")" = 1
 # Its restoration, the latest, keeps no private clone (nor anything but its folder for exports).
-test -z "$(ls -A "$(ls -td "$T"/src/home/restorations/*/ | head -1)/repos")"
+test -z "$(ls -A "$(ls -td "$T"/src/home/restorations/*/ | sed -n 1p)/repos")"
 
 echo "== round trip. the copy left there is said pending, then cleared once that machine deleted it"
-on src cloud transfer trip --status | grep -q "^Its copy on vm is not deleted yet (.*); it is retried there.$"
+on src cloud transfer trip --status | has "^Its copy on vm is not deleted yet (.*); it is retried there.$"
 on dst --json show trip >/dev/null
 chmod 700 "$LOCKED"
 # Each read asks the source again, at most every ten seconds.
@@ -515,8 +510,8 @@ for _ in $(seq 30); do
   on src --json cloud transfer trip --status | python3 -c 'import sys,json; sys.exit("discard_pending" in json.load(sys.stdin)["transfer"])' && break
   sleep 1
 done
-on src cloud transfer trip --status | grep -qx "Back from vm."
-if on dst show trip >/dev/null 2>&1; then echo "the copy it left is still there"; exit 1; fi
+on src cloud transfer trip --status | has -x "Back from vm."
+refuses "workspace trip not found" on dst show trip
 test ! -e "$AWAY_PATH"
 
 echo "== round trip. it archives as a local workspace: snapshots in the user's clone, worktree gone"
@@ -548,7 +543,7 @@ grep -q "^batch-ok: Moved to vm.$" "$T/batch-status"
 grep -q "^batch-blocked: The transfer to vm failed: .*cannot take batch-blocked yet" "$T/batch-status"
 # Once the destination can take it, it goes alone.
 rmdir "$T/dst/workspaces/batch-blocked"
-on src cloud transfer batch-blocked --to vm 2>/dev/null | grep -q "^Moved to $T/dst/workspaces/batch-blocked;"
+on src cloud transfer batch-blocked --to vm 2>/dev/null | has "^Moved to $T/dst/workspaces/batch-blocked;"
 
 echo "== relay. a chat made there, which this machine has no row of, is waited for by its id"
 # `chauffeur wait|status <chat>` reaches the machine the workspace runs on. It stays there: its
@@ -564,9 +559,9 @@ for _ in $(seq 120); do
   sleep 1
 done
 on src --json show batch-blocked | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["state"]=="archived" and not w.get("moved_to"), w'
-on src cloud transfer batch-blocked --status | grep -qx "Back from vm; archived here."
+on src cloud transfer batch-blocked --status | has -x "Back from vm; archived here."
 # Back, its copy there is deleted; archived, its snapshot is in the user's clone here.
-if on dst show batch-blocked >/dev/null 2>&1; then echo "the archived workspace's copy is still on vm"; exit 1; fi
+refuses "workspace batch-blocked not found" on dst show batch-blocked
 BLOCKED=$(on src --json show batch-blocked | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
 test -n "$(git -C "$T/clones/alpha" for-each-ref "refs/chauffeur/archive/$BLOCKED")"
 
@@ -581,7 +576,7 @@ for _ in $(seq 120); do
 done
 on src --json show elder | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["state"]=="archived", w'
 on src --json show kid | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["state"]=="archived" and not w.get("moved_to"), w'
-if on dst show kid >/dev/null 2>&1; then echo "the archived child's copy is still on vm"; exit 1; fi
+refuses "workspace kid not found" on dst show kid
 
 if [ -n "${VIBE:-}" ]; then
   # Needs Mistral Vibe installed and signed in here (its key is in the keychain, not its home).

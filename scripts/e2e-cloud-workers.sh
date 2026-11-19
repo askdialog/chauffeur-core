@@ -8,6 +8,7 @@
 # whose state is not ~/.chauffeur never touches ~/.ssh otherwise); no real gcloud, gh, editor or
 # GCP resource is used.
 set -euo pipefail
+source "$(dirname "$0")/e2e-lib.sh"
 cd "$(dirname "$0")/.."
 cargo build -q -p chauffeurd -p chauffeur-cli
 (cd sidecar && bun run build >/dev/null)
@@ -453,7 +454,7 @@ fi
 
 echo "== relay. the moved workspace's calls and ports reach the worker through its forwarded socket"
 echo "written there" > "$T/wrk/workspaces/moving/alpha/there.md"
-on src --json files moving | grep -q "there.md"
+on src --json files moving | has "there.md"
 rm "$T/wrk/workspaces/moving/alpha/there.md"
 port_base() { "$@" --json show moving | python3 -c 'import sys,json; print(json.load(sys.stdin)["port_base"])'; }
 SRC_BASE=$(port_base on src)
@@ -475,17 +476,15 @@ test "$(opened)" = "--remote ssh-remote+$HOST $T/wrk/workspaces/moving"
 : > "$T/opened"
 on src open moving --repo alpha >/dev/null
 test "$(opened)" = "--remote ssh-remote+$HOST $T/wrk/workspaces/moving/alpha"
-if on src open moving --app finder 2>"$T/refused"; then echo "Finder opened a workspace on a worker"; exit 1; fi
-grep -q "Only Cursor and VS Code open moving on w1" "$T/refused"
+refuses "Only Cursor and VS Code open moving on w1" on src open moving --app finder
 # The user takes the Include out: the worker says why it no longer opens, with the line to add back,
 # and opening is refused; once the line is back, it opens again.
 issue() { on src --json worker list | python3 -c 'import sys,json; print(json.load(sys.stdin)["workers"][0]["ssh_issue"])'; }
 test "$(issue)" = "None"
 cp "$T/user/.ssh/config" "$T/ssh-config.keep"
 printf 'Host mine\n' > "$T/user/.ssh/config"
-issue | grep -qF "Include \"$T/src/home/ssh_config\""
-if on src open moving --app cursor 2>"$T/refused"; then echo "a worker opened without its Include"; exit 1; fi
-grep -qF "Include \"$T/src/home/ssh_config\"" "$T/refused"
+issue | has -F "Include \"$T/src/home/ssh_config\""
+refuses "Include \"$T/src/home/ssh_config\"" on src open moving --app cursor
 cp "$T/ssh-config.keep" "$T/user/.ssh/config"
 test "$(issue)" = "None"
 
@@ -519,11 +518,10 @@ test "$(health)" = failed
 rm "$T/fake/storage-down"
 on src cloud backup moving >/dev/null
 test "$(count)" = 3
-on src cloud backup moving --status | grep -q "3 kept"
+on src cloud backup moving --status | has "3 kept"
 
 echo "== delete. refused while a workspace runs there"
-if on src worker delete w1 --yes 2>"$T/refused"; then echo "a worker running a workspace was deleted"; exit 1; fi
-grep -q "moving runs on w1: bring it back before deleting w1" "$T/refused"
+refuses "moving runs on w1: bring it back before deleting w1" on src worker delete w1 --yes
 test -f "$T/fake/instances/chauffeur-worker-w1"
 
 echo "== restart. the forward comes back with the daemon"
@@ -562,13 +560,14 @@ if [ -n "${RECOVERY:-}" ]; then
   cp "$BACKUP" "$T/backup.keep"
   echo "newer than the backup" > "$T/wrk/workspaces/moving/alpha/README.md"
   on_worker daemon stop >/dev/null
-  echo corrupted > "$BACKUP"
-  if on src cloud recover moving --backup "$BACKUP_ID" --yes 2>"$T/refused"; then echo "a corrupted backup recovered"; exit 1; fi
+  # Same size, sixteen bytes changed in its middle: only its authentication can tell.
+  SIZE=$(wc -c < "$BACKUP")
+  printf 'corrupted bytes!' | dd of="$BACKUP" bs=1 seek=$((SIZE / 2)) conv=notrunc 2>/dev/null
+  refuses "incomplete or unauthenticated" on src cloud recover moving --backup "$BACKUP_ID" --yes
   test -f "$T/fake/instances/chauffeur-worker-w1"
   cp "$T/backup.keep" "$BACKUP"
   touch "$T/fake/disk-attached"
-  if on src cloud recover moving --backup "$BACKUP_ID" --yes 2>"$T/refused"; then echo "an attached disk let agents resume"; exit 1; fi
-  grep -q "attached" "$T/refused" || { cat "$T/refused"; exit 1; }
+  refuses "attached" on src cloud recover moving --backup "$BACKUP_ID" --yes
   test ! -f "$T/fake/instances/chauffeur-worker-w1"
   on src --json show moving | python3 -c 'import sys,json; assert json.load(sys.stdin)["moved_to"] == "w1"'
   on src daemon stop >/dev/null
@@ -576,8 +575,7 @@ if [ -n "${RECOVERY:-}" ]; then
   rm "$T/fake/disk-attached"
   # The next retry restores the files, then the API refuses the final pre-commit disk check.
   echo 3 > "$T/fake/fail-disk-check-at"
-  if on src cloud recover moving --backup "$BACKUP_ID" --yes 2>"$T/refused"; then echo "an unproved final fence activated"; exit 1; fi
-  grep -q "PERMISSION_DENIED" "$T/refused" || { cat "$T/refused"; exit 1; }
+  refuses "PERMISSION_DENIED" on src cloud recover moving --backup "$BACKUP_ID" --yes
   on src --json show moving | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["moved_to"] == "w1", w'
   on src daemon stop >/dev/null
   on src daemon start >/dev/null
@@ -590,17 +588,14 @@ if [ -n "${RECOVERY:-}" ]; then
   on src --json show moving | python3 -c 'import sys,json; w=json.load(sys.stdin); assert not w.get("moved_to") and not w.get("backup"), w'
   grep -q "instances delete chauffeur-worker-w1 --keep-disks=all" "$T/fake/calls"
   refute grep -q -- "--delete-disks" "$T/fake/calls"
-  if on src worker create w1 --yes 2>"$T/refused"; then echo "a retained worker was recreated"; exit 1; fi
-  grep -q "retained for backup recovery" "$T/refused"
+  refuses "retained for backup recovery" on src worker create w1 --yes
   echo "e2e-cloud-workers recovery: ok"
   exit 0
 fi
 
 echo "== cancelled return. backups resume on the worker, and a later return still replaces the Mac's copy"
 chmod 555 "$T/src/workspaces"
-if on src cloud transfer moving --back 2>"$T/return-refused"; then
-  echo "a return replaced a copy in a read-only parent folder"; exit 1
-fi
+refuses "the destination could not restore it" on src cloud transfer moving --back
 on src --json cloud transfer moving --status | python3 -c 'import sys,json; t=json.load(sys.stdin); t=t.get("transfer",t); assert t["phase"]=="failed" and "restoring it on the destination" in t["log"], t'
 on src cloud transfer moving --back --cancel >/dev/null
 chmod 755 "$T/src/workspaces"
@@ -623,7 +618,7 @@ grep -q "compute instances delete chauffeur-worker-w1 --delete-disks=all --proje
 for _ in $(seq 1 20); do pgrep -f "$FORWARD" >/dev/null || break; sleep 0.1; done
 refute pgrep -f "$FORWARD"
 test ! -e "$T/src/home/workers/w1.sock"
-on src worker list | grep -q "^No worker.$"
+on src worker list | has "^No worker.$"
 # Its entry goes with it; the Include stays, the only line Chauffeur wrote in ~/.ssh/config.
 refute grep -q "$HOST" "$T/src/home/ssh_config"
 test "$(cat "$T/user/.ssh/config")" = "Include \"$T/src/home/ssh_config\""
@@ -681,7 +676,7 @@ if [ -n "${AUTOMATIC:-}" ]; then
   stopped
   echo "== automatic delete. a stopped worker is deleted on demand, its disk and account with it"
   on src worker delete "$AUTO" --yes >/dev/null
-  on src worker list | grep -q '^No worker.$'
+  on src worker list | has '^No worker.$'
   test ! -e "$T/fake/instances/chauffeur-worker-$AUTO"
   test ! -e "$T/fake/accounts/cw-backup-$AUTO@e2e-project.iam.gserviceaccount.com"
   refute grep -q "$AUTO" "$T/src/home/ssh_config"
