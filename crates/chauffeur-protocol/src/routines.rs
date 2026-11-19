@@ -179,6 +179,25 @@ pub struct RoutineCreateParams {
     pub name: Option<String>,
 }
 
+/// A routine made by hand, from no chat (docs/adr/routines-by-hand.md).
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+#[ts(optional_fields)]
+pub struct RoutineCreateByHandParams {
+    pub name: String,
+    /// The repos it runs in: `name`, or `owner/name` outside the main organization.
+    pub repos: Vec<String>,
+    /// What each run does, in the user's words: the first version's prompt, which the refining
+    /// chat rewrites.
+    pub description: String,
+    /// The agent and model of its refining chat and of its runs.
+    pub agent: AgentKind,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[ts(export)]
 pub struct RoutineEditParams {

@@ -278,6 +278,7 @@ import type { RespondParams } from "./RespondParams";
 import type { RetitleWorkspaceParams } from "./RetitleWorkspaceParams";
 import type { ReviewFollowUpParams } from "./ReviewFollowUpParams";
 import type { ReviewsInfo } from "./ReviewsInfo";
+import type { RoutineCreateByHandParams } from "./RoutineCreateByHandParams";
 import type { RoutineCreateParams } from "./RoutineCreateParams";
 import type { RoutineEditParams } from "./RoutineEditParams";
 import type { RoutineFindInfo } from "./RoutineFindInfo";
@@ -476,6 +477,7 @@ export type ClientMethods = {
   "routine.list": [EmptyParams, RoutinesResult];
   "routine.get": [RoutineParams, RoutineInfo];
   "routine.create": [RoutineCreateParams, RoutineInfo];
+  "routine.create_by_hand": [RoutineCreateByHandParams, RoutineInfo];
   "routine.edit": [RoutineEditParams, RoutineInfo];
   "routine.run": [RoutineParams, RoutineRun];
   "routine.set_active": [RoutineSetActiveParams, RoutineInfo];
@@ -883,6 +885,7 @@ export const METHOD_NAMES = [
   "routine.list",
   "routine.get",
   "routine.create",
+  "routine.create_by_hand",
   "routine.edit",
   "routine.run",
   "routine.set_active",

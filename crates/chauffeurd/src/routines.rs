@@ -10,10 +10,11 @@ use chauffeur_protocol::client::{
     CreateChatParams, CreateWorkspaceParams, LoginSessionEnsureParams, LoginSessionState,
 };
 use chauffeur_protocol::events::{ChatEvent, Event, RegistryEvent};
-use chauffeur_protocol::model::{ChatStatus, WorkspaceState, WorktreeOrigin};
+use chauffeur_protocol::model::{AgentKind, ChatInfo, ChatStatus, WorkspaceState, WorktreeOrigin};
 use chauffeur_protocol::routines::{
-    RoutineCreateParams, RoutineEditParams, RoutineHistory, RoutineInfo, RoutineRun,
-    RoutineSchedule, RoutineSpec, RoutineState, RoutineTrigger, RoutineVersion, Weekday,
+    RoutineCreateByHandParams, RoutineCreateParams, RoutineEditParams, RoutineHistory, RoutineInfo,
+    RoutineRun, RoutineSchedule, RoutineSpec, RoutineState, RoutineTrigger, RoutineVersion,
+    Weekday,
 };
 use chrono::{DateTime, Datelike, Days, Local, NaiveDate, NaiveTime, TimeZone, Utc};
 use rusqlite::params;
@@ -28,7 +29,7 @@ const SECTION: &str = "routines.section";
 const SECTION_NAME: &str = "Routines";
 /// In the routine's workspace: the current file, for its agents to read and edit.
 const FILE: &str = ".chauffeur/routine.toml";
-/// In the routine's workspace: the conversation it was made from.
+/// In the routine's workspace: the conversation it was made from, or the user's description.
 const SOURCE: &str = ".chauffeur/routine-source.md";
 
 /// One run or edit at a time: a scheduled run and Run now never start two runs together.
@@ -656,6 +657,29 @@ I will then run it by hand. When I tell you what went wrong in a run, read the r
     )
 }
 
+fn by_hand_prompt() -> String {
+    format!(
+        r#"This workspace holds a Chauffeur routine: a prompt Chauffeur runs by itself at set times, each run a new chat of this workspace. Its file is `{FILE}` (TOML: name, prompt, repos, agent, model, effort, permission_mode, and [schedule] with days mon…sun, or every_days from a date, and times of day, local time). I made it by hand: its prompt is, for now, my description of what a run should do, also in `{SOURCE}`. Its schedule (weekdays at 08:00) is a placeholder.
+Your job is to make the routine good enough to run unattended. Read the file and the repos, then tell me in a few lines what a run will do and what you would question, and ask me when it should run unless my description says so. Save that time, the one my description gives or the one I confirm, in the file's [schedule], replacing the placeholder. Then rewrite the file's prompt: an agent starting from nothing must be able to do the work alone, so say the goal, the steps, what to check, what not to do, and what to report at the end. Save every change with `chauffeur routine edit --file {FILE}`: it records a new version, and refuses an invalid file saying why.
+I will then run it by hand. When I tell you what went wrong in a run, read the runs with `chauffeur routine history`, then fix the file. Do not run, activate or pause the routine yourself: I do."#
+    )
+}
+
+/// The weekdays at 08:00: the schedule a new routine starts with until it is told its own.
+fn weekdays_at_eight() -> RoutineSchedule {
+    RoutineSchedule {
+        days: vec![
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+        ],
+        times: vec!["08:00".into()],
+        ..Default::default()
+    }
+}
+
 /// The repos of a workspace (its own worktrees), by folder name.
 fn workspace_repos(d: &Daemon, workspace_id: &str) -> Result<Vec<String>> {
     let mut repos: Vec<String> = d
@@ -703,20 +727,83 @@ pub async fn create(d: &Arc<Daemon>, params: RoutineCreateParams) -> Result<Rout
         effort: source.effort.clone(),
         permission_mode: Default::default(),
         sessions: Vec::new(),
-        schedule: RoutineSchedule {
-            days: vec![
-                Weekday::Mon,
-                Weekday::Tue,
-                Weekday::Wed,
-                Weekday::Thu,
-                Weekday::Fri,
-            ],
-            times: vec!["08:00".into()],
-            ..Default::default()
-        },
+        schedule: weekdays_at_eight(),
     };
     let record = crate::design::conversation_text(&events, crate::design::CONVERSATION_BUDGET);
-    make(d, &source, spec, &record, refine_prompt()).await
+    make(d, Origin::chat(&source), spec, &record, refine_prompt()).await
+}
+
+/// Makes a draft routine by hand, from no chat: the description is its first prompt, which its
+/// refining chat rewrites, asking when it should run.
+pub async fn create_by_hand(
+    d: &Arc<Daemon>,
+    params: RoutineCreateByHandParams,
+) -> Result<RoutineInfo> {
+    let name = params.name.trim().to_string();
+    if name.is_empty() {
+        return Err(Error::BadRequest("a routine needs a name".into()));
+    }
+    let description = params.description.trim().to_string();
+    if description.is_empty() {
+        return Err(Error::BadRequest(
+            "say what each run of the routine should do".into(),
+        ));
+    }
+    let mut repos: Vec<String> = params
+        .repos
+        .iter()
+        .map(|repo| repo.trim().to_string())
+        .filter(|repo| !repo.is_empty())
+        .collect();
+    repos.dedup();
+    if repos.is_empty() {
+        return Err(Error::BadRequest(
+            "a routine runs in at least one repo: choose one".into(),
+        ));
+    }
+    check_name_free(d, &name, None)?;
+    let model = params.model.filter(|m| !m.trim().is_empty());
+    // Before the workspace and the draft exist: a refused choice leaves nothing behind.
+    crate::chats::check_agent_model(params.agent, model.as_deref())?;
+    let spec = RoutineSpec {
+        name: name.clone(),
+        prompt: description.clone(),
+        repos,
+        agent: params.agent,
+        model,
+        effort: params.effort.filter(|e| !e.trim().is_empty()),
+        permission_mode: Default::default(),
+        sessions: Vec::new(),
+        schedule: weekdays_at_eight(),
+    };
+    let record = format!("# What I want this routine to do, in my words\n\n{description}\n");
+    let origin = Origin {
+        agent: spec.agent,
+        model: spec.model.clone(),
+        effort: spec.effort.clone(),
+        chat: None,
+    };
+    make(d, origin, spec, &record, by_hand_prompt()).await
+}
+
+/// Where a routine comes from: the agent and model of its refining chat, and the chat it was
+/// made from, if any.
+struct Origin {
+    agent: AgentKind,
+    model: Option<String>,
+    effort: Option<String>,
+    chat: Option<String>,
+}
+
+impl Origin {
+    fn chat(source: &ChatInfo) -> Self {
+        Self {
+            agent: source.agent,
+            model: source.model.clone(),
+            effort: source.effort.clone(),
+            chat: Some(source.id.clone()),
+        }
+    }
 }
 
 /// Makes a draft routine whose first version is `spec`, proposed by Find routines from `chat`
@@ -739,7 +826,7 @@ pub(crate) async fn create_proposed(
         "# The requests Find routines proposed this routine from\n\n{requests}\n\n# The conversation of the latest one\n\n{}",
         crate::design::conversation_text(&events, crate::design::CONVERSATION_BUDGET)
     );
-    make(d, &source, spec, &record, proposed_prompt()).await
+    make(d, Origin::chat(&source), spec, &record, proposed_prompt()).await
 }
 
 fn chat_events(d: &Daemon, chat: &str) -> Result<Vec<ChatEvent>> {
@@ -757,13 +844,12 @@ fn chat_events(d: &Daemon, chat: &str) -> Result<Vec<ChatEvent>> {
 /// record of where it comes from, and its refining chat started on `prompt`.
 async fn make(
     d: &Arc<Daemon>,
-    source: &chauffeur_protocol::model::ChatInfo,
-    spec: RoutineSpec,
+    origin: Origin,
+    mut spec: RoutineSpec,
     record: &str,
     prompt: String,
 ) -> Result<RoutineInfo> {
-    let file = render(&spec);
-    parse(&file)?;
+    parse(&render(&spec))?;
     let section = crate::sections::owned(d, SECTION, SECTION_NAME, false)?;
     let created = d
         .workspaces
@@ -778,6 +864,13 @@ async fn make(
         )
         .await?;
     let workspace = d.workspaces.row(&created.workspace.id)?;
+    // The file names the repos by their folder, as `routine edit` reads them: a repo chosen as
+    // `owner/name` is cloned into a folder of its own name.
+    let folders = workspace_repos(d, &workspace.id)?;
+    if !folders.is_empty() {
+        spec.repos = folders;
+    }
+    let file = render(&spec);
     let notes = Path::new(&workspace.path).join(".chauffeur");
     std::fs::create_dir_all(&notes).map_err(anyhow::Error::from)?;
     std::fs::write(Path::new(&workspace.path).join(SOURCE), record).map_err(anyhow::Error::from)?;
@@ -785,7 +878,7 @@ async fn make(
         id: uuid::Uuid::now_v7().to_string(),
         workspace_id: workspace.id.clone(),
         refine_chat: None,
-        source_chat: Some(source.id.clone()),
+        source_chat: origin.chat,
         state: RoutineState::Draft,
         version: 1,
         checked_until: None,
@@ -800,9 +893,9 @@ async fn make(
         .chats
         .create(CreateChatParams {
             workspace: workspace.id.clone(),
-            agent: Some(source.agent),
-            model: source.model.clone(),
-            effort: source.effort.clone(),
+            agent: Some(origin.agent),
+            model: origin.model,
+            effort: origin.effort,
             title: Some(format!("Refine {}", spec.name)),
             prompt: Some(prompt),
             ..Default::default()

@@ -414,6 +414,13 @@ methods! {
         #[access(Any)]
         #[relay(Local)]
         RoutineCreate(crate::routines::RoutineCreateParams) -> crate::routines::RoutineInfo,
+        /// Makes a draft routine by hand, from no chat: a workspace of its own with the repos
+        /// given, filed in "Routines", whose refining chat writes the prompt from the description
+        /// and asks when it should run.
+        #[serde(rename = "routine.create_by_hand")]
+        #[access(Any)]
+        #[relay(Local)]
+        RoutineCreateByHand(crate::routines::RoutineCreateByHandParams) -> crate::routines::RoutineInfo,
         /// Replaces the routine's file, validated, as a new version; repos it names that its
         /// workspace lacks are added. An unchanged file makes no version.
         #[serde(rename = "routine.edit")]

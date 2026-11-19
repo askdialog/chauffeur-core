@@ -10,15 +10,29 @@ use std::io::Read;
 pub enum Action {
     /// List the routines, with their state and next run.
     Ls,
-    /// Make a draft routine from a chat: a workspace of its own, whose refining chat drafts the
-    /// routine's file from the conversation.
+    /// Make a draft routine: a workspace of its own, whose refining chat drafts the routine's
+    /// file from a chat (`--from`), or, by hand, from what it should do (`--repo`, `--describe`).
     New {
         /// The chat (id, or a workspace meaning its first chat).
-        #[arg(long = "from")]
-        chat: String,
-        /// Its name; by default the chat's title.
-        #[arg(long)]
+        #[arg(long = "from", required_unless_present = "describe", conflicts_with_all = ["describe", "repos"])]
+        chat: Option<String>,
+        /// Its name; from a chat, the chat's title by default.
+        #[arg(long, required_unless_present = "chat")]
         name: Option<String>,
+        /// By hand: a repo it runs in (repeat for several).
+        #[arg(long = "repo", requires = "describe")]
+        repos: Vec<String>,
+        /// By hand: what each run should do, in your words; the refining chat rewrites it.
+        #[arg(long, requires = "repos")]
+        describe: Option<String>,
+        /// By hand: the agent of its refining chat and runs.
+        #[arg(long, value_enum, default_value = "claude")]
+        agent: crate::Agent,
+        /// By hand: its model; the agent's default otherwise.
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
     },
     /// Show a routine and its current file.
     Show {
@@ -324,7 +338,27 @@ pub async fn run(client: &mut Client, action: Action, json: bool) -> anyhow::Res
             print_or(json, &result, || details(&result));
             return Ok(());
         }
-        Action::New { chat, name } => ClientCall::RoutineCreate(RoutineCreateParams { chat, name }),
+        Action::New {
+            chat: Some(chat),
+            name,
+            ..
+        } => ClientCall::RoutineCreate(RoutineCreateParams { chat, name }),
+        Action::New {
+            chat: None,
+            name,
+            repos,
+            describe,
+            agent,
+            model,
+            effort,
+        } => ClientCall::RoutineCreateByHand(RoutineCreateByHandParams {
+            name: name.unwrap_or_default(),
+            repos,
+            description: describe.unwrap_or_default(),
+            agent: agent.into(),
+            model,
+            effort,
+        }),
         Action::Edit { routine, file } => ClientCall::RoutineEdit(RoutineEditParams {
             routine,
             file: read_file(&file)?,

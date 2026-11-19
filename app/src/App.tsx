@@ -7,6 +7,7 @@ import { ForgeSetup } from "./components/ForgeSetup";
 import { QuickSwitcher } from "./components/QuickSwitcher";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { FindRoutinesDialog } from "./components/FindRoutinesDialog";
+import { NewRoutineDialog } from "./components/NewRoutineDialog";
 import { TransferBatch } from "./components/TransferBatch";
 import { ShowSidebarButton } from "./components/ShowSidebarButton";
 import { ReviewsPage } from "./components/ReviewsPage";
@@ -104,6 +105,7 @@ export function App() {
       <QuickSwitcher />
       <SettingsDialog />
       <FindRoutinesDialog />
+      <NewRoutineDialog />
       <TransferBatch />
       <Toasts />
     </div>

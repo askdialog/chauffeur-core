@@ -14,6 +14,7 @@ import type {
   LoadoutEntry,
   PermissionMode,
   RepoInfo,
+  RoutineCreateByHandParams,
   RoutineFindInfo,
   RoutineFindParams,
   RoutineInfo,
@@ -108,6 +109,8 @@ export type AppState = {
   routineFind: RoutineFindInfo | null;
   /** Find routines' dialog is open. */
   findRoutinesShown: boolean;
+  /** The dialog that makes a routine by hand is open (docs/adr/routines-by-hand.md). */
+  newRoutineShown: boolean;
   chats: Record<string, ChatInfo>;
   selectedId: string | null;
   /** The workspaces shown before and after the selected one, for the back and forward arrows. */
@@ -241,6 +244,7 @@ export const useApp = create<AppState>(() => ({
   routines: {},
   routineFind: null,
   findRoutinesShown: false,
+  newRoutineShown: false,
   chats: {},
   selectedId: localStorage.getItem(SELECTED_KEY),
   nav: EMPTY_NAV,
@@ -1448,6 +1452,25 @@ export async function loadRoutineFind() {
     set({ routineFind: await client.call("routine.suggestions", {}) });
   } catch (error) {
     toast(`Could not read the routine suggestions: ${errorMessage(error)}`, "error");
+  }
+}
+
+export function showNewRoutine(shown: boolean) {
+  set({ newRoutineShown: shown });
+}
+
+/** Makes a routine by hand, then shows its workspace on its Routine view; false when refused. */
+export async function createRoutineByHand(params: RoutineCreateByHandParams): Promise<boolean> {
+  try {
+    const routine = await client.call("routine.create_by_hand", params);
+    upsertRoutine(routine);
+    set({ newRoutineShown: false });
+    selectWorkspace(routine.workspace_id);
+    setTab(routine.workspace_id, "routine");
+    return true;
+  } catch (error) {
+    toast(`Could not make the routine ${params.name.trim()}: ${errorMessage(error)}`, "error");
+    return false;
   }
 }
 

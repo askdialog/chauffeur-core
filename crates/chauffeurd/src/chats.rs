@@ -73,6 +73,14 @@ const PROGRESS_KEY: &str = "chat_progress:";
 const LOCAL_MODELS_RUN_IN_CODEX: &str =
     "local models run in Codex chats: pick Codex, or a hosted model for Claude Code";
 
+/// Refuses a model the agent cannot run: Ollama's models run in Codex only.
+pub(crate) fn check_agent_model(agent: AgentKind, model: Option<&str>) -> Result<()> {
+    if agent != AgentKind::Codex && model.is_some_and(crate::ollama::is_local) {
+        return Err(Error::BadRequest(LOCAL_MODELS_RUN_IN_CODEX.into()));
+    }
+    Ok(())
+}
+
 pub struct ChatManager {
     daemon: Weak<Daemon>,
     pub sidecar: Sidecar,
@@ -427,9 +435,7 @@ impl ChatManager {
                 params.fast.unwrap_or(false),
             ),
         };
-        if agent != AgentKind::Codex && model.as_deref().is_some_and(crate::ollama::is_local) {
-            return Err(Error::BadRequest(LOCAL_MODELS_RUN_IN_CODEX.into()));
-        }
+        check_agent_model(agent, model.as_deref())?;
         let prompt = params.prompt.filter(|p| !p.trim().is_empty());
         let chat = ChatInfo {
             id: uuid::Uuid::now_v7().to_string(),
@@ -1648,11 +1654,7 @@ impl ChatManager {
             }
             chat.model = Some(model.clone());
         }
-        if chat.agent != AgentKind::Codex
-            && chat.model.as_deref().is_some_and(crate::ollama::is_local)
-        {
-            return Err(Error::BadRequest(LOCAL_MODELS_RUN_IN_CODEX.into()));
-        }
+        check_agent_model(chat.agent, chat.model.as_deref())?;
         if let Some(effort) = &params.effort {
             chat.effort = Some(effort.clone());
         }

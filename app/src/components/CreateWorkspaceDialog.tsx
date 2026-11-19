@@ -785,7 +785,7 @@ function RemoveButton({ label, onClick }: { label: string; onClick: () => void }
   );
 }
 
-function RepoChip({ name, from, onRemove }: { name: string; from?: string; onRemove: () => void }) {
+export function RepoChip({ name, from, onRemove }: { name: string; from?: string; onRemove: () => void }) {
   return (
     <span className="inline-flex h-[22px] items-center gap-[5px] whitespace-nowrap rounded-[5px] bg-accent/15 pl-[7px] pr-[3px] text-[12px] text-accent" data-repo-chip={name}>
       {name}

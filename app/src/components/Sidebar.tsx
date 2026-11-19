@@ -82,6 +82,7 @@ import {
   setUnread,
   setWorkspaceSection,
   showFindRoutines,
+  showNewRoutine,
   showOffice,
   toast,
   upsertWorkspace,
@@ -738,6 +739,7 @@ function SectionHeading({
             <Spinner size={10} />
           </span>
         )}
+        {routines && <NewRoutineButton />}
         {routines && <FindRoutinesButton />}
         {/* The reviews' section lists none: its count would always read 0. */}
         {!section.reviews && (
@@ -782,6 +784,20 @@ function SectionHeading({
   );
 }
 
+/** Makes a routine by hand (docs/adr/routines-by-hand.md), in the routines' section heading. */
+function NewRoutineButton() {
+  return (
+    <IconButton
+      title="New routine: describe the work, its refining chat writes the prompt"
+      className="h-5 w-5 normal-case"
+      onClick={() => showNewRoutine(true)}
+      data-testid="new-routine-button"
+    >
+      <Plus size={12} />
+    </IconButton>
+  );
+}
+
 /** Opens Find routines (docs/adr/find-routines.md), in the routines' section heading. */
 function FindRoutinesButton() {
   return (
@@ -802,7 +818,8 @@ function RoutinesHeading() {
     <>
       <div className="flex items-center justify-between pr-2" data-group-heading="Routines">
         <SectionTitle>Routines</SectionTitle>
-        <span className="mt-1">
+        <span className="mt-1 flex items-center">
+          <NewRoutineButton />
           <FindRoutinesButton />
         </span>
       </div>
