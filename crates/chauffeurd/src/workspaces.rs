@@ -3032,54 +3032,38 @@ impl WorkspaceManager {
     /// now, its chats idle; no setup and no ports, as a new exploration. Whatever fails leaves it
     /// `cleanup_failed`, to reactivate again.
     async fn reactivate(&self, row: WorkspaceRow) -> Result<WorkspaceInfo> {
-        self.set_state(&row.id, WorkspaceState::Creating, None)?;
-        let failed = match self.reactivate_checkouts(&row).await {
-            Ok(failed) => failed,
-            Err(error) => vec![error.to_string()],
-        };
-        if failed.is_empty() {
-            self.set_state(&row.id, WorkspaceState::Ready, None)?;
-        } else {
-            self.set_state(
-                &row.id,
-                WorkspaceState::CleanupFailed,
-                Some(format!("reactivation failed: {}", failed.join("; "))),
-            )?;
-        }
-        self.get(&row.id)
-    }
-
-    /// The checkouts of a reactivation, and its chats set idle once they are all back; the repos
-    /// that could not be checked out.
-    async fn reactivate_checkouts(&self, row: &WorkspaceRow) -> Result<Vec<String>> {
         let d = self.d();
-        let checkouts: Vec<WorktreeRow> = d
-            .store
-            .worktrees_of(&row.id)?
-            .into_iter()
-            .filter(|w| w.removed && w.origin == WorktreeOrigin::Workspace)
-            .collect();
-        self.bring_back_folder(row)?;
-        // The commits the chats talked about, for the agents to be told what moved since.
-        let before: BTreeMap<&str, Option<&str>> = checkouts
-            .iter()
-            .map(|w| (w.id.as_str(), w.base_commit.as_deref()))
-            .collect();
-        d.store.kv_set(
-            &format!("{REACTIVATION_KEY}{}", row.id),
-            &serde_json::json!({ "at": now(), "commits": before }).to_string(),
-        )?;
-        let git = self.git();
-        let mut failed = Vec::new();
-        for worktree in &checkouts {
-            let clone = Path::new(&worktree.clone_path);
-            let lock = d.repos.lock_for(clone);
-            let _guard = lock.lock().await;
-            self.fetch_base(&row.id, clone, &worktree.repo, &worktree.base_branch)
-                .await;
-            // A checkout removed by hand before the archive is still registered in the clone.
-            let checkout = match git.run(clone, &["worktree", "prune"]).await {
-                Ok(_) => {
+        self.set_state(&row.id, WorkspaceState::Creating, None)?;
+        let reactivated: Result<Vec<String>> = async {
+            let checkouts: Vec<WorktreeRow> = d
+                .store
+                .worktrees_of(&row.id)?
+                .into_iter()
+                .filter(|w| w.removed && w.origin == WorktreeOrigin::Workspace)
+                .collect();
+            self.bring_back_folder(&row)?;
+            // The commits the chats talked about, for their agents to be told what moved: kept
+            // when the reactivation starts, not by a try again after a failure.
+            let key = format!("{REACTIVATION_KEY}{}", row.id);
+            if row.state == WorkspaceState::Archived || d.store.kv_get(&key)?.is_none() {
+                let commits: BTreeMap<&str, Option<&str>> = checkouts
+                    .iter()
+                    .map(|w| (w.id.as_str(), w.base_commit.as_deref()))
+                    .collect();
+                let record = serde_json::json!({ "at": now(), "commits": commits });
+                d.store.kv_set(&key, &record.to_string())?;
+            }
+            let git = self.git();
+            let mut failed = Vec::new();
+            for worktree in &checkouts {
+                let clone = Path::new(&worktree.clone_path);
+                let lock = d.repos.lock_for(clone);
+                let _guard = lock.lock().await;
+                self.fetch_base(&row.id, clone, &worktree.repo, &worktree.base_branch)
+                    .await;
+                let checkout = async {
+                    // A checkout removed by hand before the archive is still registered.
+                    git.run(clone, &["worktree", "prune"]).await?;
                     self.checkout_base_detached(
                         clone,
                         Path::new(&worktree.path),
@@ -3087,30 +3071,48 @@ impl WorkspaceManager {
                     )
                     .await
                 }
-                Err(error) => Err(error),
-            };
-            match checkout {
-                Ok(commit) => {
-                    d.store
-                        .reactivate_worktree(&worktree.id, commit.as_deref())?;
-                    let mut back = worktree.clone();
-                    back.removed = false;
-                    back.base_commit = commit;
-                    d.events.workspace(
-                        &row.id,
-                        WorkspaceEvent::WorktreeAdded {
-                            worktree: worktree_info(back),
-                        },
-                    );
+                .await;
+                match checkout {
+                    Ok(commit) => {
+                        d.store
+                            .reactivate_worktree(&worktree.id, commit.as_deref())?;
+                        let mut back = worktree.clone();
+                        back.removed = false;
+                        back.base_commit = commit;
+                        d.events.workspace(
+                            &row.id,
+                            WorkspaceEvent::WorktreeAdded {
+                                worktree: worktree_info(back),
+                            },
+                        );
+                    }
+                    Err(error) => failed.push(format!(
+                        "{} could not be checked out again ({error:#})",
+                        worktree.repo
+                    )),
                 }
-                Err(error) => failed.push(format!("{}: {error:#}", worktree.repo)),
             }
+            self.regenerate_config(&row.id)?;
+            if failed.is_empty() {
+                self.unarchive_chats(&row.id)?;
+            }
+            Ok(failed)
         }
-        self.regenerate_config(&row.id)?;
+        .await;
+        let failed = reactivated.unwrap_or_else(|error| vec![error.to_string()]);
         if failed.is_empty() {
-            self.unarchive_chats(&row.id)?;
+            self.set_state(&row.id, WorkspaceState::Ready, None)?;
+        } else {
+            self.set_state(
+                &row.id,
+                WorkspaceState::CleanupFailed,
+                Some(format!(
+                    "{}: restore the exploration again once it is fixed",
+                    failed.join("; ")
+                )),
+            )?;
         }
-        Ok(failed)
+        self.get(&row.id)
     }
 
     /// An archived workspace's folder made again, its notes brought back from the archive.

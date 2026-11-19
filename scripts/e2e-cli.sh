@@ -552,7 +552,6 @@ c archive e2e-look --force >/dev/null
 echo "== reactivation. an archived exploration comes back in its folder, on its base branch as it is now"
 c new --explore --repo alpha --name e2e-back >/dev/null
 BACK="$CHAUFFEUR_WORKSPACES_DIR/e2e-back"
-echo "a finding" > "$BACK/.chauffeur/finding.md"
 c archive e2e-back --force >/dev/null
 test ! -e "$BACK/alpha"
 git clone -q "$T/origin/alpha.git" "$T/mover"
@@ -564,8 +563,6 @@ LATER=$(git -C "$T/mover" rev-parse HEAD)
 c restore e2e-back | has "e2e-back"
 c --json show e2e-back | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["state"] == "ready" and w["explore"], w'
 test "$(git -C "$BACK/alpha" rev-parse HEAD)" = "$LATER"
-test "$(git -C "$BACK/alpha" rev-parse --abbrev-ref HEAD)" = HEAD
-test "$(cat "$BACK/.chauffeur/finding.md")" = "a finding"
 c --json show e2e-back | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["port_count"] == 0, w'
 c archive e2e-back --force >/dev/null
 

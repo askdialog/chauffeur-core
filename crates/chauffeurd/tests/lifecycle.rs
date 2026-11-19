@@ -3149,34 +3149,75 @@ async fn an_archived_exploration_is_reactivated_on_its_base_branch_as_it_is_now(
         kept["commits"][&worktrees[0].id],
         serde_json::json!(at_archive)
     );
+}
 
-    // A repo that cannot be checked out leaves it cleanup_failed, to reactivate again.
-    d.workspaces.archive(&ws.slug, true).await.unwrap();
-    eventually("the exploration to be archived again", || {
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reactivation_that_fails_leaves_the_exploration_to_reactivate_again_keeping_what_its_chats_saw()
+ {
+    let f = fixture(47480);
+    let d = &f.daemon;
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("look".into()),
+            repos: vec!["repo-a".into(), "repo-b".into()],
+            explore: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let root = PathBuf::from(&ws.path);
+    let saw: Vec<(String, Option<String>)> = ws
+        .worktrees
+        .iter()
+        .map(|w| (w.id.clone(), w.base_commit.clone()))
+        .collect();
+    d.workspaces.archive(&ws.slug, false).await.unwrap();
+    eventually("the exploration to be archived", || {
         d.workspaces.get(&ws.id).unwrap().state == WorkspaceState::Archived
     })
     .await;
-    // Its folder cannot be made again (a file in its way): cleanup_failed too, never creating.
+
+    // Its folder cannot be made again (a file in its way): cleanup_failed, never creating.
     std::fs::write(&root, "in the way").unwrap();
     let blocked = d.workspaces.restore(&ws.slug).await.unwrap();
     assert_eq!(blocked.state, WorkspaceState::CleanupFailed);
     std::fs::remove_file(&root).unwrap();
-    let clone = f.root.join("clones/repo-a");
-    let away = f.root.join("clones/repo-a-away");
-    std::fs::rename(&clone, &away).unwrap();
+
+    // One repo cannot be checked out: the other is back, and the message says what to do.
+    let clone_b = f.root.join("clones/repo-b");
+    let away = f.root.join("clones/repo-b-away");
+    std::fs::rename(&clone_b, &away).unwrap();
     let failed = d.workspaces.restore(&ws.slug).await.unwrap();
     assert_eq!(failed.state, WorkspaceState::CleanupFailed);
+    let error = failed.last_error.unwrap_or_default();
     assert!(
-        failed
-            .last_error
-            .as_deref()
-            .is_some_and(|e| e.starts_with("reactivation failed: repo-a")),
-        "{:?}",
-        failed.last_error
+        error.starts_with("repo-b could not be checked out again (")
+            && error.ends_with("): restore the exploration again once it is fixed"),
+        "{error}"
     );
-    std::fs::rename(&away, &clone).unwrap();
+    assert!(root.join("repo-a").exists());
+
+    std::fs::rename(&away, &clone_b).unwrap();
     let again = d.workspaces.restore(&ws.slug).await.unwrap();
     assert_eq!(again.state, WorkspaceState::Ready, "{:?}", again.last_error);
+    assert!(root.join("repo-b").exists());
+    // What the chats saw, for every repo, though one came back a try later.
+    let kept: serde_json::Value = serde_json::from_str(
+        &d.store
+            .kv_get(&format!(
+                "{}{}",
+                chauffeurd::workspaces::REACTIVATION_KEY,
+                ws.id
+            ))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    for (id, commit) in saw {
+        assert_eq!(kept["commits"][&id], serde_json::json!(commit), "{kept}");
+    }
 }
 
 async fn new_chat(d: &Daemon, workspace: &str) -> chauffeur_protocol::model::ChatInfo {
