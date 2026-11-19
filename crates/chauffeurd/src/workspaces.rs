@@ -3019,76 +3019,84 @@ impl WorkspaceManager {
             )));
         }
         self.set_state(&row.id, WorkspaceState::Creating, None)?;
-        self.bring_back_folder(&row)?;
-        crate::ports::allocate(
-            &d.store,
-            &row.id,
-            &row.id,
-            d.settings.get().port_range_start,
-            d.settings.get().port_block_size,
-        )?;
-        let git = self.git();
-        let mut errors = Vec::new();
-        let mut groups = Vec::new();
-        for worktree in &restorable {
-            let snapshot = worktree.snapshot_ref.clone().unwrap();
-            let clone = Path::new(&worktree.clone_path);
-            let path = Path::new(&worktree.path);
-            let lock = d.repos.lock_for(clone);
-            let _guard = lock.lock().await;
-            let result = async {
-                let head = git
-                    .run(clone, &["log", "-1", "--format=%B", &snapshot])
-                    .await?
-                    .lines()
-                    .find_map(|l| l.strip_prefix("head ").map(str::to_string))
-                    .ok_or_else(|| anyhow::anyhow!("snapshot {snapshot} has no head"))?;
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                git.worktree_add(clone, path, &worktree.branch, &head)
-                    .await?;
-                git.restore_snapshot(path, &snapshot).await?;
-                anyhow::Ok(())
-            }
-            .await;
-            match result {
-                Ok(()) => {
-                    d.store.set_worktree_removed(&worktree.id, false, None)?;
-                    let mut restored = worktree.clone();
-                    restored.removed = false;
-                    d.events.workspace(
-                        &row.id,
-                        WorkspaceEvent::WorktreeAdded {
-                            worktree: worktree_info(restored),
-                        },
-                    );
-                    if let Some(group) = &worktree.group {
-                        groups.push(group.clone());
-                    }
-                }
-                Err(error) => errors.push(format!("{}: {error:#}", worktree.repo)),
-            }
-        }
-        groups.sort();
-        groups.dedup();
-        for group in &groups {
+        // Whatever fails leaves it cleanup_failed, to restore again.
+        let restored: Result<(Vec<String>, Vec<String>)> = async {
+            self.bring_back_folder(&row)?;
             crate::ports::allocate(
                 &d.store,
-                &port_owner(&row.id, Some(group)),
+                &row.id,
                 &row.id,
                 d.settings.get().port_range_start,
                 d.settings.get().port_block_size,
             )?;
+            let git = self.git();
+            let mut errors = Vec::new();
+            let mut groups = Vec::new();
+            for worktree in &restorable {
+                let snapshot = worktree.snapshot_ref.clone().unwrap();
+                let clone = Path::new(&worktree.clone_path);
+                let path = Path::new(&worktree.path);
+                let lock = d.repos.lock_for(clone);
+                let _guard = lock.lock().await;
+                let result = async {
+                    let head = git
+                        .run(clone, &["log", "-1", "--format=%B", &snapshot])
+                        .await?
+                        .lines()
+                        .find_map(|l| l.strip_prefix("head ").map(str::to_string))
+                        .ok_or_else(|| anyhow::anyhow!("snapshot {snapshot} has no head"))?;
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    git.worktree_add(clone, path, &worktree.branch, &head)
+                        .await?;
+                    git.restore_snapshot(path, &snapshot).await?;
+                    anyhow::Ok(())
+                }
+                .await;
+                match result {
+                    Ok(()) => {
+                        d.store.set_worktree_removed(&worktree.id, false, None)?;
+                        let mut restored = worktree.clone();
+                        restored.removed = false;
+                        d.events.workspace(
+                            &row.id,
+                            WorkspaceEvent::WorktreeAdded {
+                                worktree: worktree_info(restored),
+                            },
+                        );
+                        if let Some(group) = &worktree.group {
+                            groups.push(group.clone());
+                        }
+                    }
+                    Err(error) => errors.push(format!("{}: {error:#}", worktree.repo)),
+                }
+            }
+            groups.sort();
+            groups.dedup();
+            for group in &groups {
+                crate::ports::allocate(
+                    &d.store,
+                    &port_owner(&row.id, Some(group)),
+                    &row.id,
+                    d.settings.get().port_range_start,
+                    d.settings.get().port_block_size,
+                )?;
+            }
+            self.regenerate_config(&row.id)?;
+            Ok((errors, groups))
         }
-        self.regenerate_config(&row.id)?;
+        .await;
+        let (errors, groups) =
+            restored.unwrap_or_else(|error| (vec![error.to_string()], Vec::new()));
         if !errors.is_empty() {
+            // Closed first: no message reaches a chat opened meanwhile once it failed.
+            d.chats.restore_failed(&row.id).await;
             self.set_state(
                 &row.id,
                 WorkspaceState::CleanupFailed,
                 Some(format!("restore failed: {}", errors.join("; "))),
             )?;
-            d.chats.restore_failed(&row.id).await;
             return self.get(&row.id);
         }
         // Snapshots stay until expiry: restoring again after a new archive replaces them.
@@ -3185,6 +3193,8 @@ impl WorkspaceManager {
             self.unarchive_chats(&row.id)?;
             d.chats.workspace_ready(&row.id).await;
         } else {
+            // Closed first: no message reaches a chat opened meanwhile once it failed.
+            d.chats.restore_failed(&row.id).await;
             self.set_state(
                 &row.id,
                 WorkspaceState::CleanupFailed,
@@ -3193,7 +3203,6 @@ impl WorkspaceManager {
                     failed.join("; ")
                 )),
             )?;
-            d.chats.restore_failed(&row.id).await;
         }
         self.get(&row.id)
     }

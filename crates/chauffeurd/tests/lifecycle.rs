@@ -3684,6 +3684,39 @@ async fn a_chat_opened_while_a_restore_fails_is_closed_and_told_to_send_again() 
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restore_that_fails_before_its_checkouts_leaves_the_workspace_to_restore_again() {
+    let f = fixture(47540);
+    let d = &f.daemon;
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("blocked".into()),
+            repos: vec!["repo-a".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    d.workspaces.archive(&ws.slug, true).await.unwrap();
+    eventually("the workspace to be archived", || {
+        d.workspaces.get(&ws.id).unwrap().state == WorkspaceState::Archived
+    })
+    .await;
+    // Its folder cannot be made again: a file is in its way.
+    std::fs::write(&ws.path, "in the way").unwrap();
+    let failed = d.workspaces.restore(&ws.slug).await.unwrap();
+    assert_eq!(
+        failed.state,
+        WorkspaceState::CleanupFailed,
+        "never left creating"
+    );
+    assert!(failed.last_error.unwrap().starts_with("restore failed: "));
+    std::fs::remove_file(&ws.path).unwrap();
+    let back = d.workspaces.restore(&ws.slug).await.unwrap();
+    assert_eq!(back.state, WorkspaceState::Ready, "{:?}", back.last_error);
+}
+
 async fn new_chat(d: &Daemon, workspace: &str) -> chauffeur_protocol::model::ChatInfo {
     d.chats
         .create(CreateChatParams {
