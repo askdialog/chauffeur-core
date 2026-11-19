@@ -1745,6 +1745,7 @@ async fn the_notification_sound_is_one_of_the_apps_or_an_audio_file() {
     let sound = |sound: &str| SettingsUpdate {
         notifications: Some(NotificationsUpdate {
             sound: Some(sound.into()),
+            ..Default::default()
         }),
         ..Default::default()
     };
@@ -21352,4 +21353,44 @@ login = "true"
         .await
         .unwrap_err();
     assert!(again.to_string().contains("no open request"), "{again}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn session_notifications_are_off_until_turned_on_and_leave_the_sound_alone() {
+    use chauffeur_protocol::client::{NotificationsUpdate, SettingsUpdate};
+    let f = fixture(49950);
+    let d = &f.daemon;
+    assert!(
+        !chauffeurd::preferences::get(d)
+            .await
+            .unwrap()
+            .notifications
+            .sessions
+    );
+    let set = |update: NotificationsUpdate| SettingsUpdate {
+        notifications: Some(update),
+        ..Default::default()
+    };
+    chauffeurd::preferences::set(
+        d,
+        set(NotificationsUpdate {
+            sound: Some("bell".into()),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    let settings = chauffeurd::preferences::set(
+        d,
+        set(NotificationsUpdate {
+            sessions: Some(true),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(settings.notifications.sessions);
+    assert_eq!(settings.notifications.sound, "bell");
+    let text = std::fs::read_to_string(d.settings.path()).unwrap();
+    assert!(text.contains("sessions = true"), "{text}");
 }

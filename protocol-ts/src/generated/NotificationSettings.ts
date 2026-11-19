@@ -13,4 +13,8 @@ sound: string,
 /**
  * Why the sound file cannot be played.
  */
-sound_error: string | null, };
+sound_error: string | null, 
+/**
+ * A chat waiting only on a declared session's login notifies on the Mac; off by default.
+ */
+sessions: boolean, };

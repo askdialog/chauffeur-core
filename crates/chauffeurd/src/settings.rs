@@ -269,6 +269,9 @@ impl OfficeSettings {
 pub struct NotificationsSettings {
     /// Empty (none), `chime`, `bell`, `station`, or an audio file's path.
     pub sound: String,
+    /// A chat waiting on a declared session's login notifies on the Mac: off unless turned on
+    /// (docs/adr/declared-sessions.md).
+    pub sessions: bool,
 }
 
 /// `[keyboard]`.

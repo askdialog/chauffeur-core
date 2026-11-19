@@ -156,6 +156,7 @@ export function SettingsDialog() {
       setErrorReports(next);
       setAppearance(next.appearance);
       setNotificationSound(next.notifications.sound);
+      useApp.setState({ notifySessions: next.notifications.sessions ?? false });
       setKeyboard(next.keyboard);
       // The create dialog's preselected repos.
       if (change.workspaces) await loadAllRepos();
@@ -1344,6 +1345,18 @@ function Notifications({ settings, update, busy }: SectionProps) {
         </Field>
       )}
       {(sound_error || playError) && <p className="text-[12px] text-danger selectable">{sound_error ?? playError}</p>}
+      <Heading title="Sessions">
+        A command waiting on a session a repo declares (an AWS SSO session, a CLI's) asks you to log in in its chat. Also
+        sessions in the [notifications] table of settings.toml.
+      </Heading>
+      <Switch
+        label="Notify me when a chat waits on a login"
+        hint="Off: the chat still asks, and its card waits for you, without a notification."
+        on={settings.notifications.sessions ?? false}
+        disabled={busy}
+        onChange={(sessions) => void update({ notifications: { sessions } })}
+        testId="notify-sessions"
+      />
     </>
   );
 }

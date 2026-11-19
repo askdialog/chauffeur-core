@@ -6,4 +6,9 @@ export type PushPreferences = { enabled: boolean, approvals: boolean, completed:
  * now; off when absent: a grant saved before, or a phone build that predates it, which has
  * no way to turn it off.
  */
-idle_reminders: boolean, show_workspace: boolean, language: string, };
+idle_reminders: boolean, 
+/**
+ * A command waits on a declared session's login (docs/adr/declared-sessions.md): off unless
+ * the phone turns it on.
+ */
+sessions: boolean, show_workspace: boolean, language: string, };

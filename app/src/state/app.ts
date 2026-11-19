@@ -31,7 +31,7 @@ import type {
 import { create } from "zustand";
 import { availableLayout, viewAvailable } from "@/lib/extensions";
 import { SIGN_IN_BANNER_KEY, visibleExtensions } from "@/lib/members";
-import { attentionText, chatAttention, needingYou } from "@/lib/attention";
+import { type Attention, attentionText, chatAttention, needingYou, onlySessionRequests } from "@/lib/attention";
 import {
   type AwaitedServer,
   awaitedAfterReload,
@@ -172,6 +172,8 @@ export type AppState = {
   appearance: Appearance | null;
   /** Played when a chat finishes or needs the user while the app is not in front ("": none). */
   notificationSound: string;
+  /** A chat waiting only on a declared session's login notifies too (`[notifications] sessions`). */
+  notifySessions: boolean;
   /** Settings › Keyboard; Vim off and the default keys until read from the daemon. */
   keyboard: KeyboardSettings;
   repos: RepoInfo[] | null;
@@ -276,6 +278,7 @@ export const useApp = create<AppState>(() => ({
   zoom: storedZoom(localStorage.getItem(ZOOM_KEY)),
   appearance: null,
   notificationSound: "",
+  notifySessions: false,
   keyboard: { vim_mode: false, bindings: {}, binding_errors: [] },
   repos: null,
   reposError: null,
@@ -881,6 +884,7 @@ async function loadAppearance() {
     setErrorReports(settings);
     setAppearance(settings.appearance);
     setNotificationSound(settings.notifications.sound);
+    set({ notifySessions: settings.notifications.sessions ?? false });
     setKeyboard(settings.keyboard);
   } catch {
     // The app's own fonts stay.
@@ -1456,12 +1460,25 @@ function onChatUpserted(chat: ChatInfo) {
     void notify(workspace?.slug ?? "Chauffeur", chat.title ? `${what}: ${chat.title} needs it` : what);
     playNotificationSound().catch(() => {});
   }
-  if (!attention) return;
-  const focused = windowFocused();
-  if (!focused) {
-    const what = attentionText(attention, AGENT_SHORT_NAMES[chat.agent]);
-    void notify(workspace?.slug ?? "Chauffeur", chat.title ? `${what}: ${chat.title}` : what);
-    playNotificationSound().catch(() => {});
+  if (!attention || windowFocused()) return;
+  void notifyAttention(chat, workspace?.slug ?? "Chauffeur", attention);
+}
+
+async function notifyAttention(chat: ChatInfo, title: string, attention: Attention) {
+  // A chat that only waits on a declared session's login notifies when the user turned it on.
+  if (attention === "needs_input" && !get().notifySessions && (await waitsOnlyOnSessions(chat))) return;
+  const what = attentionText(attention, AGENT_SHORT_NAMES[chat.agent]);
+  void notify(title, chat.title ? `${what}: ${chat.title}` : what);
+  playNotificationSound().catch(() => {});
+}
+
+/** Whether every request the chat waits on is a session request; false when it cannot be read. */
+async function waitsOnlyOnSessions(chat: ChatInfo): Promise<boolean> {
+  try {
+    const result = await client.call("workspace.wait", { workspace: chat.workspace_id, timeout_secs: 0 });
+    return onlySessionRequests(result.open_requests, chat.id);
+  } catch {
+    return false;
   }
 }
 

@@ -4038,6 +4038,9 @@ pub struct NotificationSettings {
     pub sound: String,
     /// Why the sound file cannot be played.
     pub sound_error: Option<String>,
+    /// A chat waiting only on a declared session's login notifies on the Mac; off by default.
+    #[serde(default)]
+    pub sessions: bool,
 }
 
 /// Machines a workspace can be transferred to, each a Chauffeur daemon on a Unix socket (another
@@ -4190,6 +4193,8 @@ pub struct NotificationsUpdate {
     /// Empty for none, `chime`, `bell`, `station`, or a file's path.
     #[serde(default)]
     pub sound: Option<String>,
+    #[serde(default)]
+    pub sessions: Option<bool>,
 }
 
 /// What changes; anything left out stays.
@@ -4477,6 +4482,10 @@ pub struct PushPreferences {
     /// no way to turn it off.
     #[serde(default)]
     pub idle_reminders: bool,
+    /// A command waits on a declared session's login (docs/adr/declared-sessions.md): off unless
+    /// the phone turns it on.
+    #[serde(default)]
+    pub sessions: bool,
     pub show_workspace: bool,
     pub language: String,
 }
@@ -4488,6 +4497,7 @@ impl Default for PushPreferences {
             completed: true,
             errors: true,
             idle_reminders: true,
+            sessions: false,
             show_workspace: true,
             language: "en".into(),
         }

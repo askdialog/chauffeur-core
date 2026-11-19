@@ -192,7 +192,7 @@ export function startRelay(options: { adminToken: string; hostname?: string; por
         if(pushCount>=120 || now-(pushRates.get(pushMatch[1])??0)<1000)return new Response("Try later",{status:429,headers});
         try {
           const value=await request.json() as PushMessage;
-          if((value.provider !== undefined && !["fcm", "apns"].includes(value.provider)) || (value.provider === "apns" && !/^(?:[a-fA-F0-9]{2}){8,2048}$/.test(value.token)) || typeof value.token!=="string" || !/^[A-Za-z0-9_:-]{16,4096}$/.test(value.token) || !["approval","completed","error","idle"].includes(value.kind) || !["fr","en"].includes(value.language) || (value.workspace!==undefined && (typeof value.workspace!=="string" || value.workspace.length>80 || /[\u0000-\u001f\u007f]/.test(value.workspace)))) return new Response("Invalid push",{status:400,headers});
+          if((value.provider !== undefined && !["fcm", "apns"].includes(value.provider)) || (value.provider === "apns" && !/^(?:[a-fA-F0-9]{2}){8,2048}$/.test(value.token)) || typeof value.token!=="string" || !/^[A-Za-z0-9_:-]{16,4096}$/.test(value.token) || !["approval","completed","error","idle","session"].includes(value.kind) || !["fr","en"].includes(value.language) || (value.workspace!==undefined && (typeof value.workspace!=="string" || value.workspace.length>80 || /[\u0000-\u001f\u007f]/.test(value.workspace)))) return new Response("Invalid push",{status:400,headers});
           // Only allowlisted fields leave the relay. Never forward arbitrary request payloads.
           pushRates.set(pushMatch[1],now);pushCount++;
           const result=await options.push({provider:value.provider ?? "fcm",token:value.token,kind:value.kind,language:value.language,workspace:value.workspace});

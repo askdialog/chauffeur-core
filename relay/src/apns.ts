@@ -127,7 +127,7 @@ export function apnsSender(
       JSON.stringify({
         aps: {
           alert: notification,
-          ...(message.kind === "approval" ? { sound: "default" } : {}),
+          ...(message.kind === "approval" || message.kind === "session" ? { sound: "default" } : {}),
         },
         chauffeur: "update",
       }),

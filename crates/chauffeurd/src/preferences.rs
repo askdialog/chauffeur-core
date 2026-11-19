@@ -90,6 +90,7 @@ pub async fn get(d: &Arc<Daemon>) -> Result<AppSettings> {
                 crate::sound::Sound::File(path) => crate::sound::read(path).err(),
                 _ => None,
             },
+            sessions: settings.notifications.sessions,
         },
         keyboard: {
             let (bindings, binding_errors) = settings.keyboard.overrides();
@@ -198,7 +199,18 @@ pub async fn set(d: &Arc<Daemon>, update: SettingsUpdate) -> Result<AppSettings>
     if let Some(appearance) = update.appearance {
         set_appearance(d, appearance)?;
     }
-    if let Some(sound) = update.notifications.and_then(|n| n.sound) {
+    let notifications = update.notifications.unwrap_or_default();
+    if let Some(sessions) = notifications.sessions {
+        d.settings
+            .update(|doc| {
+                if !doc.contains_key("notifications") {
+                    doc["notifications"] = toml_edit::table();
+                }
+                doc["notifications"]["sessions"] = toml_edit::value(sessions);
+            })
+            .map_err(refused)?;
+    }
+    if let Some(sound) = notifications.sound {
         let sound = sound.trim().to_string();
         if sound.len() > 1024 || sound.contains('\n') {
             return Err(Error::BadRequest("not a sound or a file path".into()));
@@ -458,6 +470,8 @@ const TEMPLATE: &str = r#"# Chauffeur's settings. The app's Settings (⌘,) chan
 # FLAC, at most 5 MB). Unset: no sound.
 # [notifications]
 # sound = "station"
+# A chat waiting on a declared session's login notifies too (off unless set).
+# sessions = true
 
 # The Files editor takes Vim's keys (normal, insert and visual modes, :w saves).
 # [keyboard]

@@ -4,7 +4,7 @@ import { pushKind, PushObserver } from "../src/push-observer";
 import { startRelay } from "../src/server";
 import type { EventEnvelope, RemoteDevice, PushPreferences } from "@chauffeur/protocol";
 import type { DaemonConnection } from "../src/daemon";
-const preferences:PushPreferences={enabled:true,approvals:true,completed:true,errors:true,idle_reminders:true,show_workspace:false,language:"fr"};
+const preferences:PushPreferences={enabled:true,approvals:true,completed:true,errors:true,idle_reminders:true,sessions:false,show_workspace:false,language:"fr"};
 function event(type:string,extra:object={}):EventEnvelope{return {seq:1,ts:new Date().toISOString(),event:{scope:"chat",workspace_id:"w",chat_id:"c",event:{type,...extra} as never}};}
 function device():RemoteDevice{return {info:{id:"a".repeat(22),peer_id:"peer",name:"phone",relay:"ws://127.0.0.1:41240",created_at:"now"},host_token:"h".repeat(43),phone_token:"p".repeat(43),secret:"s".repeat(43),push:{token:"fcm_token_123456789",preferences:{...preferences}}};}
 test("only actionable live events create push kinds; no interrupted or text events",()=>{
@@ -127,4 +127,19 @@ test("an idle reminder pushes once for all its workspaces, with their names when
  expect(sends).toHaveLength(1);observer.stop();
  const payload=notificationPayload({token:"fcm_token_123456789",kind:"idle",language:"fr",workspace:"alpha, beta"});
  expect(payload.message.notification.body).toContain("Aucune activité depuis une heure");expect(payload.message.android.notification.channel_id).toBe("activity");expect(payload.message.android.notification.default_sound).toBe(false);
+});
+test("a session request pushes its own generic kind, only to a phone that turned it on",async()=>{
+ expect(pushKind(event("session_request",{request_id:"r",session:"aws",label:"AWS SSO (staging)"}))).toBe("session");
+ const phone=device();const sends:any[]=[];
+ const daemon:DaemonConnection={onEvent:()=>{},onClose:()=>{},close(){},async call(method){if(method==="events.subscribe")return {subscription:"s"};return {};}};
+ const observer=new PushObserver(daemon,()=>[phone],()=>false,(async(_url:unknown,options?:RequestInit)=>{sends.push(JSON.parse(String(options?.body)));return new Response("ok");}) as unknown as typeof fetch);
+ await observer.start();
+ daemon.onEvent({params:{envelope:event("session_request",{request_id:"r1",session:"aws",label:"AWS SSO (staging)"})}});await Bun.sleep(20);
+ expect(sends).toHaveLength(0);
+ phone.push!.preferences.sessions=true;
+ daemon.onEvent({params:{envelope:{...event("session_request",{request_id:"r2",session:"aws",label:"AWS SSO (staging)"}),seq:2}}});await Bun.sleep(20);
+ expect(sends).toHaveLength(1);expect(sends[0].kind).toBe("session");expect(JSON.stringify(sends[0])).not.toContain("AWS");
+ observer.stop();
+ const payload=notificationPayload({token:"fcm_token_123456789",kind:"session",language:"fr"});
+ expect(payload.message.notification.body).toBe("Une connexion est à renouveler.");expect(payload.message.android.notification.channel_id).toBe("approvals");
 });

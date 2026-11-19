@@ -1,4 +1,4 @@
-import type { Activity, ChatStatus, WorkspaceInfo } from "@chauffeur/protocol";
+import type { Activity, ChatStatus, OpenRequest, WorkspaceInfo } from "@chauffeur/protocol";
 
 export type Attention = "finished" | "failed" | "needs_input";
 
@@ -42,4 +42,10 @@ export function attentionText(attention: Attention, agent: string): string {
  */
 export function needingYou(workspaces: Record<string, WorkspaceInfo>): number {
   return Object.values(workspaces).filter((w) => w.state === "ready" && w.activity === "needs_input").length;
+}
+
+/** Whether a chat waits on declared sessions' logins only (docs/adr/declared-sessions.md). */
+export function onlySessionRequests(open: OpenRequest[], chatId: string): boolean {
+  const own = open.filter((request) => request.chat_id === chatId);
+  return own.length > 0 && own.every((request) => request.request.type === "session_request");
 }

@@ -1,7 +1,7 @@
 import type { EventEnvelope, RemoteDevice } from "@chauffeur/protocol";
 import type { DaemonConnection } from "./daemon";
 
-export type PushKind = "approval" | "completed" | "error" | "idle";
+export type PushKind = "approval" | "completed" | "error" | "idle" | "session";
 export function pushKind(envelope: EventEnvelope): PushKind | null {
   if (envelope.seq == null) return null;
   // Moved workspaces left an hour without activity, one reminder for all of them.
@@ -9,6 +9,8 @@ export function pushKind(envelope: EventEnvelope): PushKind | null {
   if (envelope.event.scope !== "chat") return null;
   const event = envelope.event.event;
   if (event.type === "permission_request" || event.type === "question") return "approval";
+  // A declared session to log in to: its own kind, off unless the phone turns it on.
+  if (event.type === "session_request") return "session";
   if (event.type === "turn_ended") return event.outcome === "success" ? "completed" : event.outcome === "error" ? "error" : null;
   return null;
 }
@@ -49,7 +51,7 @@ export class PushObserver {
       // Re-read the latest grant/preferences before delivery; never retain an old grant.
       const device=this.devices().find(d=>d.info.id===initial.info.id);
       const push=device?.push; const pref=push?.preferences;
-      if(!device || !push || !pref?.enabled || this.connected(device.info.id) || !(kind==="approval"?pref.approvals:kind==="completed"?pref.completed:kind==="idle"?pref.idle_reminders:pref.errors))continue;
+      if(!device || !push || !pref?.enabled || this.connected(device.info.id) || !(kind==="approval"?pref.approvals:kind==="completed"?pref.completed:kind==="idle"?pref.idle_reminders:kind==="session"?pref.sessions===true:pref.errors))continue;
       const key=`${device.info.id}:${subject}:${kind}`;
       if(Date.now()-(this.sent.get(key)??0)<10_000)continue;
       await this.daemon.call("remote.check",{device_id:device.info.id});

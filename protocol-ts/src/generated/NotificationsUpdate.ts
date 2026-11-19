@@ -7,4 +7,4 @@ export type NotificationsUpdate = {
 /**
  * Empty for none, `chime`, `bell`, `station`, or a file's path.
  */
-sound?: string, };
+sound?: string, sessions?: boolean, };

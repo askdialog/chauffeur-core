@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { WorkspaceInfo } from "@chauffeur/protocol";
-import { attentionText, chatAttention, needingYou } from "./attention";
+import type { OpenRequest, WorkspaceInfo } from "@chauffeur/protocol";
+import { attentionText, chatAttention, needingYou, onlySessionRequests } from "./attention";
 
 describe("chatAttention", () => {
   test("a finished, failed or blocked turn needs attention", () => {
@@ -47,4 +47,16 @@ describe("needingYou", () => {
   test("a workspace being archived or archived does not count", () => {
     expect(needingYou({ a: ws("a", { activity: "needs_input", state: "archiving" }), b: ws("b", { activity: "needs_input", state: "archived" }) })).toBe(0);
   });
+});
+
+test("a chat waiting on session logins only is told apart from one asking a permission", () => {
+  const session: OpenRequest = { chat_id: "c", request: { type: "session_request", request_id: "s", session: "aws", label: "AWS" } };
+  const permission: OpenRequest = {
+    chat_id: "c",
+    request: { type: "permission_request", request_id: "p", tool_name: "Bash", input: {}, title: null },
+  };
+  expect(onlySessionRequests([session], "c")).toBe(true);
+  expect(onlySessionRequests([session, permission], "c")).toBe(false);
+  expect(onlySessionRequests([{ ...session, chat_id: "other" }], "c")).toBe(false);
+  expect(onlySessionRequests([], "c")).toBe(false);
 });
