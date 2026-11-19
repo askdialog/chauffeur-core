@@ -3086,6 +3086,8 @@ impl WorkspaceManager {
                 WorkspaceState::CleanupFailed,
                 Some(format!("restore failed: {}", errors.join("; "))),
             )?;
+            // A chat opened meanwhile is closed with the others; it starts once restored.
+            d.chats.close_workspace(&row.id).await;
             return self.get(&row.id);
         }
         // Snapshots stay until expiry: restoring again after a new archive replaces them.
@@ -3094,6 +3096,7 @@ impl WorkspaceManager {
         }
         self.unarchive_chats(&row.id)?;
         self.set_state(&row.id, WorkspaceState::Ready, None)?;
+        d.chats.workspace_ready(&row.id).await;
         self.start_setup_scripts(&row.id, None)?;
         for group in &groups {
             self.start_setup_scripts(&row.id, Some(group))?;
@@ -3177,6 +3180,7 @@ impl WorkspaceManager {
         let failed = reactivated.unwrap_or_else(|error| vec![error.to_string()]);
         if failed.is_empty() {
             self.set_state(&row.id, WorkspaceState::Ready, None)?;
+            d.chats.workspace_ready(&row.id).await;
         } else {
             self.set_state(
                 &row.id,
@@ -3186,6 +3190,8 @@ impl WorkspaceManager {
                     failed.join("; ")
                 )),
             )?;
+            // A chat opened meanwhile is closed with the others; it starts once reactivated.
+            d.chats.close_workspace(&row.id).await;
         }
         self.get(&row.id)
     }

@@ -3524,6 +3524,155 @@ async fn a_reactivated_exploration_s_chats_are_told_once_what_moved_since_the_ar
     );
 }
 
+/// Each checkout of `clone` takes two seconds (a `post-checkout` hook): a restore runs long
+/// enough to be talked to. `false` takes the hook away.
+fn slow_checkouts(clone: &Path, slow: bool) {
+    let hook = clone.join(".git/hooks/post-checkout");
+    if !slow {
+        std::fs::remove_file(&hook).unwrap();
+        return;
+    }
+    std::fs::write(&hook, "#!/bin/sh\nsleep 2\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Whether the fake sidecar handed `text` to the agent of `chat`.
+fn reached(log: &Path, chat: &str, text: &str) -> bool {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .any(|l| {
+            (l.contains("session.start") || l.contains("session.send"))
+                && l.contains(chat)
+                && l.contains(text)
+        })
+}
+
+async fn chat_with(
+    d: &Daemon,
+    workspace: &str,
+    prompt: &str,
+) -> chauffeur_protocol::model::ChatInfo {
+    d.chats
+        .create(CreateChatParams {
+            workspace: workspace.to_string(),
+            agent: Some(AgentKind::Claude),
+            model: None,
+            effort: None,
+            fast: None,
+            permission_mode: None,
+            prompt: Some(prompt.into()),
+            images: None,
+            title: None,
+            kind: None,
+            source_chat: None,
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chats_talked_to_while_a_workspace_or_an_exploration_is_restored_reach_their_agents_once_it_is_back()
+ {
+    let f = fixture(47520);
+    let d = &f.daemon;
+    let log = f.root.join("sidecar.log");
+    d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
+    let clone = f.root.join("clones/repo-a");
+    for explore in [false, true] {
+        let ws = d
+            .workspaces
+            .create(CreateWorkspaceParams {
+                name: Some(format!("back-{explore}")),
+                repos: vec!["repo-a".into()],
+                explore,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .workspace;
+        let old = new_chat(d, &ws.id).await;
+        d.workspaces.archive(&ws.slug, true).await.unwrap();
+        eventually("the workspace to be archived", || {
+            d.workspaces.get(&ws.id).unwrap().state == WorkspaceState::Archived
+        })
+        .await;
+        slow_checkouts(&clone, true);
+        let restoring = tokio::spawn({
+            let (d, slug) = (d.clone(), ws.slug.clone());
+            async move { d.workspaces.restore(&slug).await }
+        });
+        eventually("the restore to start", || {
+            d.workspaces.get(&ws.id).unwrap().state == WorkspaceState::Creating
+        })
+        .await;
+        // A chat opened meanwhile, and a message to one the archive closed.
+        let new = chat_with(d, &ws.id, "first words").await;
+        d.chats.send(&old.id, "while away").await.unwrap();
+        let back = restoring.await.unwrap().unwrap();
+        assert_eq!(back.state, WorkspaceState::Ready, "{:?}", back.last_error);
+        eventually("both messages to reach their agents", || {
+            reached(&log, &new.id, "first words") && reached(&log, &old.id, "while away")
+        })
+        .await;
+        slow_checkouts(&clone, false);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_chat_opened_while_a_restore_fails_is_closed_and_starts_once_it_is_back() {
+    use chauffeur_protocol::model::ChatStatus;
+    let f = fixture(47530);
+    let d = &f.daemon;
+    let log = f.root.join("sidecar.log");
+    d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
+    let clone_a = f.root.join("clones/repo-a");
+    let (clone_b, away) = (f.root.join("clones/repo-b"), f.root.join("repo-b-away"));
+    for explore in [false, true] {
+        let ws = d
+            .workspaces
+            .create(CreateWorkspaceParams {
+                name: Some(format!("look-{explore}")),
+                repos: vec!["repo-a".into(), "repo-b".into()],
+                explore,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .workspace;
+        d.workspaces.archive(&ws.slug, true).await.unwrap();
+        eventually("the workspace to be archived", || {
+            d.workspaces.get(&ws.id).unwrap().state == WorkspaceState::Archived
+        })
+        .await;
+        // repo-a's checkout is slow; repo-b's clone is gone: the restore fails.
+        slow_checkouts(&clone_a, true);
+        std::fs::rename(&clone_b, &away).unwrap();
+        let restoring = tokio::spawn({
+            let (d, slug) = (d.clone(), ws.slug.clone());
+            async move { d.workspaces.restore(&slug).await }
+        });
+        eventually("the restore to start", || {
+            d.workspaces.get(&ws.id).unwrap().state == WorkspaceState::Creating
+        })
+        .await;
+        let new = chat_with(d, &ws.id, "first words").await;
+        let failed = restoring.await.unwrap().unwrap();
+        assert_eq!(failed.state, WorkspaceState::CleanupFailed);
+        assert_eq!(d.chats.resolve(&new.id).unwrap().status, ChatStatus::Closed);
+
+        std::fs::rename(&away, &clone_b).unwrap();
+        slow_checkouts(&clone_a, false);
+        let back = d.workspaces.restore(&ws.slug).await.unwrap();
+        assert_eq!(back.state, WorkspaceState::Ready, "{:?}", back.last_error);
+        eventually("the first message to reach its agent", || {
+            reached(&log, &new.id, "first words")
+        })
+        .await;
+    }
+}
+
 async fn new_chat(d: &Daemon, workspace: &str) -> chauffeur_protocol::model::ChatInfo {
     d.chats
         .create(CreateChatParams {

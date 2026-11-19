@@ -588,14 +588,15 @@ impl ChatManager {
         };
         let _admission = d.execution.admit(&chat.workspace_id)?;
         self.require_native_context(&chat.id)?;
-        if chat.status == ChatStatus::Closed {
+        let workspace = d.workspaces.row(&chat.workspace_id)?;
+        // Being restored, its chats are back once it is ready: the message waits for it below.
+        if chat.status == ChatStatus::Closed && workspace.state != WorkspaceState::Creating {
             return Err(Error::Conflict("this chat's workspace is archived".into()));
         }
         // A message to a chat the user closed puts it back among the tabs.
         if chat.closed {
             self.set_closed(&chat.id, false)?;
         }
-        let workspace = d.workspaces.row(&chat.workspace_id)?;
         let attachments = if images.is_empty() {
             Vec::new()
         } else {
@@ -2570,9 +2571,15 @@ impl ChatManager {
                 tracing::warn!(%error, chat = chat.id, "the first message could not start the agent");
             }
         }
+        // The messages that waited, a restored workspace's chats' too (idle again).
         for chat in d.store.chats_of(workspace_id).unwrap_or_default() {
-            if chat.status == ChatStatus::Starting && !self.is_live(&chat.id) {
+            if self.is_live(&chat.id) {
+                continue;
+            }
+            if chat.status == ChatStatus::Starting {
                 self.set_status(&chat, ChatStatus::Idle);
+            }
+            if matches!(chat.status, ChatStatus::Starting | ChatStatus::Idle) {
                 self.send_next_queued(chat.id.clone());
             }
         }
