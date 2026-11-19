@@ -663,6 +663,7 @@ export type { WorkspacesResult } from "./WorkspacesResult";
 export type { WorktreeCreateParams } from "./WorktreeCreateParams";
 export type { WorktreeCreateResult } from "./WorktreeCreateResult";
 export type { WorktreeInfo } from "./WorktreeInfo";
+export type { WorktreeObservedParams } from "./WorktreeObservedParams";
 export type { WorktreeOrigin } from "./WorktreeOrigin";
 export type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 export type { JsonValue } from "./serde_json/JsonValue";

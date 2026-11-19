@@ -385,6 +385,77 @@ async fn a_design_made_from_an_imported_one_has_a_single_chat_with_the_first_pro
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn direct_git_worktrees_are_snapshotted_before_archiving_their_workspace() {
+    let f = fixture(46100);
+    let daemon = &f.daemon;
+    let workspace = daemon
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("observed-worktree".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let root = PathBuf::from(&workspace.path);
+    let repo = root.join("repo-a");
+    let adopted = root.join("adopted");
+    let nested = repo.join("nested");
+    let outside = f.root.join("outside");
+    for path in [&adopted, &outside] {
+        git(
+            &repo,
+            &["worktree", "add", "--detach", path.to_str().unwrap()],
+        );
+    }
+    let observe = async |path: &Path| {
+        chauffeurd::worktree_sync::observe(daemon, &workspace.id, path.to_str().unwrap()).await
+    };
+    observe(&adopted).await.unwrap();
+    observe(&adopted).await.unwrap();
+    assert!(observe(&outside).await.is_err());
+
+    // This command was not reported through ACP. The archive must still find the live Git checkout.
+    git(
+        &repo,
+        &["worktree", "add", "--detach", nested.to_str().unwrap()],
+    );
+    for path in [&adopted, &nested] {
+        std::fs::write(path.join("draft.txt"), "work to keep").unwrap();
+    }
+    let archived = daemon
+        .workspaces
+        .archive(&workspace.id, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        archived.state,
+        WorkspaceState::Archived,
+        "{:?}",
+        archived.last_error
+    );
+    assert!(!adopted.exists());
+    assert!(!nested.exists());
+    assert!(outside.is_dir());
+    let rows = daemon.store.worktrees_of(&workspace.id).unwrap();
+    let extra: Vec<_> = rows
+        .iter()
+        .filter(|worktree| worktree.origin == WorktreeOrigin::Agent)
+        .collect();
+    assert_eq!(extra.len(), 2);
+    for worktree in extra {
+        let snapshot = worktree.snapshot_ref.as_ref().unwrap();
+        assert_eq!(
+            git(
+                Path::new(&worktree.clone_path),
+                &["show", &format!("{snapshot}:draft.txt")]
+            ),
+            "work to keep"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_multi_repo_workspace_is_created_archived_and_restored() {
     let f = fixture(46100);
     let d = &f.daemon;

@@ -28,6 +28,9 @@ const host: SessionHost = {
   },
   createWorktree: async () => "/tmp",
   removeWorktree: async () => {},
+  observeWorktree: async () => {
+    throw new Error("worktree tracking requires the Chauffeur daemon");
+  },
   listRepos: async () => ({
     workspace: "try",
     explore: false,

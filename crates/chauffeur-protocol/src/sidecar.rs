@@ -133,6 +133,9 @@ methods! {
         WorktreeCreate(WorktreeCreateParams) -> WorktreeCreateResult,
         #[serde(rename = "hook.worktree_remove")]
         WorktreeRemove(WorktreeRemoveParams) -> Empty,
+        /// A completed Vibe shell call reported a possible Git worktree creation.
+        #[serde(rename = "hook.worktree_observed")]
+        WorktreeObserved(WorktreeObservedParams) -> Empty,
         /// The agent's `list_repos` tool: the repos it may propose for the chat's workspace.
         #[serde(rename = "tool.list_repos")]
         ToolListRepos(ToolChatParams) -> ToolListReposResult,
@@ -861,6 +864,13 @@ pub struct WorktreeCreateResult {
 #[ts(export)]
 #[ts(optional_fields)]
 pub struct WorktreeRemoveParams {
+    pub chat_id: String,
+    pub path: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct WorktreeObservedParams {
     pub chat_id: String,
     pub path: String,
 }

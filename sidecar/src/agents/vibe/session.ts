@@ -1,9 +1,9 @@
 // One Mistral Vibe chat: a `vibe-acp` process per session (its environment carries the workspace's
 // variables), one ACP session in it (docs/adr/mistral-vibe-third-agent.md).
 //
-// The session runs in Vibe's `ask` mode whatever the chat's permission mode: every tool call Vibe
-// gates comes as `session/request_permission`, which acp/permissions.ts allows, refuses or puts to
-// the user. ACP has no steering: a message sent while a turn runs waits for its end, then goes with
+// Workspace Auto uses Vibe's native classifier where offered. In other modes Vibe runs in `ask`
+// and Chauffeur decides its permission requests. ACP has no steering: a message sent while a turn
+// runs waits for its end, then goes with
 // the others as the next prompt. ACP has no system prompt either: Chauffeur's instructions go
 // before the first message of a new session, which Vibe keeps in its history.
 
@@ -24,9 +24,10 @@ import { CHAUFFEUR_TOOLS, TOOLS_DESCRIPTION } from "../repo-tools.ts";
 import type { AcpConnection, SpawnAcp } from "../acp/connection.ts";
 import { AcpEventMapper, describe, type AcpToolCall } from "../acp/events.ts";
 import { decide } from "../acp/permissions.ts";
-import { ACP_PROTOCOL_VERSION, type ContentBlock, type InitializeResponse, type McpServerSpec, type NewSessionResponse, type PermissionOption, type PromptResponse, type RequestPermissionOutcome, type RequestPermissionRequest, type SessionNotification } from "../acp/protocol.ts";
+import { ACP_PROTOCOL_VERSION, type ContentBlock, type InitializeResponse, type McpServerSpec, type NewSessionResponse, type PermissionOption, type PromptResponse, type RequestPermissionOutcome, type RequestPermissionRequest, type SessionNotification, type ToolCallFields } from "../acp/protocol.ts";
 import { serveTools, type ToolsServer } from "../acp/tools-server.ts";
 import { vibeChauffeurTools } from "./tools.ts";
+import { observedWorktree } from "./worktree.ts";
 
 export interface VibeSessionDeps {
   spawn: SpawnAcp;
@@ -46,6 +47,7 @@ export interface VibeSessionDeps {
 
 /** Vibe's mode in which every tool call it gates asks the client. */
 export const VIBE_ASK_MODE = "ask";
+const VIBE_SMART_APPROVE = "smart-approve";
 
 type State = "new" | "starting" | "running" | "stopping" | "ended";
 
@@ -69,6 +71,11 @@ export class VibeSession implements AgentSession {
   private prompting = false;
   private readonly queue: Message[] = [];
   private mode: PermissionMode;
+  private nativeMode: string | undefined;
+  private smartApproveAvailable = false;
+  private warnedAboutSmartApprove = false;
+  private readonly worktreeObservations = new Set<Promise<void>>();
+  private readonly shellInputs = new Map<string, unknown>();
   /** Settings changed while a turn ran, sent before the next prompt. */
   private pendingModel: string | undefined;
   private pendingEffort: string | undefined;
@@ -124,7 +131,10 @@ export class VibeSession implements AgentSession {
       throw error instanceof RpcError ? error : new RpcError(ErrorCode.UNAVAILABLE, `Mistral Vibe failed to start: ${errorMessage(error)}`);
     }
     this.connection = connection;
-    void connection.exited.then((reason) => this.onExit(reason));
+    void connection.exited.then(async (reason) => {
+      await Promise.all(this.worktreeObservations);
+      this.onExit(reason);
+    });
 
     const failed = new Promise<never>((_, reject) => {
       this.failStart = reject;
@@ -160,7 +170,7 @@ export class VibeSession implements AgentSession {
     return { agent_session_id: this.sessionId, ...(connection.pid === undefined ? {} : { native_pid: connection.pid }) };
   }
 
-  /** initialize → session/new or session/load → Vibe's ask mode, the chat's model and effort. */
+  /** Opens the native session and applies the chat's settings before the first prompt. */
   private async openSession(connection: AcpConnection): Promise<string | null> {
     const init = await connection.request<InitializeResponse>("initialize", {
       protocolVersion: ACP_PROTOCOL_VERSION,
@@ -201,9 +211,9 @@ export class VibeSession implements AgentSession {
         this.sessionId = opened.sessionId;
       }
     }
-    if (opened.modes?.currentModeId !== VIBE_ASK_MODE) {
-      await connection.request("session/set_mode", { sessionId: this.sessionId, modeId: VIBE_ASK_MODE });
-    }
+    this.nativeMode = opened.modes?.currentModeId;
+    this.smartApproveAvailable = opened.modes?.availableModes.some((mode) => mode.id === VIBE_SMART_APPROVE) ?? false;
+    await this.applyMode(connection);
     let model = currentValue(opened, "model");
     if (this.params.model && this.params.model !== model) {
       if (offers(opened, "model", this.params.model)) {
@@ -241,6 +251,21 @@ export class VibeSession implements AgentSession {
 
   private async setOption(connection: AcpConnection, configId: string, value: string): Promise<void> {
     await connection.request("session/set_config_option", { sessionId: this.sessionId, configId, value });
+  }
+
+  private async applyMode(connection: AcpConnection): Promise<void> {
+    const wantsSmartApprove = this.mode === "auto" && !this.params.read_only && !this.params.design_dir;
+    if (wantsSmartApprove && !this.smartApproveAvailable && !this.warnedAboutSmartApprove) {
+      this.warnedAboutSmartApprove = true;
+      const message = "This Vibe session does not offer Smart Approve. Chauffeur asks before running new shell commands in Auto.";
+      if (this.state === "starting") this.pendingNotice = message;
+      else this.emit(notice("warning", message));
+    }
+    const mode = wantsSmartApprove && this.smartApproveAvailable ? VIBE_SMART_APPROVE : VIBE_ASK_MODE;
+    if (this.nativeMode === mode) return;
+    const switched = await connection.request("session/set_mode", { sessionId: this.sessionId, modeId: mode });
+    if (switched === null) throw new Error(`Vibe did not switch to ${mode}`);
+    this.nativeMode = mode;
   }
 
   /** Chauffeur's tools (not in a design chat), and a design chat's headless browser. */
@@ -309,16 +334,17 @@ export class VibeSession implements AgentSession {
     if (changes.model !== undefined) this.pendingModel = changes.model;
     if (changes.effort !== undefined) this.pendingEffort = changes.effort;
     if (this.busy) {
-      this.emit(notice("info", "Mistral Vibe applies model and effort changes from the next turn"));
+      this.emit(notice("info", "Mistral Vibe applies mode, model and effort changes from the next turn"));
       return;
     }
     await this.applySettings();
   }
 
-  /** The model and effort changed since the last prompt, given to Vibe before the next one. */
+  /** Gives Vibe changes before the next prompt. */
   private async applySettings(): Promise<void> {
     const connection = this.connection;
     if (!connection) return;
+    await this.applyMode(connection);
     const model = this.pendingModel;
     const effort = this.pendingEffort;
     this.pendingModel = undefined;
@@ -354,6 +380,7 @@ export class VibeSession implements AgentSession {
     if (connection && !(await settlesWithin((async () => { await connection.close(); await connection.exited; })(), this.deps.stopTimeoutMs ?? 15_000))) {
       throw new RpcError(ErrorCode.UNAVAILABLE, "Mistral Vibe's process exit is unconfirmed; keep the workspace fenced and retry stopping the session");
     }
+    await Promise.all(this.worktreeObservations);
     this.state = "ended";
   }
 
@@ -377,7 +404,7 @@ export class VibeSession implements AgentSession {
     const startedAt = Date.now();
     let outcome: { response?: PromptResponse; error?: string };
     try {
-      if (this.pendingModel || this.pendingEffort) await this.applySettings();
+      await this.applySettings();
       let prompt = await this.promptBlocks(messages);
       this.delivered(messages);
       for (;;) {
@@ -392,6 +419,8 @@ export class VibeSession implements AgentSession {
       if (isSignedOut(error)) this.loseAccount(errorMessage(error));
       outcome = { error: errorMessage(error) };
     } finally {
+      await Promise.all(this.worktreeObservations);
+      this.shellInputs.clear();
       this.prompting = false;
     }
     if (this.state !== "running") return;
@@ -445,7 +474,30 @@ export class VibeSession implements AgentSession {
     if (this.state === "ended" || method !== "session/update" || this.loading) return;
     const notification = params as SessionNotification;
     if (notification.sessionId !== this.sessionId) return;
+    const update = notification.update;
+    if (this.nativeMode === VIBE_SMART_APPROVE &&
+        (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update")) this.observeShell(update);
     for (const event of this.mapper.map(notification.update)) this.emit(event);
+  }
+
+  private observeShell(update: ToolCallFields): void {
+    const id = update.toolCallId;
+    const tool = this.mapper.tool(id);
+    if (tool?.ended || (update.kind ?? tool?.kind) !== "execute") return;
+    if (update.rawInput !== undefined && update.rawInput !== null) this.shellInputs.set(id, update.rawInput);
+    if (update.status !== "completed" && update.status !== "failed") return;
+    const input = this.shellInputs.get(id);
+    this.shellInputs.delete(id);
+    if (update.status !== "completed") return;
+    const observation = observedWorktree(update.rawOutput, input, this.params.cwd);
+    if (observation?.type === "unresolved") {
+      this.emit(notice("warning", "Vibe ran a Git worktree command whose new checkout could not be identified. Check the worktree before archiving."));
+    } else if (observation) {
+      const pending = this.host.observeWorktree(observation.path).catch((error: unknown) => {
+        this.emit(notice("warning", `Chauffeur could not track the Vibe worktree at ${observation.path}: ${errorMessage(error)}`));
+      }).finally(() => this.worktreeObservations.delete(pending));
+      this.worktreeObservations.add(pending);
+    }
   }
 
   private async onRequest(method: string, params: unknown, id: RpcId): Promise<unknown> {
@@ -465,7 +517,9 @@ export class VibeSession implements AgentSession {
       cwd: this.params.design_dir ?? this.params.cwd,
       roots: [this.params.cwd, ...this.params.additional_directories],
     });
-    if (decision.type === "allow") return select(request.options, "allow_once");
+    if (decision.type === "allow" && (this.nativeMode !== VIBE_SMART_APPROVE || tool.name.startsWith("mcp__chauffeur__"))) {
+      return select(request.options, "allow_once");
+    }
     if (decision.type === "deny") {
       this.refusals.push(`${tool.title ?? tool.name}: ${decision.reason}`);
       this.emit(notice("warning", decision.reason));

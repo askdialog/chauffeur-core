@@ -47,6 +47,7 @@ export class FakeAcp implements AcpConnection {
   failures = new Map<string, Error>();
   /** Whether Vibe trusts the session's folder, as `session/new` says until a trust decision. */
   trusted = true;
+  smartApprove = true;
   private sessions = 0;
 
   constructor(options: AcpSpawnOptions) {
@@ -65,7 +66,8 @@ export class FakeAcp implements AcpConnection {
       case "session/load": {
         const sessionId = method === "session/new" && this.sessions++ > 0 ? `${SESSION_ID}-${this.sessions}` : SESSION_ID;
         const _meta = { workspace_trust: { status: this.trusted ? "trusted" : "untrusted" } };
-        return { sessionId, modes: { currentModeId: "accept-edits", availableModes: [] }, configOptions: CONFIG_OPTIONS, _meta } as T;
+        const availableModes = this.smartApprove ? [{ id: "smart-approve", name: "Smart Approve" }] : [];
+        return { sessionId, modes: { currentModeId: "accept-edits", availableModes }, configOptions: CONFIG_OPTIONS, _meta } as T;
       }
       case "_trust/decision":
         this.trusted = true;

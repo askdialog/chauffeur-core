@@ -42,6 +42,8 @@ export interface SessionHost {
   createWorktree(name: string): Promise<string>;
   /** Asks the daemon to remove a worktree it created (`hook.worktree_remove`). */
   removeWorktree(path: string): Promise<void>;
+  /** Records a reported Git worktree after the daemon verifies its checkout. */
+  observeWorktree(path: string): Promise<void>;
   /** The repos the agent may propose for its workspace (`tool.list_repos`). */
   listRepos(): Promise<ToolListReposResult>;
   /** Adds a repo to the chat's workspace, once the user said yes (`tool.add_repo`). */
