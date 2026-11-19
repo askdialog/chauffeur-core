@@ -1158,6 +1158,15 @@ impl ChatManager {
             } else {
                 Vec::new()
             },
+            source_clones: config_repos
+                .iter()
+                .filter_map(|repo| {
+                    Some(chauffeur_protocol::sidecar::SourceClone {
+                        clone: repo.clone_path.as_ref()?.display().to_string(),
+                        worktree: repo.path.display().to_string(),
+                    })
+                })
+                .collect(),
             resume_session_id: chat.agent_session_id.clone(),
             env,
             append_system_prompt: system_prompt(

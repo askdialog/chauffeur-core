@@ -228,6 +228,16 @@ describe("the sidecar over JSON-RPC", () => {
     expect((await call("session.start", { ...START, chat_id: "c3", always_allow: [1] }))?.error).toMatchObject({ code: -32602 });
   });
 
+  test("passes the source clones the session never writes into on, and checks them", async () => {
+    const { call, agent } = sidecar();
+    const source_clones = [{ clone: "/code/web", worktree: "/ws/web" }];
+    expect((await call("session.start", { ...START, source_clones }))?.error).toBeUndefined();
+    expect(agent.sessions[0]?.params.source_clones).toEqual(source_clones);
+    expect((await call("session.start", { ...START, chat_id: "c2" }))?.error).toBeUndefined();
+    expect(agent.sessions[1]?.params.source_clones).toBeUndefined();
+    expect((await call("session.start", { ...START, chat_id: "c3", source_clones: [{ clone: "/code/web" }] }))?.error).toMatchObject({ code: -32602 });
+  });
+
   test("passes the clones whose memory the session reads on, and checks them", async () => {
     const { call, agent } = sidecar();
     const memory_clones = ["/code/web", "/code/api"];

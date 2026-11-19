@@ -16,6 +16,7 @@ import {
   type RequestResponse,
   type SessionStartParams,
   type SidecarMethods,
+  type SourceClone,
 } from "./protocol.ts";
 import { RpcError } from "./rpc/peer.ts";
 import { restoreContexts } from "./agents/context-restore.ts";
@@ -268,7 +269,18 @@ export function parseStartParams(params: unknown): SessionStartParams {
   if (clones.length > 0) start.memory_clones = clones;
   const local = strings(p.local_allow, "local_allow");
   if (local.length > 0) start.local_allow = local;
+  const sources = sourceClones(p.source_clones);
+  if (sources.length > 0) start.source_clones = sources;
   return start;
+}
+
+function sourceClones(value: unknown): SourceClone[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw invalid("source_clones must be an array");
+  return value.map((item) => {
+    const s = object(item, "source_clones[]");
+    return { clone: string(s, "clone"), worktree: string(s, "worktree") };
+  });
 }
 
 function jevParams(value: unknown): JevParams {

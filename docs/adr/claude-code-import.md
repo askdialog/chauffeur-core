@@ -1,0 +1,32 @@
+# Import from Claude Code in one command
+
+- **Date:** 2026-11-17
+- **Status:** accepted
+
+## Context
+
+Developers who used Claude Code alone, in a terminal or in VS Code, start Chauffeur empty-handed: their branches in progress, their conversations, their Claude memory and local permissions stay behind. `chauffeur import conductor` ([conductor-import](conductor-import.md)) only serves Conductor users. Claude Code has no workspaces: it keeps sessions by folder (`~/.claude/projects/<folder key>/<session>.jsonl`), usually the developer's main clone, where it switches branches as it goes. One developer's machine showed 43 of 93 sessions changing branch midway, work done in worktrees the session made itself (`.wt/…`, scratchpads under `/tmp`), and nearly every branch a session ended on already merged. Unlike Conductor's, the transcripts are still on disk, so conversations can be resumed natively.
+
+## Decision
+
+Proposed by Théo 2026-11-16, accepted by Justin 2026-11-17: `chauffeur import claude-code` (a daemon method, `claudecode.import`, as `conductor.import`) moves such a developer to Chauffeur in one command (in a later pull request). Three general changes it depends on have their own ADRs: [reactivate-archived-explorations](reactivate-archived-explorations.md), [claude-memory-per-repo](claude-memory-per-repo.md), [clone-local-claude-settings](clone-local-claude-settings.md).
+
+- The sessions active in the last 60 days are read (`--since`, `--all`); sessions still running (`~/.claude/sessions/<pid>.json`) are refused, and folders that are not git repos are skipped with a warning.
+- A session's branches come from what it wrote: its Write, Edit and NotebookEdit paths, each resolved to its git worktree, then to a repo and a branch (its own folder counts only if written to), plus the branches its shell commands created (`git worktree add -b`, `git switch -c`, `git checkout -b`).
+- A branch that exists and is not merged into the default branch is live, however old; uncommitted changes in a checkout make it live too. A live branch becomes a workspace on that branch, the session its chat; the same live branch in several repos makes one workspace with those repos.
+- A session with two live branches or more becomes a parent workspace on its folder's repo, on a new branch named from the session title, holding its chat, with one child workspace per live branch; the import may exceed `max_children`. A branch written by two such sessions goes to the most recent one's parent; a session that wrote only on a child's branch becomes a chat of that child. The parent's chat is told to follow its children with `chauffeur status`, `wait` and `send`.
+- Uncommitted changes on a clone's default branch become a workspace on a new branch carrying them (the parent's, in an orchestration).
+- Everything else (default branch, merged, deleted, detached) lands in one history exploration per repo, checked out at its base branch, as closed tabs, resumable read-only.
+- A live branch checked out in the clone or in one of the user's own worktrees is released as the Conductor import does: HEAD detached on the same commit, uncommitted and untracked changes copied into the new worktree, after one confirmation defaulting to no (`--yes` skips it); the output says how to clean the clone. With `--move-changes`, the changes are also saved in a git ref kept 30 days and the checkout goes back to its default branch. A worktree under `/tmp` half deleted by its cleanup carries its branch's commits only, never its diff.
+- `--dry-run` prints the whole plan and changes nothing; `--json` gives the plan and the result. Per-session picking is left for a V2.
+- Each session is copied, never moved, with the same session id into the folder its chat runs from, through the sidecar's context capture and restore (as cloud transfers do); the original stays usable in the terminal and VS Code, and the output says the two copies no longer sync. The conversation shown in the app is read through the SDK and mapped by `ClaudeEventMapper`, as subagents' transcripts are. Imported session ids are recorded: a second run imports none twice, even after archiving.
+- The first resume of an imported chat tells its agent which folders are the user's, where the repo now lives, and that its folder is the workspace's.
+- A repo with no setup script gets one guessed from its root lockfile (pnpm, npm, yarn, bun, uv, poetry, bundle), shown in the dry run and written to the user's `[repos.<name>.scripts] setup`, never into the repo. Local-scope MCP servers are named in a warning (names only) with the `claude mcp add --scope user` command.
+- **No agent of any workspace writes into a source clone**: the worktrees are made from the user's clones, and nothing else stops an agent from changing the clone itself. Every Claude chat of a workspace (explorations and design chats included) refuses Write, Edit, MultiEdit and NotebookEdit into one of the workspace's clones, naming the matching path in its worktree, and a shell command that writes and names a clone (a redirection, a file command, a git command that changes it); reads are allowed. An imported chat's guard also covers the session's own worktrees and scratchpads (in a later pull request). A setting to turn the guard off only if a need shows.
+
+## Consequences
+
+- The import reuses the Conductor import's repo matching by remote, clone reuse, branch release, change copy, dry run and idempotence; reading and placing Claude Code sessions is new (in a later pull request).
+- The sidecar gets the workspace's clones with their worktrees at each session start, and a `PreToolUse` guard (`sidecar/src/guard/clone-guard.ts`) reads file tools' paths and shell commands as the other guards do. A guard rail, not a sandbox: a program that writes where it runs (`npm install` once in the clone) is not caught. Codex chats are not guarded by it: their sandbox writes in the workspace's folders only, and a write elsewhere, a clone included, needs an approval (the user's, or Codex's reviewer in auto mode; none in bypass-permissions mode, which has no sandbox).
+- The import ships in steps behind a switch, turned on once workspaces, history, orchestrations and the resume note are in; the guard ships first, for every workspace.
+- Rewind checkpoints (`~/.claude/file-history/`) are not carried; Chauffeur launching an agent to write a setup script was rejected.

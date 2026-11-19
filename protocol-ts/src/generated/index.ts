@@ -573,6 +573,7 @@ export type { SlackLogin } from "./SlackLogin";
 export type { SlackReceiveParams } from "./SlackReceiveParams";
 export type { SlackStatus } from "./SlackStatus";
 export type { SlashCommand } from "./SlashCommand";
+export type { SourceClone } from "./SourceClone";
 export type { StopProcessParams } from "./StopProcessParams";
 export type { StopTaskParams } from "./StopTaskParams";
 export type { SubagentMessagesParams } from "./SubagentMessagesParams";

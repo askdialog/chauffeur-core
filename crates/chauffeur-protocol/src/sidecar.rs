@@ -645,6 +645,14 @@ pub struct AgentTitleResult {
     pub title: String,
 }
 
+/// A clone of one of a workspace's repos, and its worktree in the workspace.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[ts(export)]
+pub struct SourceClone {
+    pub clone: String,
+    pub worktree: String,
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[ts(export)]
 #[ts(optional_fields)]
@@ -700,6 +708,12 @@ pub struct SessionStartParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<String>>", optional)]
     pub local_allow: Vec<String>,
+    /// The clones of the workspace's repos, each with its worktree in the workspace, given to a
+    /// Claude chat: its agent never writes into them, and is told the worktree path to write
+    /// instead (docs/adr/claude-code-import.md).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<SourceClone>>", optional)]
+    pub source_clones: Vec<SourceClone>,
     /// Resume this agent session instead of starting a new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resume_session_id: Option<String>,

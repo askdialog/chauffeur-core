@@ -3838,6 +3838,54 @@ async fn a_workspace_whose_restore_failed_takes_no_chat_and_no_message() {
     assert!(refused.contains("failed is cleanup_failed"), "{refused}");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_claude_chat_is_given_each_source_clone_with_its_worktree_those_of_repos_added_later_too()
+{
+    let f = fixture(47560);
+    let d = &f.daemon;
+    let log = f.root.join("sidecar.log");
+    d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("guarded".into()),
+            repos: vec!["repo-a".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let started = || -> Vec<serde_json::Value> {
+        std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .filter(|l| l.contains("\"session.start\""))
+            .map(|l| {
+                serde_json::from_str::<serde_json::Value>(l).unwrap()["params"]["source_clones"]
+                    .clone()
+            })
+            .collect()
+    };
+    let source = |repo: &str| {
+        serde_json::json!({
+            "clone": f.root.join("clones").join(repo).display().to_string(),
+            "worktree": PathBuf::from(&ws.path).join(repo).display().to_string(),
+        })
+    };
+    chat_with(d, &ws.id, "hello").await;
+    assert_eq!(
+        started().last().unwrap(),
+        &serde_json::json!([source("repo-a")])
+    );
+    // A repo added later: a chat started since is given its clone too.
+    d.workspaces.add_repo(&ws.slug, "repo-b").await.unwrap();
+    chat_with(d, &ws.id, "hello again").await;
+    assert_eq!(
+        started().last().unwrap(),
+        &serde_json::json!([source("repo-a"), source("repo-b")])
+    );
+}
+
 async fn new_chat(d: &Daemon, workspace: &str) -> chauffeur_protocol::model::ChatInfo {
     d.chats
         .create(CreateChatParams {

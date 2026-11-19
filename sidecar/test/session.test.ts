@@ -1070,6 +1070,39 @@ describe("hooks", () => {
     expect(await guard(input("git worktree list"), "t", { signal })).toEqual({});
   });
 
+  test("in every chat, a file tool or a shell command writing into a source clone is denied, naming the worktree", async () => {
+    const root = mkdtempSync(join(tmpdir(), "clone-hook-"));
+    try {
+      // The clone through a symlinked folder: the agent may name either path.
+      mkdirSync(join(root, "real", "web"), { recursive: true });
+      symlinkSync(join(root, "real"), join(root, "link"));
+      const clone = join(root, "link", "web");
+      const worktree = join(root, "ws", "web");
+      const deny = async (query: FakeQuery, tool_name: string, tool_input: unknown) => {
+        const outputs = await Promise.all(
+          (query.options.hooks?.PreToolUse ?? []).flatMap((m) => m.hooks).map((h) =>
+            h({ ...base, cwd: join(root, "ws"), hook_event_name: "PreToolUse", tool_name, tool_input, tool_use_id: "t" } as HookInput, "t", { signal }),
+          ),
+        );
+        // Every denial: an exploration's own guard refuses its file writes too.
+        const denials = outputs.filter((o) => JSON.stringify(o).includes('"deny"'));
+        return denials.length > 0 ? JSON.stringify(denials) : "null";
+      };
+      for (const params of [{}, { read_only: true }]) {
+        const { query } = await started({ ...params, cwd: join(root, "ws"), source_clones: [{ clone, worktree }] });
+        expect(await deny(query, "Edit", { file_path: join(clone, "a.ts"), old_string: "a", new_string: "b" })).toContain(join(worktree, "a.ts"));
+        expect(await deny(query, "Write", { file_path: join(realpathSync(join(root, "real", "web")), "a.ts"), content: "x" })).toContain("agents never change it");
+        expect(await deny(query, "Bash", { command: `git -C ${clone} commit -am wip` })).toContain(worktree);
+        expect(await deny(query, "Bash", { command: `git -C ${clone} log` })).toBe("null");
+        expect(await deny(query, "Read", { file_path: join(clone, "a.ts") })).toBe("null");
+      }
+      const without = (await started({ cwd: join(root, "ws") })).query;
+      expect(await deny(without, "Write", { file_path: join(clone, "a.ts"), content: "x" })).toBe("null");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("in an exploration, PreToolUse on Bash also denies git and GitHub writes", async () => {
     const input = (command: string) =>
       ({ ...base, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, tool_use_id: "t" }) as HookInput;

@@ -59,6 +59,7 @@ export type {
   SessionSendParams,
   SessionStartParams,
   SessionStartResult,
+  SourceClone,
   SessionTaskParams,
   SlashCommand,
   TaskKind,

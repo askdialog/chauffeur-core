@@ -3,6 +3,7 @@ import type { AgentKind } from "./AgentKind";
 import type { Attachment } from "./Attachment";
 import type { JevParams } from "./JevParams";
 import type { PermissionMode } from "./PermissionMode";
+import type { SourceClone } from "./SourceClone";
 
 export type SessionStartParams = { chat_id: string, workspace_id: string, agent: AgentKind, 
 /**
@@ -56,6 +57,12 @@ memory_clones?: Array<string>,
  * the allow rules of a folder never trusted, as a workspace is, so they come as flag settings.
  */
 local_allow?: Array<string>, 
+/**
+ * The clones of the workspace's repos, each with its worktree in the workspace, given to a
+ * Claude chat: its agent never writes into them, and is told the worktree path to write
+ * instead (docs/adr/claude-code-import.md).
+ */
+source_clones?: Array<SourceClone>, 
 /**
  * Resume this agent session instead of starting a new one.
  */

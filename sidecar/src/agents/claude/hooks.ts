@@ -12,6 +12,7 @@ import {
   writesFiles,
 } from "../../guard/plan-guard.ts";
 import { DESIGN_READ_ONLY_DENIAL, READ_ONLY_DENIAL, writesOutsideTheCheckout } from "../../guard/read-only-guard.ts";
+import { cloneCommandRefusal, cloneWriteRefusal, type SourceClone, withRealPaths } from "../../guard/clone-guard.ts";
 import { ADD_REPO_DENIAL, runsChauffeurAddRepo, runsGitWorktreeAdd, WORKTREE_ADD_DENIAL } from "../../guard/worktree-guard.ts";
 import { errorMessage } from "../../log.ts";
 import type { SessionHost } from "../agent.ts";
@@ -41,6 +42,7 @@ export function buildHooks(
   host: Pick<SessionHost, "createWorktree" | "removeWorktree" | "log">,
   confinement?: Confinement,
   folder?: WriteFolder,
+  sources?: { clones: SourceClone[]; cwd: string },
 ): Hooks {
   const worktreeCreate: HookCallback = async (input) => {
     if (input.hook_event_name !== "WorktreeCreate") return {};
@@ -70,8 +72,9 @@ export function buildHooks(
         ? [guardWorktreeAdd, guardAddRepo, guardReadOnly]
         : [guardWorktreeAdd, guardAddRepo];
   const preToolUse: HookCallbackMatcher[] = [{ matcher: "Bash", hooks: bash }];
-  // Every tool, no matcher: the guard picks the file-writing ones by name itself.
+  // Every tool, no matcher: the guards pick the file-writing ones (and Bash) by name themselves.
   if (confinement) preToolUse.push({ hooks: [guardWrites(folder)] });
+  if (sources && sources.clones.length > 0) preToolUse.push({ hooks: [guardClones(sources.clones, sources.cwd)] });
   // Publishing a screen to claude.ai is asked each time, whatever the mode decides (auto mode's
   // classifier could run it): the hook's ask comes on top of the settings' ask rule.
   if (confinement === "design") preToolUse.push({ matcher: "Artifact", hooks: [askEachTime] });
@@ -121,6 +124,34 @@ export function writeRefusal(folder: WriteFolder | undefined, toolName: string, 
   const why = planWriteRefusal(toolName, toolInput, folder.dir, typeof cwd === "string" && cwd ? cwd : folder.cwd, folder.kind);
   if (why === undefined) return undefined;
   return folder.kind === "design" ? designGuardDenial(folder.dir, why) : planGuardDenial(folder.dir, why);
+}
+
+/**
+ * PreToolUse on every tool: no file tool writes into one of the workspace's source clones, and no
+ * shell command that writes and names one runs (docs/adr/claude-code-import.md); the refusal names
+ * the worktree to use instead. `cwd` is where relative paths resolve when the call does not say.
+ */
+export function guardClones(clones: SourceClone[], cwd: string): HookCallback {
+  const all = withRealPaths(clones);
+  return async (input) => {
+    if (input.hook_event_name !== "PreToolUse") return {};
+    const from = typeof input.cwd === "string" && input.cwd ? input.cwd : cwd;
+    const command = (input.tool_input as { command?: unknown } | null)?.command;
+    const refusal =
+      input.tool_name === "Bash"
+        ? typeof command === "string"
+          ? cloneCommandRefusal(command, from, all)
+          : undefined
+        : cloneWriteRefusal(input.tool_name, input.tool_input, from, all);
+    if (refusal === undefined) return {};
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: refusal,
+      },
+    };
+  };
 }
 
 /** PreToolUse: the user is asked, whatever the permission mode or the rules say. */
