@@ -747,17 +747,21 @@ impl ChatManager {
         {
             self.close_for_briefing(&chat.id, true).await;
         }
-        // What the agent reads: a fork's conversation its agent never had, the user's shell
-        // commands the message hands over, the message, and a design chat's invalid canvas.json.
-        let text = self.with_handoff(
-            &chat,
-            crate::chat_shell::with_commands(&commands, &self.with_canvas_note(&chat, text)),
-            message.sent,
-        )?;
+        // What the agent reads: a fork's conversation its agent never had, what moved since a
+        // reactivated exploration's archive, the user's shell commands the message hands over,
+        // the message, and a design chat's invalid canvas.json.
+        let (text, moved) = self
+            .with_moved(
+                &chat,
+                crate::chat_shell::with_commands(&commands, &self.with_canvas_note(&chat, text)),
+            )
+            .await;
+        let text = self.with_handoff(&chat, text, message.sent)?;
         let text = &text;
         self.ensure_ollama(&chat).await?;
+        let mut sent = false;
         if self.is_live(&chat.id) {
-            let sent = d
+            sent = d
                 .chats
                 .sidecar
                 .call(SidecarCall::SessionSend(SessionSendParams {
@@ -766,23 +770,48 @@ impl ChatManager {
                     attachments: attachments.clone(),
                     message_id: Some(message_id.clone()),
                 }))
-                .await;
-            match sent {
-                Ok(_) => return self.current(&chat.id),
-                // The session died since: start it again below.
-                Err(_) => {
-                    self.live.lock().unwrap().remove(&chat.id);
-                }
+                .await
+                .is_ok();
+            // The session died since: start it again.
+            if !sent {
+                self.live.lock().unwrap().remove(&chat.id);
             }
         }
-        self.start_session_admitted(
-            &chat,
-            Some(text.to_string()),
-            attachments.clone(),
-            admission,
-        )
-        .await?;
+        if !sent {
+            self.start_session_admitted(
+                &chat,
+                Some(text.to_string()),
+                attachments.clone(),
+                admission,
+            )
+            .await?;
+        }
+        self.told_what_moved(&chat, moved);
         self.current(&chat.id)
+    }
+
+    /// `text` after what moved since a reactivated exploration's archive, when the chat's agent
+    /// was not told; with the reactivation, to keep as told once the agent has it.
+    async fn with_moved(&self, chat: &ChatInfo, mut text: String) -> (String, Option<String>) {
+        match self.d().workspaces.moved_since_archive(chat).await {
+            Ok(Some(moved)) => {
+                text.insert_str(0, &moved.note);
+                (text, Some(moved.at))
+            }
+            Ok(None) => (text, None),
+            Err(error) => {
+                tracing::warn!(%error, chat = chat.id, "could not tell what moved since the archive");
+                (text, None)
+            }
+        }
+    }
+
+    fn told_what_moved(&self, chat: &ChatInfo, moved: Option<String>) {
+        if let Some(at) = moved
+            && let Err(error) = self.d().workspaces.told_what_moved(&chat.id, &at)
+        {
+            tracing::warn!(%error, chat = chat.id, "could not keep that the agent was told what moved");
+        }
     }
 
     /// A message after the conversation a fork's agent never had (what the chat held before the
@@ -2324,9 +2353,12 @@ impl ChatManager {
             let resumed = async {
                 let chat = d.chats.current(&chat_id)?;
                 let admission = d.execution.admit(&chat.workspace_id)?;
+                let (prompt, moved) = d.chats.with_moved(&chat, prompt).await;
                 d.chats
                     .start_session_admitted(&chat, Some(prompt), Vec::new(), admission)
-                    .await
+                    .await?;
+                d.chats.told_what_moved(&chat, moved);
+                Ok::<_, Error>(())
             }
             .await;
             let Err(error) = resumed else { return };

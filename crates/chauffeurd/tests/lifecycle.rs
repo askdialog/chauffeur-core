@@ -3297,6 +3297,233 @@ async fn a_checkout_a_failed_archive_left_is_brought_up_to_date_and_the_record_i
     assert_eq!(record()["commits"][&id], serde_json::json!(first));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reactivated_exploration_s_chats_are_told_once_what_moved_since_the_archive() {
+    use chauffeur_protocol::events::ChatEvent;
+    use chauffeur_protocol::model::TurnOutcome;
+    let f = fixture(47510);
+    let d = &f.daemon;
+    let log = f.root.join("sidecar.log");
+    // The fake sidecar, but an agent cannot start on the message "lost".
+    let sidecar = fake_sidecar(&f.root, &log);
+    let script = std::fs::read_to_string(&sidecar).unwrap().replacen(
+        "  case \"$line\" in\n",
+        "  case \"$line\" in\n    *'lost\"'*)\n      printf '{\"jsonrpc\":\"2.0\",\"id\":%s,\"error\":{\"code\":-32000,\"message\":\"no agent\"}}\\n' \"$id\" ;;\n",
+        1,
+    );
+    std::fs::write(&sidecar, script).unwrap();
+    d.chats.sidecar.use_binary(sidecar.clone());
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("look".into()),
+            repos: vec!["repo-a".into(), "repo-b".into()],
+            explore: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let root = PathBuf::from(&ws.path);
+    let (a, b) = (root.join("repo-a"), root.join("repo-b"));
+    git(&f.root, &["clone", "-q", "origin/repo-a.git", "pusher"]);
+    let pusher = f.root.join("pusher");
+    let push = |name: &str| {
+        std::fs::write(pusher.join(name), "x\n").unwrap();
+        git(&pusher, &["add", name]);
+        git(&pusher, &["commit", "-q", "-m", name]);
+        git(&pusher, &["push", "-q", "origin", "HEAD:main"]);
+        git(&pusher, &["rev-parse", "HEAD"]).trim().to_string()
+    };
+    let to_agent = |chat: &str| -> String {
+        let line = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .rfind(|l| {
+                (l.contains("session.start") || l.contains("session.send")) && l.contains(chat)
+            })
+            .unwrap()
+            .to_string();
+        let call: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let params = &call["params"];
+        params["text"]
+            .as_str()
+            .or(params["prompt"].as_str())
+            .unwrap()
+            .to_string()
+    };
+    // A turn the agent ran: the chat is idle again, its session known.
+    let turn_ends = |chat: &str, outcome: TurnOutcome, error: Option<&str>| {
+        d.chats.on_event(
+            chat,
+            ChatEvent::SessionStarted {
+                agent_session_id: format!("s-{chat}"),
+                model: None,
+            },
+        );
+        d.chats.on_event(chat, ChatEvent::TurnStarted);
+        d.chats.on_event(
+            chat,
+            ChatEvent::TurnEnded {
+                outcome,
+                duration_ms: None,
+                cost_usd: None,
+                estimated_cost_usd: None,
+                session_tokens: None,
+                tokens: None,
+                context_tokens: None,
+                error: error.map(str::to_string),
+                fork_point: None,
+            },
+        );
+    };
+    let talks = |chat: &str, text: &'static str| {
+        let chat = chat.to_string();
+        async move {
+            d.chats.send(&chat, text).await.unwrap();
+            let got = to_agent(&chat);
+            turn_ends(&chat, TurnOutcome::Success, None);
+            got
+        }
+    };
+    let archive = || async {
+        d.workspaces.archive(&ws.slug, false).await.unwrap();
+        eventually("the exploration to be archived", || {
+            d.workspaces.get(&ws.id).unwrap().state == WorkspaceState::Archived
+        })
+        .await;
+    };
+    let restore = || async {
+        let back = d.workspaces.restore(&ws.slug).await.unwrap();
+        assert_eq!(back.state, WorkspaceState::Ready, "{:?}", back.last_error);
+    };
+
+    // Three chats talk; one's last turn fails on the network. A chat opened that says nothing
+    // has no conversation to be told about.
+    let first = new_chat(d, &ws.id).await;
+    let second = new_chat(d, &ws.id).await;
+    let quiet = new_chat(d, &ws.id).await;
+    let silent = new_chat(d, &ws.id).await;
+    talks(&first.id, "hi").await;
+    talks(&quiet.id, "hi").await;
+    d.chats.send(&second.id, "hi").await.unwrap();
+    let down =
+        "API Error: Can't reach the API server \u{2014} check your internet or DNS (ENOTFOUND)";
+    turn_ends(&second.id, TurnOutcome::Error, Some(down));
+    // The agent moved repo-a's checkout on: the code the conversation was about.
+    let read = push("read.txt");
+    git(&a, &["fetch", "-q", "origin"]);
+    git(&a, &["checkout", "-q", "--detach", &read]);
+    archive().await;
+    // repo-b's commit at archive is not known (an exploration archived before it was recorded).
+    let archived = d.workspaces.get(&ws.id).unwrap();
+    let id_b = &archived
+        .worktrees
+        .iter()
+        .find(|w| w.repo == "repo-b")
+        .unwrap()
+        .id;
+    d.store.reactivate_worktree(id_b, None).unwrap();
+    d.store.set_worktree_removed(id_b, true, None).unwrap();
+    let archived_on = archived.archived_at.unwrap()[..10].to_string();
+    push("later-1.txt");
+    let now = push("later-2.txt");
+    restore().await;
+    let b_now = git(&b, &["rev-parse", "HEAD"]).trim().to_string();
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let a = a.display();
+
+    // A message its agent did not get: the next one tells it.
+    assert!(d.chats.send(&first.id, "lost").await.is_err());
+    let text = talks(&first.id, "what changed?").await;
+    assert!(text.contains(&format!("reactivated on {today}")), "{text}");
+    assert!(
+        text.contains(&format!(
+            "- `repo-a` was at `{read}` at archive; it is now at `{now}` on `main`, 2 commits later: `git -C {a} log {read}..{now}` shows them"
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "- `repo-b`: its commit at archive was not recorded (archived on {archived_on}); it is now at `{b_now}` on `main`"
+        )),
+        "{text}"
+    );
+    assert!(text.ends_with("\n\nwhat changed?"), "{text}");
+    // Once per chat.
+    assert_eq!(talks(&first.id, "and then?").await, "and then?");
+    // The failed turn resumed when the user is back is told too, once.
+    assert_eq!(d.chats.resume_failed_turns().unwrap(), 1);
+    eventually("the failed turn to resume", || {
+        to_agent(&second.id).contains("trying again could cure")
+    })
+    .await;
+    assert!(to_agent(&second.id).starts_with("(Chauffeur: this exploration was archived"));
+    turn_ends(&second.id, TurnOutcome::Success, None);
+    assert_eq!(talks(&second.id, "hello").await, "hello");
+    // Not a chat that talks only since.
+    assert_eq!(talks(&silent.id, "hello").await, "hello");
+    // A fork carries its source's conversation: told, though made since.
+    let fork = d.chats.fork(&quiet.id, None, None).await.unwrap();
+    assert!(
+        talks(&fork.id, "hello")
+            .await
+            .contains(&format!("log {read}..{now}"))
+    );
+    // Switched to the other agent, which reads the conversation as text, without the note: told
+    // again.
+    d.chats
+        .configure(chauffeur_protocol::client::ConfigureChatParams {
+            chat: first.id.clone(),
+            agent: Some(AgentKind::Codex),
+            confirm_agent: Some(AgentKind::Claude),
+            model: None,
+            effort: None,
+            fast: None,
+            permission_mode: None,
+        })
+        .await
+        .unwrap();
+    assert!(
+        talks(&first.id, "switched")
+            .await
+            .contains(&format!("log {read}..{now}"))
+    );
+
+    // Kept across a restart.
+    let next = Daemon::open(d.paths.clone()).unwrap();
+    next.chats.sidecar.use_binary(sidecar);
+    next.chats.send(&first.id, "still there?").await.unwrap();
+    assert_eq!(to_agent(&first.id), "still there?");
+    drop(next);
+
+    // A new reactivation is told again: from this archive's commits for the chats that talked
+    // since the last one, from the first archive's for a chat that said nothing since.
+    archive().await;
+    let later = push("later-3.txt");
+    restore().await;
+    let text = talks(&first.id, "and now?").await;
+    assert!(
+        text.contains(&format!(
+            "- `repo-a` was at `{now}` at archive; it is now at `{later}` on `main`, 1 commit later"
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "- `repo-b` is still at `{b_now}` on `main`, as at archive"
+        )),
+        "{text}"
+    );
+    let text = talks(&quiet.id, "and now?").await;
+    assert!(
+        text.contains(&format!(
+            "- `repo-a` was at `{read}` at archive; it is now at `{later}` on `main`, 3 commits later"
+        )),
+        "{text}"
+    );
+}
+
 async fn new_chat(d: &Daemon, workspace: &str) -> chauffeur_protocol::model::ChatInfo {
     d.chats
         .create(CreateChatParams {
