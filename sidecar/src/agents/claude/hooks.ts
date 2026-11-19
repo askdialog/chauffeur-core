@@ -12,9 +12,10 @@ import {
   writesFiles,
 } from "../../guard/plan-guard.ts";
 import { DESIGN_READ_ONLY_DENIAL, READ_ONLY_DENIAL, writesOutsideTheCheckout } from "../../guard/read-only-guard.ts";
-import { cloneCommandRefusal, cloneWriteRefusal, type SourceClone, withRealPaths } from "../../guard/clone-guard.ts";
+import { cloneCommandRefusal, cloneWriteRefusal, withRealPaths } from "../../guard/clone-guard.ts";
 import { ADD_REPO_DENIAL, runsChauffeurAddRepo, runsGitWorktreeAdd, WORKTREE_ADD_DENIAL } from "../../guard/worktree-guard.ts";
 import { errorMessage } from "../../log.ts";
+import type { SourceClone } from "../../protocol.ts";
 import type { SessionHost } from "../agent.ts";
 
 /** Seconds the CLI waits for the daemon to create or remove a worktree (fetch + setup can be slow). */
@@ -133,16 +134,15 @@ export function writeRefusal(folder: WriteFolder | undefined, toolName: string, 
  */
 export function guardClones(clones: SourceClone[], cwd: string): HookCallback {
   const all = withRealPaths(clones);
+  const commandRefusal = (toolInput: unknown, from: string) => {
+    if (typeof toolInput !== "object" || toolInput === null) return undefined;
+    const command: unknown = Reflect.get(toolInput, "command");
+    return typeof command === "string" ? cloneCommandRefusal(command, from, all) : undefined;
+  };
   return async (input) => {
     if (input.hook_event_name !== "PreToolUse") return {};
     const from = typeof input.cwd === "string" && input.cwd ? input.cwd : cwd;
-    const command = (input.tool_input as { command?: unknown } | null)?.command;
-    const refusal =
-      input.tool_name === "Bash"
-        ? typeof command === "string"
-          ? cloneCommandRefusal(command, from, all)
-          : undefined
-        : cloneWriteRefusal(input.tool_name, input.tool_input, from, all);
+    const refusal = input.tool_name === "Bash" ? commandRefusal(input.tool_input, from) : cloneWriteRefusal(input.tool_name, input.tool_input, from, all);
     if (refusal === undefined) return {};
     return {
       hookSpecificOutput: {

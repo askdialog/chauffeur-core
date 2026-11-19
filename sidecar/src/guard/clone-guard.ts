@@ -2,39 +2,29 @@
 // worktrees are made from them, and nothing else stops an agent from changing the clone itself
 // (auto mode leaves it to a classifier, shell commands are not checked). A file tool writing into a
 // clone is refused with the matching path in the workspace's worktree; a shell command that writes
-// and names a clone is refused the same way. Reads stay allowed.
+// and names a clone is refused the same way. Reads stay allowed, and so do the writes git makes in
+// a clone's `.git` for its worktrees (a commit from the worktree).
 //
 // A guard rail, not a sandbox: it reads a shell command as the other guards do, and catches what an
 // agent writes (a redirection, a file command, a git command that changes the clone). A program
 // that writes where it runs (`npm install` once in the clone) is not caught.
 
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { gitSubcommand, simpleCommands } from "./worktree-guard.ts";
+import type { SourceClone } from "../protocol.ts";
+import { simpleCommands } from "./worktree-guard.ts";
 
-/** A clone of one of the workspace's repos, and its worktree in the workspace. */
-export interface SourceClone {
-  clone: string;
-  worktree: string;
+/** A source clone, and its worktree's git folder in the clone's `.git` when it has one. */
+export interface GuardedClone extends SourceClone {
+  gitdir?: string;
 }
 
-export function cloneWriteDenial(path: string, clone: SourceClone): string {
-  return (
-    `${path} is in ${clone.clone}, the user's own clone of this repo: agents never change it. ` +
-    `Write ${translate(path, clone)} instead, in this workspace's worktree.`
-  );
-}
-
-export function cloneCommandDenial(clone: SourceClone): string {
-  return (
-    `This command writes into ${clone.clone}, the user's own clone of this repo: agents never change it. ` +
-    `Run it in this workspace's worktree, ${clone.worktree}, instead.`
-  );
-}
-
-/** The clones as given and, when it differs, as resolved (a symlinked folder: /tmp → /private/tmp). */
-export function withRealPaths(clones: SourceClone[]): SourceClone[] {
+/**
+ * The clones as given and, when it differs, as resolved (a symlinked folder: /tmp → /private/tmp),
+ * each with its worktree's git folder: the one place in the clone that belongs to the workspace.
+ */
+export function withRealPaths(clones: SourceClone[]): GuardedClone[] {
   const real = (path: string) => {
     try {
       return realpathSync(path);
@@ -42,8 +32,35 @@ export function withRealPaths(clones: SourceClone[]): SourceClone[] {
       return path;
     }
   };
-  const resolved = clones.map(({ clone, worktree }) => ({ clone: real(clone), worktree: real(worktree) }));
-  return [...clones, ...resolved.filter((r, i) => r.clone !== clones[i]?.clone || r.worktree !== clones[i]?.worktree)];
+  const all = clones.flatMap(({ clone, worktree }) => {
+    const resolved = { clone: real(clone), worktree: real(worktree) };
+    return resolved.clone === clone && resolved.worktree === worktree ? [{ clone, worktree }] : [{ clone, worktree }, resolved];
+  });
+  return all.map((clone) => ({ ...clone, gitdir: gitdirOf(clone.worktree) }));
+}
+
+/** A worktree's `.git` file names its git folder: `gitdir: <path>`. */
+function gitdirOf(worktree: string): string | undefined {
+  try {
+    const line = readFileSync(join(worktree, ".git"), "utf8").trim();
+    return line.startsWith("gitdir: ") ? resolve(worktree, line.slice("gitdir: ".length)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeDenial(path: string, clone: GuardedClone): string {
+  const instead = inside(path, join(clone.clone, ".git"))
+    ? "Run git in this workspace's worktree instead"
+    : `Write ${join(clone.worktree, relative(clone.clone, path))} instead, in this workspace's worktree`;
+  return `${path} is in ${clone.clone}, the user's own clone of this repo: agents never change it. ${instead}.`;
+}
+
+function commandDenial(clone: GuardedClone): string {
+  return (
+    `This command writes into ${clone.clone}, the user's own clone of this repo: agents never change it. ` +
+    `Run it in this workspace's worktree, ${clone.worktree}, instead.`
+  );
 }
 
 /** The file tools and the input naming the file they write. */
@@ -55,28 +72,32 @@ const FILE_TOOLS: Record<string, string> = {
 };
 
 /** The denial for a file tool writing into a clone, or undefined. */
-export function cloneWriteRefusal(toolName: string, toolInput: unknown, cwd: string, clones: SourceClone[]): string | undefined {
+export function cloneWriteRefusal(toolName: string, toolInput: unknown, cwd: string, clones: GuardedClone[]): string | undefined {
   const key = FILE_TOOLS[toolName];
-  if (key === undefined) return undefined;
-  const written = (toolInput as Record<string, unknown> | null)?.[key];
+  if (key === undefined || typeof toolInput !== "object" || toolInput === null) return undefined;
+  const written: unknown = Reflect.get(toolInput, key);
   if (typeof written !== "string" || !written) return undefined;
   const path = at(cwd, written);
   const clone = cloneOf(path, clones);
-  return clone && cloneWriteDenial(path, clone);
+  return clone && writeDenial(path, clone);
 }
 
 /** Programs that change every path they are given. */
 const WRITERS = new Set(["rm", "rmdir", "unlink", "mkdir", "touch", "mv", "chmod", "chown", "chgrp", "truncate", "tee", "shred"]);
 /** Programs that read their sources and write their last path. */
 const COPIERS = new Set(["cp", "rsync", "install", "ln", "scp"]);
-/** Programs that change their files with `-i`. */
+/** Programs that change their files with `-i` or `--in-place`. */
 const IN_PLACE = new Set(["sed", "perl", "gsed"]);
 /** Git subcommands that only read. */
 const GIT_READS = new Set([
   "status",
   "log",
   "diff",
+  "diff-tree",
+  "diff-index",
+  "diff-files",
   "show",
+  "show-branch",
   "blame",
   "grep",
   "ls-files",
@@ -92,67 +113,147 @@ const GIT_READS = new Set([
   "name-rev",
   "whatchanged",
   "merge-base",
+  "cherry",
+  "range-diff",
+  "count-objects",
+  "check-ignore",
+  "check-attr",
+  "var",
   "help",
   "version",
 ]);
-/** Git subcommands that only list when given no name. */
-const GIT_LISTS = new Set(["branch", "tag", "remote", "worktree"]);
+/** Options of `git branch` and `git tag` that list rather than create. */
+const LISTING = new Set(["--list", "-l", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--show-current", "--format"]);
+/** Git's global options that take a value as the next word. */
+const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"]);
+/** Shell operators that end a command at the top level of a command line. */
+const OPERATORS = ["&&", "||", ";", "\n", "|", "&"];
 
 /** The denial for a shell command that writes into a clone, or undefined. */
-export function cloneCommandRefusal(command: string, cwd: string, clones: SourceClone[]): string | undefined {
+export function cloneCommandRefusal(command: string, cwd: string, clones: GuardedClone[]): string | undefined {
   let dir = cwd;
-  for (const { program, args } of simpleCommands(command)) {
-    // `cd` moves the commands after it in the same line.
-    if (program === "cd") {
-      const target = args.find((arg) => !arg.startsWith("-"));
-      dir = target === undefined ? homedir() : at(dir, target);
+  for (const { text, then } of topLevel(command)) {
+    const commands = simpleCommands(text);
+    // A `cd` alone moves the commands after it on the line; one in a group, a substitution or a
+    // pipe stays there.
+    const only = commands.length === 1 ? commands[0] : undefined;
+    if (only && isCd(only.program) && /^\s*(?:cd|pushd)\b/.test(text) && then !== "|") {
+      dir = cdTarget(dir, only.args);
       continue;
     }
-    const clone = writtenClone(program, args, dir, clones);
-    if (clone) return cloneCommandDenial(clone);
+    let local = dir;
+    for (const { program, args } of commands) {
+      if (isCd(program)) {
+        local = cdTarget(local, args);
+        continue;
+      }
+      const clone = writtenClone(program, args, local, clones);
+      if (clone) return commandDenial(clone);
+    }
   }
   return undefined;
 }
 
-function writtenClone(program: string, args: string[], dir: string, clones: SourceClone[]): SourceClone | undefined {
+function isCd(program: string): boolean {
+  return program === "cd" || program === "pushd";
+}
+
+function cdTarget(dir: string, args: string[]): string {
+  const target = args.find((arg) => !arg.startsWith("-"));
+  return target === undefined ? homedir() : at(dir, target);
+}
+
+/**
+ * The command line's top-level commands, each with the operator after it: groups `( … )`,
+ * substitutions `$( … )` and backticks stay inside the command they are in, as quoted text does.
+ */
+function topLevel(command: string): { text: string; then: string }[] {
+  const parts: { text: string; then: string }[] = [];
+  let depth = 0;
+  let backtick = false;
+  let quote: string | undefined;
+  let start = 0;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (c === "\\") {
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (c === quote) quote = undefined;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      continue;
+    }
+    if (c === "(") depth++;
+    else if (c === ")") depth = Math.max(0, depth - 1);
+    else if (c === "`") backtick = !backtick;
+    if (depth > 0 || backtick) continue;
+    const operator = OPERATORS.find((op) => command.startsWith(op, i));
+    // `2>&1` and `&>` redirect: no command ends there.
+    if (operator === undefined || (operator === "&" && (command[i - 1] === ">" || command[i + 1] === ">"))) continue;
+    parts.push({ text: command.slice(start, i), then: operator });
+    i += operator.length - 1;
+    start = i + 1;
+  }
+  parts.push({ text: command.slice(start), then: "" });
+  return parts.filter((part) => part.text.trim() !== "");
+}
+
+function writtenClone(program: string, args: string[], dir: string, clones: GuardedClone[]): GuardedClone | undefined {
   const inClone = (word: string) => cloneOf(at(dir, word), clones);
   for (const target of redirections(args)) {
     const clone = inClone(target);
     if (clone) return clone;
   }
-  const words = args.filter((arg) => !arg.startsWith("-") && !isRedirection(arg));
+  const words = args.filter((arg) => !arg.startsWith("-") && redirection(arg) === undefined);
   if (WRITERS.has(program)) return firstClone(words, inClone);
   if (COPIERS.has(program)) {
     const last = words.at(-1);
     return last === undefined ? undefined : inClone(last);
   }
-  if (IN_PLACE.has(program) && args.some((arg) => /^-\w*i/.test(arg))) return firstClone(words, inClone);
+  if (IN_PLACE.has(program) && args.some((arg) => /^-\w*i/.test(arg) || arg.startsWith("--in-place"))) return firstClone(words, inClone);
   if (program === "dd") return firstClone(args.filter((arg) => arg.startsWith("of=")).map((arg) => arg.slice(3)), inClone);
+  if (program === "find" && (args.includes("-delete") || args.some((arg, i) => arg === "-exec" && args[i + 1] === "rm"))) {
+    const roots = args.slice(0, Math.max(0, args.findIndex((arg) => arg.startsWith("-"))));
+    return firstClone(roots, inClone);
+  }
   if (program === "git") return gitWrite(args, dir, clones);
   return undefined;
 }
 
-/** The clone a git command changes: the one it runs in (`-C`, `--work-tree`, `cd`), unless it only reads. */
-function gitWrite(args: string[], dir: string, clones: SourceClone[]): SourceClone | undefined {
+/** The clone a git command changes: the one it runs in (`-C`, `--work-tree`, `--git-dir`, `cd`), unless it only reads. */
+function gitWrite(args: string[], dir: string, clones: GuardedClone[]): GuardedClone | undefined {
   let where = dir;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i] as string;
-    if (arg === "-C" && args[i + 1] !== undefined) where = at(where, args[i + 1] as string);
-    for (const prefix of ["--work-tree=", "--git-dir="]) {
-      if (arg.startsWith(prefix)) where = at(dir, arg.slice(prefix.length));
-    }
+  let i = 0;
+  for (; i < args.length; i++) {
+    const arg = args[i];
+    const value = args[i + 1];
+    if (arg === undefined || !arg.startsWith("-")) break;
+    const [name, attached] = arg.startsWith("--") && arg.includes("=") ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg, undefined];
+    const given = attached ?? (GIT_VALUE_OPTIONS.has(name) ? value : undefined);
+    if (given !== undefined && name === "-C") where = at(where, given);
+    if (given !== undefined && (name === "--work-tree" || name === "--git-dir")) where = at(dir, given);
+    if (attached === undefined && GIT_VALUE_OPTIONS.has(name)) i++;
   }
   const clone = cloneOf(where, clones);
   if (!clone) return undefined;
-  const { name, args: rest } = gitSubcommand(args);
-  if (name === undefined || GIT_READS.has(name)) return undefined;
-  if (GIT_LISTS.has(name) && rest.every((arg) => arg.startsWith("-") || arg === "list")) return undefined;
-  if (name === "stash" && (rest[0] === "list" || rest[0] === "show")) return undefined;
-  if (name === "config" && rest.some((arg) => arg === "--get" || arg === "--list" || arg === "-l" || arg.startsWith("--get-"))) return undefined;
+  const sub = args[i];
+  const rest = args.slice(i + 1);
+  const words = rest.filter((arg) => !arg.startsWith("-"));
+  if (sub === undefined || GIT_READS.has(sub)) return undefined;
+  if ((sub === "branch" || sub === "tag") && (words.length === 0 || rest.some((arg) => LISTING.has(arg.split("=")[0] ?? arg)))) return undefined;
+  if (sub === "remote" && (words.length === 0 || words[0] === "get-url" || words[0] === "show")) return undefined;
+  if (sub === "stash" && (words[0] === "list" || words[0] === "show")) return undefined;
+  if (sub === "worktree" && words[0] === "list") return undefined;
+  if (sub === "reflog" && words[0] !== "expire" && words[0] !== "delete") return undefined;
+  if (sub === "config" && (words.length === 1 || rest.some((arg) => arg === "--list" || arg === "-l" || arg.startsWith("--get")))) return undefined;
   return clone;
 }
 
-function firstClone(words: string[], inClone: (word: string) => SourceClone | undefined): SourceClone | undefined {
+function firstClone(words: string[], inClone: (word: string) => GuardedClone | undefined): GuardedClone | undefined {
   for (const word of words) {
     const clone = inClone(word);
     if (clone) return clone;
@@ -160,33 +261,33 @@ function firstClone(words: string[], inClone: (word: string) => SourceClone | un
   return undefined;
 }
 
-/** A redirection's operator, alone or with its target: `>`, `>>`, `2>`, `&>`, `>file`, `x>>file`. */
-const REDIRECTION = /^[^>]*?(?:\d|&)?>>?(?!&)(.*)$/;
-
-function isRedirection(word: string): boolean {
-  return REDIRECTION.test(word);
+/**
+ * A redirection's target, when the word is one: the operator alone (`>`, `>>`, `2>`, `&>`), its
+ * target the next word, or the operator with its target attached (`>file`, `x>>file`, `2>file`).
+ * A quoted word with `>` inside (`'=>'`, `'.x > 1'`) is none: the parser dropped its quotes, but a
+ * redirection's target has no space and follows its operator.
+ */
+function redirection(word: string): { attached: string } | { next: true } | undefined {
+  if (/^(?:\d|&)?>>?$/.test(word)) return { next: true };
+  const match = /^[^\s>]*?(?:\d|&)?>>?([^\s>&]\S*)$/.exec(word);
+  return match?.[1] ? { attached: match[1] } : undefined;
 }
 
 /** The files the command's output goes to. */
 function redirections(args: string[]): string[] {
   const targets: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const match = REDIRECTION.exec(args[i] as string);
-    if (!match) continue;
-    const target = match[1] || args[i + 1];
+  args.forEach((arg, i) => {
+    const found = redirection(arg);
+    const target = found && ("attached" in found ? found.attached : args[i + 1]);
     if (target && !target.startsWith("&")) targets.push(target);
-  }
+  });
   return targets;
 }
 
-/** The clone a path is in, unless it is in a worktree of the workspace (a worktree inside its clone). */
-function cloneOf(path: string, clones: SourceClone[]): SourceClone | undefined {
-  if (clones.some(({ worktree }) => inside(path, worktree))) return undefined;
+/** The clone a path is in, unless it is in a worktree of the workspace or its git folder. */
+function cloneOf(path: string, clones: GuardedClone[]): GuardedClone | undefined {
+  if (clones.some(({ worktree, gitdir }) => inside(path, worktree) || (gitdir !== undefined && inside(path, gitdir)))) return undefined;
   return clones.find(({ clone }) => inside(path, clone));
-}
-
-function translate(path: string, { clone, worktree }: SourceClone): string {
-  return join(worktree, relative(clone, path));
 }
 
 function inside(path: string, dir: string): boolean {
@@ -194,9 +295,9 @@ function inside(path: string, dir: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-/** A path as a shell or a tool reads it from `dir`: `~` is the home folder. */
+/** A path as a shell or a tool reads it from `dir`: `~`, `$HOME` and `${HOME}` are the home folder. */
 function at(dir: string, path: string): string {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+  const home = /^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/.exec(path);
+  if (home) return join(homedir(), path.slice(home[0].length));
   return resolve(dir, path);
 }

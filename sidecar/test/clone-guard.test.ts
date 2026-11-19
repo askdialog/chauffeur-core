@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { cloneCommandRefusal, cloneWriteRefusal, type SourceClone } from "../src/guard/clone-guard.ts";
+import { cloneCommandRefusal, cloneWriteRefusal } from "../src/guard/clone-guard.ts";
+import type { SourceClone } from "../src/protocol.ts";
 
 const CLONES: SourceClone[] = [
   { clone: "/code/web", worktree: "/ws/feat/web" },
@@ -38,6 +39,11 @@ describe("cloneWriteRefusal", () => {
       expect(cloneWriteRefusal(tool, input, CWD, CLONES)).toBeUndefined();
     });
   }
+  test("a path under the clone's .git is refused without a worktree path to use", () => {
+    const refusal = cloneWriteRefusal("Write", { file_path: "/code/web/.git/config" }, CWD, CLONES);
+    expect(refusal).toContain("/code/web/.git/config");
+    expect(refusal).not.toContain("/ws/feat/web/.git");
+  });
   test("a worktree inside its clone stays writable", () => {
     const nested: SourceClone[] = [{ clone: "/code/web", worktree: "/code/web/.wt/feat" }];
     expect(cloneWriteRefusal("Write", { file_path: "/code/web/.wt/feat/a.ts" }, CWD, nested)).toBeUndefined();
@@ -78,6 +84,14 @@ describe("cloneCommandRefusal", () => {
     "(cd /code/api && git reset --hard)",
     "bash -c 'echo y > /code/web/z'",
     "cd /code && rm -rf web/build",
+    "git --work-tree /code/web add -A",
+    "git --git-dir /code/web/.git commit -m x",
+    "pushd /code/web && git commit -am x",
+    "echo x > $HOME/../../code/web/a",
+    "sed --in-place s/a/b/ /code/web/f",
+    "find /code/web -name '*.log' -delete",
+    "find /code/web -name x -exec rm {} ;",
+    "(cd /code/web && git log) && cd /code/web && git commit -m x",
   ];
   for (const command of refused) {
     test(`refuses: ${JSON.stringify(command)}`, () => {
@@ -105,6 +119,20 @@ describe("cloneCommandRefusal", () => {
     "git -C web commit -m x",
     "echo /code/web",
     "diff /code/web/a web/a > /tmp/out",
+    'grep -rn "->" /code/web/src',
+    "rg '=>' /code/web",
+    "cd /code/web && git log --format='%h -> %s'",
+    "cd /code/web && jq '.x > 1' package.json",
+    "(cd /code/web && git log -1) && git commit -m x",
+    "BASE=$(cd /code/web && git rev-parse HEAD); git commit -m x",
+    "cd /code/web | true; touch x",
+    "git -C /code/web remote get-url origin",
+    "git -C /code/web branch --contains abc",
+    "git -C /code/web branch --merged main",
+    "git -C /code/web reflog",
+    "git -C /code/web config user.email",
+    "git -C /code/web diff-tree -r HEAD",
+    "find /code/web -name '*.ts'",
   ];
   for (const command of allowed) {
     test(`allows: ${JSON.stringify(command)}`, () => {

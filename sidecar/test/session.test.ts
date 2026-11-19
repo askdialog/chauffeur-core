@@ -1095,8 +1095,8 @@ describe("hooks", () => {
         expect(await deny(query, "Edit", { file_path: join(clone, "a.ts"), old_string: "a", new_string: "b" })).toContain(join(worktree, "a.ts"));
         expect(await deny(query, "Write", { file_path: join(realpathSync(join(root, "real", "web")), "a.ts"), content: "x" })).toContain("agents never change it");
         expect(await deny(query, "Bash", { command: `git -C ${clone} commit -am wip` })).toContain(worktree);
+        // What the guard allows passes through (the rules are in clone-guard.test.ts).
         expect(await deny(query, "Bash", { command: `git -C ${clone} log` })).toBe("null");
-        expect(await deny(query, "Read", { file_path: join(clone, "a.ts") })).toBe("null");
       }
       const without = (await started({ cwd: join(root, "ws") })).query;
       expect(await deny(without, "Write", { file_path: join(clone, "a.ts"), content: "x" })).toBe("null");
