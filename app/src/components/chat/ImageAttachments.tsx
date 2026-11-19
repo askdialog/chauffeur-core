@@ -2,7 +2,7 @@
 // thumbnails that open full screen, other files by name. Used by the chat composer and the create dialog's first prompt.
 
 import { Paperclip, X } from "lucide-react";
-import { useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { checkFileSize, checkMessageTotal, formatBytes, type PendingImage, readAttachment } from "@/lib/images";
 import { bringsFiles, FILE_DROP_ATTRIBUTE, type FileDrop, registerDropTarget } from "@/lib/fileDrops";
 import { nativeFileDrops, readDroppedFile } from "@/lib/native";
@@ -186,12 +186,25 @@ export function ImageStrip({
 }
 
 export function AttachButton({ onFiles, disabled }: { onFiles: (files: File[]) => void; disabled?: boolean }) {
+  return (
+    <AttachmentPicker onFiles={onFiles}>
+      {(open) => (
+        <IconButton title="Attach images or files (or paste, or drop them)" onClick={open} disabled={disabled}>
+          <Paperclip size={13} />
+        </IconButton>
+      )}
+    </AttachmentPicker>
+  );
+}
+
+export function AttachmentPicker({ onFiles, children }: {
+  onFiles: (files: File[]) => void;
+  children: (open: () => void) => ReactNode;
+}) {
   const picker = useRef<HTMLInputElement>(null);
   return (
     <>
-      <IconButton title="Attach images or files (or paste, or drop them)" onClick={() => picker.current?.click()} disabled={disabled}>
-        <Paperclip size={13} />
-      </IconButton>
+      {children(() => picker.current?.click())}
       <input
         ref={picker}
         type="file"

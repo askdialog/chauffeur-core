@@ -68,6 +68,43 @@ export function mcpLoginCommand(agent: AgentKind, server: string): string {
   return agent === "claude" ? "claude /mcp" : `codex mcp login ${shellQuote(server)}`;
 }
 
+export const SLACK_MCP_URL = "https://mcp.slack.com/mcp";
+
+export function hasSlackMessageLink(text: string): boolean {
+  return /(?:^|[\s(<])https:\/\/(?:[a-z\d-]+\.)+slack\.com\/archives\/[a-z\d]+\/p\d+(?=$|[\s)>?#.,!])/i.test(text);
+}
+
+/** A command for the agent's user configuration, or the field to correct before running it. */
+export function mcpSetupCommand(agent: AgentKind, rawName: string, rawUrl: string): { command: string } | { error: string } {
+  const name = rawName.trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name)) {
+    return { error: "Start the name with a letter or number. Use only letters, numbers, hyphens, and underscores." };
+  }
+
+  const invalidUrl = { error: "Enter an HTTPS server URL, or a loopback HTTP URL, without credentials or a fragment." };
+  let url: URL;
+  try {
+    url = new URL(rawUrl.trim());
+  } catch {
+    return invalidUrl;
+  }
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.username || url.password || url.hash || (url.protocol !== "https:" && !(local && url.protocol === "http:"))) {
+    return invalidUrl;
+  }
+
+  const endpoint = shellQuote(url.href);
+  switch (agent) {
+    case "claude":
+      return { command: `claude mcp add --transport http --scope user ${name} ${endpoint} && claude /mcp` };
+    case "codex":
+      // Unlike Claude and Vibe, Codex's add command replaces an existing configuration with the same name.
+      return { command: `codex mcp get ${name} >/dev/null 2>&1 && printf '%s\\n' 'MCP server ${name} is already configured. Choose a different name to add another server.' || codex mcp add ${name} --url ${endpoint}` };
+    case "vibe":
+      return { command: `vibe mcp add ${name} --url ${endpoint}` };
+  }
+}
+
 function shellQuote(value: string): string {
   return /^[A-Za-z0-9_.-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
 }

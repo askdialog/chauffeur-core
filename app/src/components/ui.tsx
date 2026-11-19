@@ -1,6 +1,6 @@
 import type { Activity, AgentKind, WorkspaceInfo } from "@chauffeur/protocol";
 import { Check, ChevronDown, Loader2, Lock, PenTool, X } from "lucide-react";
-import { type ButtonHTMLAttributes, type ReactNode, useEffect, useLayoutEffect, useId, useRef, useState } from "react";
+import { type ButtonHTMLAttributes, type ComponentPropsWithRef, type ReactNode, useEffect, useLayoutEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { dialogControls } from "@/lib/dialogFocus";
 
@@ -45,7 +45,7 @@ export function IconButton({
   className,
   children,
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { title: string }) {
+}: ComponentPropsWithRef<"button"> & { title: string }) {
   return (
     <button
       {...rest}
