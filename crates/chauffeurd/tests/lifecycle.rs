@@ -21474,6 +21474,91 @@ async fn a_routine_whose_workspace_is_archived_says_why_once_and_does_not_run() 
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_routine_made_by_hand_starts_from_its_description_and_its_refining_chat_asks_when() {
+    use chauffeur_protocol::model::AgentKind;
+    use chauffeur_protocol::routines::{RoutineCreateByHandParams, RoutineState};
+    use chauffeurd::routines;
+    let f = fixture(49710);
+    let d = &f.daemon;
+    d.chats
+        .sidecar
+        .use_binary(fake_sidecar(&f.root, &f.root.join("sidecar.log")));
+    let by_hand = |name: &str, repos: Vec<String>, description: &str| RoutineCreateByHandParams {
+        name: name.into(),
+        repos,
+        description: description.into(),
+        agent: AgentKind::Codex,
+        model: Some("gpt-5.5".into()),
+        effort: None,
+    };
+
+    // Each field is needed: nothing is made without them.
+    for params in [
+        by_hand(" ", vec!["repo-a".into()], "Triage the new tickets"),
+        by_hand("Triage", vec![" ".into()], "Triage the new tickets"),
+        by_hand("Triage", vec!["repo-a".into()], "  "),
+    ] {
+        assert!(routines::create_by_hand(d, params).await.is_err());
+    }
+    assert!(routines::list(d).unwrap().is_empty());
+
+    let routine = routines::create_by_hand(
+        d,
+        by_hand(
+            "Triage",
+            vec!["repo-a".into(), "repo-b".into()],
+            "Every morning, triage the new tickets",
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(routine.state, RoutineState::Draft);
+    assert_eq!(routine.version, 1);
+    assert_eq!(routine.source_chat, None);
+    assert_eq!(
+        routine.spec.prompt.trim(),
+        "Every morning, triage the new tickets"
+    );
+    assert_eq!(
+        routine.spec.repos,
+        vec!["repo-a".to_string(), "repo-b".to_string()]
+    );
+    assert_eq!(routine.spec.agent, AgentKind::Codex);
+    assert_eq!(routine.spec.model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(routine.spec.schedule.times, vec!["08:00".to_string()]);
+    let workspace = d.workspaces.get(&routine.workspace_id).unwrap();
+    assert_eq!(workspace.section.as_deref(), Some("Routines"));
+    assert_eq!(workspace.worktrees.len(), 2);
+    let notes = Path::new(&workspace.path).join(".chauffeur");
+    assert_eq!(
+        std::fs::read_to_string(notes.join("routine.toml")).unwrap(),
+        routine.file
+    );
+    assert!(
+        std::fs::read_to_string(notes.join("routine-source.md"))
+            .unwrap()
+            .contains("Every morning, triage the new tickets")
+    );
+    // Its refining chat, on the agent chosen, rewrites the prompt and asks when it runs.
+    let refine = d.chats.resolve(&routine.refine_chat.unwrap()).unwrap();
+    assert_eq!(refine.agent, AgentKind::Codex);
+    let prompt = first_prompt(d, &refine.id);
+    assert!(prompt.contains("I made it by hand"), "{prompt}");
+    assert!(prompt.contains("ask me when it should run"), "{prompt}");
+    assert!(prompt.contains("chauffeur routine edit"), "{prompt}");
+
+    // A name another routine has is refused.
+    assert!(
+        routines::create_by_hand(d, by_hand("triage", vec!["repo-a".into()], "Again"))
+            .await
+            .is_err()
+    );
+    // It runs by hand, as a routine made from a chat.
+    let run = routines::run_now(d, &routine.id).await.unwrap();
+    assert!(first_prompt(d, &run.chat_id).starts_with("Every morning, triage the new tickets"));
+}
+
 /// The fake sidecar, which also answers `agent.ask` with the result kept in `answer` (JSON).
 fn asking_sidecar(root: &Path, log: &Path, answer: &Path) -> PathBuf {
     let script = root.join("asking-sidecar");

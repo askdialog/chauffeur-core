@@ -475,6 +475,7 @@ export type { ReviewSourceCoverage } from "./ReviewSourceCoverage";
 export type { ReviewTrend } from "./ReviewTrend";
 export type { ReviewerComment } from "./ReviewerComment";
 export type { ReviewsInfo } from "./ReviewsInfo";
+export type { RoutineCreateByHandParams } from "./RoutineCreateByHandParams";
 export type { RoutineCreateParams } from "./RoutineCreateParams";
 export type { RoutineEditParams } from "./RoutineEditParams";
 export type { RoutineFindInfo } from "./RoutineFindInfo";

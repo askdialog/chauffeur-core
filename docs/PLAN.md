@@ -97,6 +97,9 @@ refreshed from `origin/<base>`, `chauffeur routine`, the chat tab's "Make a rout
 the workspace's Routine view and the sidebar's state tag. Not yet: sharing, a scheduled wake, other
 triggers.
 
+Routines made by hand (story 56, 2026-11-19, [decision](adr/routines-by-hand.md)): `routine.create_by_hand`,
+the "Routines" heading's "+" and its New routine modal, `chauffeur routine new --name --repo --describe`.
+
 Find routines (story 57, 2026-11-09, [decision](adr/find-routines.md)): `routine.find`,
 `routine.suggestions`, `routine.suggestion_create` and `routine.suggestion_set`, the sidecar's
 `agent.ask` (one turn without tools, Claude or Codex), the `routine_suggestions` and

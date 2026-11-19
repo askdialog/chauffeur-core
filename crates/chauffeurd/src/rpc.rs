@@ -283,6 +283,7 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         call @ (ClientCall::RoutineList(_)
         | ClientCall::RoutineGet(_)
         | ClientCall::RoutineCreate(_)
+        | ClientCall::RoutineCreateByHand(_)
         | ClientCall::RoutineEdit(_)
         | ClientCall::RoutineRun(_)
         | ClientCall::RoutineSetActive(_)
@@ -1190,6 +1191,9 @@ fn handle_routine(
             }
             ClientCall::RoutineCreate(params) => {
                 to_value(crate::routines::create(daemon, params).await?)
+            }
+            ClientCall::RoutineCreateByHand(params) => {
+                to_value(crate::routines::create_by_hand(daemon, params).await?)
             }
             ClientCall::RoutineEdit(params) => {
                 to_value(crate::routines::edit(daemon, params).await?)
