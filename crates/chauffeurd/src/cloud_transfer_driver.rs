@@ -59,6 +59,9 @@ const COMMITTED: &str = "committed; activating the destination and retiring the 
 /// The archive bridge's largest block.
 const BLOCK: u64 = 256 * 1024;
 
+/// The agents provisioned by worker_install.sh and offered by managed worker sign-in.
+const WORKER_LOGIN_AGENTS: [AgentKind; 2] = [AgentKind::Claude, AgentKind::Codex];
+
 /// How many transfers this daemon drives past the wait for their agents at once: stopping,
 /// sealing, sending and restoring weigh on both machines' disks and network.
 const AT_ONCE: usize = 2;
@@ -1870,7 +1873,7 @@ async fn run(
                         .bytes,
                     // On a worker, one agent signed in is enough, whichever the chats use.
                     agents: match worker {
-                        Some(_) => crate::usage::AGENTS.to_vec(),
+                        Some(_) => WORKER_LOGIN_AGENTS.to_vec(),
                         None => chats.chats.iter().map(|chat| chat.agent).collect(),
                     },
                     journal: known.clone(),
@@ -1885,7 +1888,7 @@ async fn run(
         }
         let mut problems = readiness.problems;
         if let Some(worker) = worker {
-            if readiness.logged_out.len() == crate::usage::AGENTS.len() {
+            if readiness.logged_out.len() == WORKER_LOGIN_AGENTS.len() {
                 problems.push(logged_out_problem(&worker));
                 report.info.needs_login = Some(TransferLogin {
                     worker,
