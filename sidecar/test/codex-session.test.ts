@@ -172,12 +172,28 @@ describe("starting", () => {
 
   test("an exploration runs read-only without ever asking to leave the sandbox", async () => {
     const { session, server } = await started({ read_only: true, permission_mode: "plan", additional_directories: ["/w/alpha"] }, { hook: `${HOOK} read-only` });
-    expect(server.sent("thread/start")[0]).toMatchObject({ approvalPolicy: "never", sandbox: "read-only" });
-    expect(server.sent("thread/start")[0].config["sandbox_workspace_write.writable_roots"]).toBeUndefined();
+    const start = server.sent("thread/start")[0];
+    // The thread begins with the network on so the proxy starts, and its first turn sets the
+    // exploration's own read-only sandbox.
+    expect(start).toMatchObject({ approvalPolicy: "never", sandbox: "workspace-write" });
+    expect(start.config["sandbox_workspace_write.writable_roots"]).toBeUndefined();
+    expect(start.config).toMatchObject({
+      "features.network_proxy": { enabled: true, domains: { "github.com": "allow", "*.github.com": "allow", "*.githubusercontent.com": "allow" } },
+      "sandbox_workspace_write.network_access": true,
+    });
     session.send("How are facets computed?");
     await flush();
+    expect(server.sent("turn/start")[0]).toMatchObject({
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandboxPolicy: { type: "readOnly", networkAccess: false },
+    });
     // Its instructions say to explain: no plan note.
     expect(server.sent("turn/start")[0].input[0].text).toBe("How are facets computed?");
+    server.push(codex.turnStarted("turn-1"), codex.turnCompleted("turn-1"));
+    session.send("again");
+    await flush();
+    expect(server.sent("turn/start")[1].sandboxPolicy).toBeUndefined();
   });
 
   test.skipIf(process.platform !== "darwin")("a workspace chat's sandbox reaches the daemon's socket in every mode, the mode's sandbox set by its first turn", async () => {
@@ -208,19 +224,32 @@ describe("starting", () => {
     }
   });
 
-  test("an exploration's sandbox never reaches the daemon's socket", async () => {
+  test("an exploration's sandbox never reaches the daemon's socket, and reads GitHub alone", async () => {
     // The daemon gives an exploration's agent no CHAUFFEUR_HOME; were it there, read-only still says no.
     const envs: Record<string, string>[] = [{ CHAUFFEUR_WORKSPACE_ID: "ws-1", CHAUFFEUR_EXPLORE: "1" }, { CHAUFFEUR_WORKSPACE_ID: "ws-1", CHAUFFEUR_HOME: "/h" }];
     for (const env of envs) {
       const { session, server } = await started({ env, read_only: true, permission_mode: "plan" }, { hook: `${HOOK} read-only` });
       const start = server.sent("thread/start")[0];
-      expect(start).toMatchObject({ approvalPolicy: "never", sandbox: "read-only" });
-      expect(start.config["features.network_proxy"]).toBeUndefined();
-      expect(start.config["sandbox_workspace_write.network_access"]).toBeUndefined();
+      expect(start).toMatchObject({ approvalPolicy: "never", sandbox: "workspace-write" });
+      // The network proxy carries GitHub's domains, and no socket: the agent has no `chauffeur` CLI.
+      const proxy = start.config["features.network_proxy"] as { enabled: boolean; unix_sockets?: object; domains: Record<string, string> };
+      expect(proxy).toMatchObject({ enabled: true, domains: { "github.com": "allow", "*.github.com": "allow", "*.githubusercontent.com": "allow" } });
+      expect(proxy.unix_sockets).toBeUndefined();
+      expect(start.config["sandbox_workspace_write.network_access"]).toBe(true);
       session.send("look");
       await flush();
-      expect(server.sent("turn/start")[0].sandboxPolicy).toBeUndefined();
+      expect(server.sent("turn/start")[0]).toMatchObject({ approvalPolicy: "never", approvalsReviewer: "user", sandboxPolicy: { type: "readOnly", networkAccess: false } });
+      server.push(codex.turnStarted("turn-1"), codex.turnCompleted("turn-1"));
+      session.send("again");
+      await flush();
+      expect(server.sent("turn/start")[1].sandboxPolicy).toBeUndefined();
     }
+  });
+
+  test("an exploration on GitLab reads the GitLab's host too", async () => {
+    const { server } = await started({ read_only: true, permission_mode: "plan", gitlab_host: "gitlab.example.com" }, { hook: `${HOOK} read-only` });
+    const proxy = server.sent("thread/start")[0].config["features.network_proxy"] as { domains: Record<string, string> };
+    expect(proxy.domains).toMatchObject({ "gitlab.example.com": "allow", "github.com": "allow" });
   });
 
   test.skipIf(process.platform !== "darwin")("leaves the sandbox as it is when the user's config already gives it the network", async () => {

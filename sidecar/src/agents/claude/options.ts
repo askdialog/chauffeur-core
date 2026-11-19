@@ -20,6 +20,7 @@ import { type CloneMemories, memoriesPrompt, memoryDirs } from "./memory.ts";
 import { DELEGATE_TOOL } from "../delegate-tool.ts";
 import { DESIGN_BROWSER, designBrowserCommand } from "../design-browser.ts";
 import { ADD_REPO_TOOL, CHAUFFEUR_TOOLS, LIST_REPOS_TOOL, UPDATE_PLAN_TOOL } from "../repo-tools.ts";
+import { readOnlyAllowedDomains } from "../../guard/read-only-guard.ts";
 
 /**
  * Chauffeur's modes → the SDK's. `auto` is Claude Code's auto mode: a classifier runs what it
@@ -45,13 +46,9 @@ export const READ_ONLY_DISALLOWED_TOOLS = ["NotebookEdit", "ExitPlanMode"];
 /** An exploration without a plans folder (the daemon could not make it) writes nothing at all. */
 export const READ_ONLY_NO_PLANS_DISALLOWED_TOOLS = ["Edit", "Write", "MultiEdit", "NotebookEdit", "ExitPlanMode"];
 
-/** Where an exploration's shell commands may reach: GitHub, for `gh` reads, and nothing else. */
-export const READ_ONLY_ALLOWED_DOMAINS = ["github.com", "*.github.com", "*.githubusercontent.com"];
-
-/** GitHub's domains, and the GitLab's host on an installation set to GitLab, for `glab` reads. */
-export function readOnlyAllowedDomains(gitlabHost?: string): string[] {
-  return gitlabHost ? [...READ_ONLY_ALLOWED_DOMAINS, gitlabHost] : READ_ONLY_ALLOWED_DOMAINS;
-}
+/** Where an exploration's shell commands may reach: GitHub, for `gh` reads, and nothing else. The
+ * one list every agent's exploration uses (`guard/read-only-guard.ts`); the GitLab's host joins it
+ * on an installation set to GitLab, for `glab` reads. */
 
 /**
  * An exploration's Bash runs in Claude Code's OS sandbox (Seatbelt on macOS, bubblewrap on

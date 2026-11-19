@@ -181,6 +181,7 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Add connectors from the composer](add-connectors-from-the-composer.md) | 2026-11-19 | accepted |
 | [Load the selected Codex model before the first turn](codex-first-turn-model-catalog.md) | 2026-11-19 | accepted |
 | [Pilot GitHub's merge queue on Core](core-merge-queue-pilot.md) | 2026-11-19 | accepted |
+| [An exploration's agent reads the network, the same for every agent](exploration-reads-the-network.md) | 2026-11-19 | accepted |
 | [A fork's clone reads its base and its PRs from the parent](fork-clones.md) | 2026-11-19 | proposed, awaiting Justin |
 | [Invitation-only mobile access](mobile-beta-access.md) | 2026-11-19 | accepted |
 | [Routines made by hand, from the sidebar's "Routines" section](routines-by-hand.md) | 2026-11-19 | proposed |

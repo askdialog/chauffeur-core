@@ -3,6 +3,7 @@
 import { join } from "node:path";
 import type { Attachment, JsonValue, PermissionMode } from "../../protocol.ts";
 import { attachmentNote, isImage } from "../attachments.ts";
+import { readOnlyAllowedDomains } from "../../guard/read-only-guard.ts";
 import { DESIGN_BROWSER, designBrowserCommand } from "../design-browser.ts";
 import type { ApprovalsReviewer, AskForApproval, SandboxMode, SandboxPolicy, UserInput } from "./protocol.ts";
 
@@ -29,7 +30,10 @@ import type { ApprovalsReviewer, AskForApproval, SandboxMode, SandboxPolicy, Use
  *   carries a note asking for a plan rather than changes. Codex's own plan mode is experimental.
  *
  * An exploration (read-only) runs in the read-only sandbox and never asks to leave it: a command
- * that needs more simply fails. Its instructions already say to explain, so no plan note.
+ * that needs more simply fails. Its commands read the network nevertheless, GitHub's domains
+ * (and the GitLab's host on an installation set to GitLab) through its thread's network proxy
+ * (`explorationNetworkConfig`), as a Claude exploration's sandbox lets theirs. Its instructions
+ * already say to explain, so no plan note.
  *
  * A design chat (also one inside an exploration: the design wins) writes its design folder and
  * nothing else, whatever mode the client asks for (see `designSandboxPolicy`): it never asks to
@@ -153,6 +157,26 @@ export function daemonSocketConfig(socket: string): Record<string, JsonValue> {
 }
 
 /**
+ * An exploration reads the network through Codex's network proxy: GitHub's domains alone, and the
+ * GitLab's host on an installation set to GitLab, the very list a Claude exploration's sandbox
+ * allows (`readOnlyAllowedDomains`). The proxy starts only for a thread that begins with network
+ * in its sandbox, so the exploration's thread begins in the workspace-write sandbox with the
+ * network on, and its first turn sets the read-only one, keeping the proxy for the thread's life:
+ * GitHub's domains are reached, everything else is refused (the proxy answers, nothing else
+ * leaves the sandbox). The proxy cannot tell a read from a write: the git and GitHub write guard
+ * keeps GitHub read-only, as in a Claude exploration.
+ */
+export function explorationNetworkConfig(gitlabHost?: string): Record<string, JsonValue> {
+  return {
+    "features.network_proxy": {
+      enabled: true,
+      domains: Object.fromEntries(readOnlyAllowedDomains(gitlabHost).map((domain) => [domain, "allow"])),
+    },
+    "sandbox_workspace_write.network_access": true,
+  };
+}
+
+/**
  * Whether a config (Codex's, or the repos' given to the thread) already gives the workspace-write
  * sandbox the network, which reaches the daemon's socket too: the proxy would then close what the
  * user opened, so the thread is left as it was.
@@ -163,17 +187,20 @@ export function sandboxNetworkOpen(config: unknown): boolean {
   return !!sandbox && typeof sandbox === "object" && (sandbox as Record<string, unknown>).network_access === true;
 }
 
-/** Config overrides of a thread: extra writable roots, the trust of Chauffeur's own hook, the daemon's socket. */
+/** Config overrides of a thread: extra writable roots, the trust of Chauffeur's own hook, the
+ * daemon's socket, and an exploration's GitHub-only network through its network proxy. */
 export function threadConfig(
   additionalDirectories: string[],
   hookTrust: Record<string, JsonValue> | undefined,
   readOnly = false,
   socket?: string,
+  gitlabHost?: string,
 ): Record<string, JsonValue> {
   const config: Record<string, JsonValue> = {};
   if (additionalDirectories.length > 0 && !readOnly) config["sandbox_workspace_write.writable_roots"] = additionalDirectories;
   if (hookTrust) config["hooks.state"] = hookTrust;
   if (socket) Object.assign(config, daemonSocketConfig(socket));
+  if (readOnly) Object.assign(config, explorationNetworkConfig(gitlabHost));
   return config;
 }
 

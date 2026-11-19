@@ -1268,6 +1268,22 @@ print("parent:", texts[-1] if texts else None)'
   c wait explore-codex --timeout 240 | tail -4
   test ! -e "$CHAUFFEUR_WORKSPACES_DIR/explore-codex/alpha/scratch.txt"
   test "$(heads explore-codex)" = "$BEFORE"
+
+  echo "== 9a. a Codex exploration reads GitHub through its sandbox's network proxy, and nothing else"
+  # The event log holds each command's output: the replies are words only.
+  exec_result() { events "$(chat_id explore-codex)" | python3 -c '
+import sys, json
+events = [json.loads(line)["event"]["event"] for line in sys.stdin if line.strip()]
+calls = {e["tool_use_id"] for e in events if e["type"] == "tool_call" and sys.argv[1] in str(e["input"])}
+results = [e["output"] for e in events if e["type"] == "tool_result" and e["tool_use_id"] in calls]
+print(results[-1] if results else "no result of a command naming " + sys.argv[1])' "$1"; }
+  c send explore-codex "Run exactly this shell command: curl -sI --max-time 10 https://api.github.com/zen | head -1 . Then reply with the single word done." >/dev/null
+  c wait explore-codex --timeout 240 | tail -2
+  has "HTTP/2 200" <<< "$(exec_result api.github.com)"
+  # Every other domain is refused: the proxy answers, nothing leaves the sandbox.
+  c send explore-codex "Run exactly this shell command: curl -sI --max-time 10 https://example.com | head -1 . Then reply with the single word done." >/dev/null
+  c wait explore-codex --timeout 240 | tail -2
+  if has "HTTP/2 200" <<< "$(exec_result example.com)"; then echo "example.com answered though the proxy allows GitHub only"; exit 1; fi
   c archive explore-codex
   test "$(git -C "$T/clones/alpha" worktree list | wc -l | tr -d ' ')" = 1
 

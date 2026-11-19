@@ -17,6 +17,20 @@ export const READ_ONLY_DENIAL =
   "worktrees and GitHub writes are refused. Read and explain; `git checkout --detach <ref>` moves the checkout " +
   "without naming a branch. To change code, the user creates a Chauffeur workspace.";
 
+/** Where an exploration's shell commands may reach: GitHub, for `gh` reads, and nothing else. */
+export const READ_ONLY_ALLOWED_DOMAINS = ["github.com", "*.github.com", "*.githubusercontent.com"];
+
+/**
+ * GitHub's domains, and the GitLab's host on an installation set to GitLab, for `glab` reads. The
+ * one list every agent's exploration uses: Claude's sandbox allows exactly it, Codex's network
+ * proxy carries it (see `explorationNetworkConfig`), and a Vibe exploration reads it over the
+ * approvals its commands ask (an exploration reads the network; the git and GitHub write guard
+ * above keeps it read-only on GitHub).
+ */
+export function readOnlyAllowedDomains(gitlabHost?: string): string[] {
+  return gitlabHost ? [...READ_ONLY_ALLOWED_DOMAINS, gitlabHost] : READ_ONLY_ALLOWED_DOMAINS;
+}
+
 /** The same refusal in a design chat, whose agent designs screens and never touches the repos. */
 export const DESIGN_READ_ONLY_DENIAL =
   "This is a Chauffeur design chat: you design screens, you never change code. Commits, pushes, fetches, " +
