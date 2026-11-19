@@ -7,14 +7,33 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
-import { type PluggableList, unified } from "unified";
+import { type PluggableList, type Processor, unified } from "unified";
 import { parseDeliverable } from "./deliverables";
 import { remarkFileCitations } from "./fileCitations";
 import { remarkCodeComments } from "./codeComments";
 
-// Agents write single newlines meaning line breaks (lists of lines, poems, logs). `$…$` and `$$…$$`
-// are maths, drawn by rehype-katex in components/Markdown.tsx.
-export const remarkPlugins: PluggableList = [remarkCodeComments, remarkGfm, remarkMath, remarkBreaks, remarkFileCitations];
+function remarkMathWithCurrency(this: Processor) {
+  remarkMath.call(this);
+  const math = this.data("micromarkExtensions")?.at(-1)?.text?.[36];
+  if (!math || Array.isArray(math)) return;
+  const tokenize = math.tokenize;
+  math.tokenize = function (effects, ok, nok) {
+    return tokenize.call(this, effects, (code) => {
+      // Reject at tokenization so that Markdown can still parse the emphasis between two prices.
+      const token = this.events.at(-1)?.[1];
+      const source = token ? this.sliceSerialize(token) : "";
+      const followedByDigit = code !== null && code >= 48 && code <= 57;
+      if (!source.startsWith("$$") && (/^\$\s|\s\$$/.test(source) || followedByDigit)) {
+        return nok(code);
+      }
+      return ok(code);
+    }, nok);
+  };
+}
+
+// Agents write single newlines meaning line breaks (lists of lines, poems, logs). KaTeX draws the
+// math tokens in components/Markdown.tsx.
+export const remarkPlugins: PluggableList = [remarkCodeComments, remarkGfm, remarkMathWithCurrency, remarkBreaks, remarkFileCitations];
 
 // As react-markdown builds its tree: raw HTML is kept, and shown as text.
 const processor = unified().use(remarkParse).use(remarkPlugins).use(remarkRehype, { allowDangerousHtml: true });

@@ -110,9 +110,20 @@ test("maths between dollars gives its source to find in a chat", () => {
   expect(markdownText("Soit $c^* = \\max_j x_j$ ici")).toBe("Soit c^* = \\max_j x_j ici");
 });
 
+test("dollar prices retain their signs and Markdown emphasis", () => {
+  const text = "- **Coût/run** : 12 h × ~4,5 $ ≈ **$55** sur A100, puis **$32** sur L4. " +
+    "Soit **quelques milliers de $**. En spot L4 (0,21–0,51 $/h).";
+  const html = renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins, rehypePlugins: [rehypeKatex] }, text));
+  expect(html).toContain("~4,5 $ ≈ <strong>$55</strong> sur A100, puis <strong>$32</strong>");
+  expect(html).toContain("<strong>quelques milliers de $</strong>. En spot L4 (0,21–0,51 $/h).");
+  expect(html).not.toContain('class="katex');
+  expect(markdownText("De $5 à $10, puis $2 + 3$.")).toBe("De $5 à $10, puis 2 + 3.");
+});
+
 test("a formula is drawn by KaTeX and a broken one stays as written", () => {
   const html = (text: string) =>
     renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins, rehypePlugins: [[rehypeKatex, { throwOnError: false, strict: false }]] }, text));
+  expect(html("Un prix de $5 et une formule $x^2$.")).toContain('<annotation encoding="application/x-tex">x^2</annotation>');
   expect(html("$$p_i = \\frac{a}{2} \\qquad \\text{écarté si } x < 0{,}5$$")).toContain('class="katex');
   expect(html("$\\frac{$")).not.toContain("katex-error\" style");
 });
