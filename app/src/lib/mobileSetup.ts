@@ -1,12 +1,12 @@
 import type { MobileHostStatus } from "@chauffeur/protocol";
 
-type Saved = Pick<MobileHostStatus, "enabled" | "relay" | "key_saved">;
+type Saved = Pick<MobileHostStatus, "enabled" | "relay" | "key_saved"> & Partial<Pick<MobileHostStatus, "managed">>;
 
 const QR = "The QR code then shows in the window Connect phone opens.";
 
 /** Whether mobile access cannot be turned on yet: the daemon has no relay or no credential for it. */
 export function relaySetupMissing(status: Saved): boolean {
-  return !status.relay || !status.key_saved;
+  return !status.managed && (!status.relay || !status.key_saved);
 }
 
 /** What the user still has to do before a phone can scan the QR code; null once mobile access is on. */

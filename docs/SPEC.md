@@ -535,6 +535,14 @@ incoming application heartbeats even when outbound traffic continues.
 
 ### Integrated Mac mobile host (approved 2026-10-18)
 
+A distribution may opt into Google authorization for its default relay
+([decision, 2026-11-19](adr/mobile-beta-access.md)). Dialog's hosted relay serves
+its Google Workspace and a list of invited addresses managed in GCP. The Mac
+uses the signed-in account for relay authorization and the existing QR flow for
+iOS and Android. On a managed relay, users can check and activate this access in
+Settings › Mobile after signing in. Removing an invitation closes existing relay
+sessions when the policy is applied. This grants no access to the Office or Slack.
+
 The daemon supervises a bundled `chauffeur-mobile-host` process after the user
 turns on mobile access. It starts again with the daemon, restarts after a crash,
 and stops on disable or daemon shutdown. Closing the desktop window leaves it

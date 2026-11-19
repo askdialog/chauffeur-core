@@ -221,6 +221,8 @@ pub struct DesignShareSettings {
 pub struct MobileSettings {
     /// The relay, `wss://…`.
     pub relay: String,
+    /// Use Google sign-in for the distribution's relay.
+    pub google_access: bool,
 }
 
 /// `[slack]`: the service the Slack integration signs in through and reads context from. Empty,

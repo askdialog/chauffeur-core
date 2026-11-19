@@ -155,6 +155,9 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::WorkerUsage(p) => to_value(crate::worker_login::usage(daemon, &p.name).await?),
         ClientCall::MobileStatus(_) => to_value(daemon.mobile.status(&daemon.store)?),
         ClientCall::MobileConfigure(params) => {
+            if params.enabled && daemon.mobile.managed(&params.relay) {
+                daemon.mobile.verify_access(daemon, &params.relay).await?;
+            }
             to_value(daemon.mobile.configure(&daemon.store, params)?)
         }
         ClientCall::RemotePushGet(params) => to_value(daemon.remote.push_get(&params.device_id)?),

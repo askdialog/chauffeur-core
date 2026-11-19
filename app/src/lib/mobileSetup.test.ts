@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { mobileSetupHint, relaySetupMissing } from "./mobileSetup";
 
+test("a managed relay can be enabled without an operator credential", () => {
+  const status = { enabled: false, relay: "wss://relay.example.com", key_saved: false, managed: true };
+  expect(relaySetupMissing(status)).toBe(false);
+  expect(mobileSetupHint(status)).toMatch(/^Turn mobile access on/);
+});
+
 const relay = "wss://relay.example";
 
 test("without a saved credential the hint asks for it and says where the QR code shows", () => {

@@ -18,7 +18,7 @@ use std::{
 };
 use tokio::{
     io::AsyncWriteExt,
-    process::{Child, Command},
+    process::{Child, ChildStdin, Command},
 };
 
 pub const OPERATOR_KEY: SecretName<'static> = SecretName {
@@ -27,6 +27,7 @@ pub const OPERATOR_KEY: SecretName<'static> = SecretName {
     label: "Chauffeur: mobile relay operator credential",
 };
 const CONFIG: &str = "mobile-host";
+const REFRESH_AFTER: Duration = Duration::from_secs(25 * 60);
 /// Off, with no relay: an operator's relay is named when mobile access is turned on.
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -76,12 +77,57 @@ impl MobileHost {
             .get_or_insert_with(|| self.secrets.read(&OPERATOR_KEY))
             .clone()
     }
+    pub fn managed(&self, relay: &str) -> bool {
+        let settings = self.settings.get();
+        settings.mobile.google_access
+            && relay.starts_with("wss://")
+            && relay == settings.mobile.relay.trim()
+    }
+    pub fn identity_changed(&self, store: &Store) {
+        if self
+            .config(store)
+            .is_ok_and(|config| self.managed(&config.relay))
+        {
+            self.revision.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    pub async fn verify_access(&self, daemon: &Daemon, relay: &str) -> Result<String> {
+        validate_relay(relay)?;
+        let token = crate::identity::google_token(daemon).await?;
+        let url = format!(
+            "https://{}/v1/mobile-access",
+            relay.trim_start_matches("wss://").trim_end_matches('/')
+        );
+        let response = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(anyhow::Error::from)?
+            .post(url)
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|_| {
+                Error::Unavailable("Could not reach the mobile relay. Try again.".into())
+            })?;
+        match response.status().as_u16() {
+            204 => Ok(token),
+            403 => Err(Error::Conflict(
+                "This Google account does not have mobile beta access.".into(),
+            )),
+            _ => Err(Error::Unavailable(
+                "Mobile beta authorization is unavailable. Try again.".into(),
+            )),
+        }
+    }
     pub fn status(&self, store: &Store) -> Result<MobileHostStatus> {
         let config = self.config(store)?;
-        let key_saved = self.key().is_some();
+        let managed = self.managed(&config.relay);
+        let key_saved = !managed && self.key().is_some();
         let state = self.runtime.lock().unwrap();
         Ok(MobileHostStatus {
             enabled: config.enabled,
+            managed,
             relay: config.relay,
             key_saved,
             phase: if !config.enabled {
@@ -105,6 +151,12 @@ impl MobileHost {
         params: MobileConfigureParams,
     ) -> Result<MobileHostStatus> {
         validate_relay(&params.relay)?;
+        let managed = self.managed(&params.relay);
+        if managed && params.operator_token.is_some() {
+            return Err(Error::BadRequest(
+                "Use Google sign-in for this relay".into(),
+            ));
+        }
         if let Some(key) = &params.operator_token
             && (!(43..=128).contains(&key.len())
                 || !key
@@ -116,6 +168,7 @@ impl MobileHost {
         let old = self.config(store)?;
         // A credential is scoped to its relay; do not send an old key to a changed URL.
         if params.enabled
+            && !managed
             && params.operator_token.is_none()
             && (old.relay != params.relay || self.key().is_none())
         {
@@ -161,6 +214,8 @@ impl MobileHost {
             .build()
             .expect("local HTTP client");
         let mut child: Option<Child> = None;
+        let mut credentials: Option<ChildStdin> = None;
+        let mut refresh_at = tokio::time::Instant::now();
         let mut revision = self.revision.load(Ordering::Relaxed);
         let mut retry_at = tokio::time::Instant::now();
         let control = format!(
@@ -181,6 +236,7 @@ impl MobileHost {
             };
             let next = self.revision.load(Ordering::Relaxed);
             if !config.enabled || next != revision {
+                credentials = None;
                 if let Some(mut process) = child.take() {
                     let _ = process.kill().await;
                 }
@@ -193,6 +249,7 @@ impl MobileHost {
                 {
                     tracing::warn!("mobile host exited; retrying automatically");
                     child = None;
+                    credentials = None;
                     retry_at = tokio::time::Instant::now() + Duration::from_secs(5);
                     self.report(
                         "error",
@@ -202,15 +259,49 @@ impl MobileHost {
                 }
                 if child.is_none() && tokio::time::Instant::now() >= retry_at {
                     self.report("starting", None, 0);
-                    match self.spawn(&daemon, &config, &control, port).await {
-                        Ok(process) => {
+                    let auth = if self.managed(&config.relay) {
+                        self.verify_access(&daemon, &config.relay).await.map(Some)
+                    } else {
+                        Ok(None)
+                    };
+                    let result = match auth {
+                        Ok(token) => self.spawn(&daemon, &config, &control, port, token).await
+                            .map_err(|_| Error::Unavailable("Cannot start the mobile host. Check that the pairing port is free.".into())),
+                        Err(error) => Err(error),
+                    };
+                    match result {
+                        Ok((process, input)) => {
                             tracing::info!("mobile host started");
                             child = Some(process);
+                            credentials = input;
+                            refresh_at = tokio::time::Instant::now() + REFRESH_AFTER;
                         }
-                        Err(_) => {
-                            self.report("error", Some("Cannot start mobile host. Install a build containing chauffeur-mobile-host and check that its port is free."), 0);
-                            retry_at = tokio::time::Instant::now() + Duration::from_secs(5);
+                        Err(error) => {
+                            self.report("error", Some(&error.to_string()), 0);
+                            retry_at = tokio::time::Instant::now() + Duration::from_secs(30);
                         }
+                    }
+                }
+                if let Some(input) = credentials.as_mut()
+                    && tokio::time::Instant::now() >= refresh_at
+                {
+                    let updated = match self.verify_access(&daemon, &config.relay).await {
+                        Ok(token) => write_credential(input, &token).await.is_ok(),
+                        Err(_) => false,
+                    };
+                    if updated {
+                        refresh_at = tokio::time::Instant::now() + REFRESH_AFTER;
+                    } else {
+                        credentials = None;
+                        if let Some(mut process) = child.take() {
+                            let _ = process.kill().await;
+                        }
+                        self.report(
+                            "error",
+                            Some("Could not renew mobile access. Check your Google sign-in."),
+                            0,
+                        );
+                        retry_at = tokio::time::Instant::now() + Duration::from_secs(30);
                     }
                 }
                 if child.is_some() {
@@ -257,10 +348,12 @@ impl MobileHost {
         config: &Config,
         control: &str,
         port: u16,
-    ) -> anyhow::Result<Child> {
+        google_token: Option<String>,
+    ) -> anyhow::Result<(Child, Option<ChildStdin>)> {
         use std::process::Stdio;
-        let key = self
-            .key()
+        let managed = google_token.is_some();
+        let key = google_token
+            .or_else(|| self.key())
             .ok_or_else(|| anyhow::anyhow!("relay credential missing"))?;
         let binary = host_binary();
         let mut child = Command::new(binary)
@@ -274,21 +367,23 @@ impl MobileHost {
             .stderr(Stdio::null())
             .kill_on_drop(true)
             .spawn()?;
-        let payload = serde_json::to_vec(
-            &serde_json::json!({"relay": config.relay, "adminToken": key, "controlToken": control}),
-        )?;
-        let sent = child
+        let payload = if managed {
+            serde_json::json!({
+                "relay": config.relay, "credential": key, "managed": true, "controlToken": control
+            })
+        } else {
+            serde_json::json!({"relay": config.relay, "adminToken": key, "controlToken": control})
+        };
+        let mut input = child
             .stdin
             .take()
-            .ok_or_else(|| anyhow::anyhow!("missing stdin"))?
-            .write_all(&payload)
-            .await;
-        if let Err(error) = sent {
-            let _ = child.kill().await;
-            return Err(error.into());
-        }
-        Ok(child)
+            .ok_or_else(|| anyhow::anyhow!("missing stdin"))?;
+        write_credential(&mut input, &payload.to_string()).await?;
+        Ok((child, managed.then_some(input)))
     }
+}
+async fn write_credential(input: &mut ChildStdin, line: &str) -> std::io::Result<()> {
+    input.write_all(format!("{line}\n").as_bytes()).await
 }
 fn validate_relay(value: &str) -> Result<()> {
     let url = reqwest::Url::parse(value)

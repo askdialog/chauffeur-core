@@ -4508,6 +4508,8 @@ pub struct MobileConfigureParams {
 pub struct MobileHostStatus {
     pub enabled: bool,
     pub relay: String,
+    #[serde(default)]
+    pub managed: bool,
     pub key_saved: bool,
     pub phase: String,
     pub error: Option<String>,

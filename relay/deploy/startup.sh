@@ -103,7 +103,7 @@ if [[ -n "$voice_secret" ]]; then
   printf 'MISTRAL_API_KEY=%s\n' "$voice_key" >> "$relay_env"
   unset voice_key
 fi
-# APNS is provisioned separately. Preserve its fixed env-file fields without sourcing shell.
+# Preserve separately provisioned APNS and mobile enrollment settings without sourcing shell.
 if [[ -e /etc/chauffeur-relay.env ]]; then
   [[ -f /etc/chauffeur-relay.env && ! -L /etc/chauffeur-relay.env && $(stat -c '%u:%a' /etc/chauffeur-relay.env) == 0:600 ]] || exit 1
   while IFS='=' read -r name value || [[ -n "$name" ]]; do
@@ -112,6 +112,9 @@ if [[ -e /etc/chauffeur-relay.env ]]; then
       APNS_TOPIC) [[ "$value" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$ ]] || exit 1 ;;
       APNS_KEY_FILE) [[ "$value" =~ ^/[A-Za-z0-9_./-]+$ && ${#value} -le 1024 ]] || exit 1 ;;
       APNS_ENVIRONMENT) [[ "$value" == production || "$value" == sandbox ]] || exit 1 ;;
+      MOBILE_GOOGLE_CLIENT_ID) [[ "$value" =~ ^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$ ]] || exit 1 ;;
+      MOBILE_GOOGLE_WORKSPACE) [[ "$value" =~ ^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$ ]] || exit 1 ;;
+      MOBILE_INVITED_EMAILS) [[ "$value" =~ ^[a-zA-Z0-9_.+@,-]*$ ]] || exit 1 ;;
       *) continue ;;
     esac
     printf '%s=%s\n' "$name" "$value" >> "$relay_env"

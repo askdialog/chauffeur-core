@@ -38,6 +38,7 @@ pub fn state(daemon: &Daemon) -> Result<IdentityState> {
 /// Tells the clients and the extensions that the identity changed, and follows the new user's
 /// mentions.
 pub fn changed(daemon: &Daemon) {
+    daemon.mobile.identity_changed(&daemon.store);
     daemon.extensions.identity_changed();
     match state(daemon) {
         Ok(identity) => {
@@ -48,6 +49,26 @@ pub fn changed(daemon: &Daemon) {
         Err(error) => tracing::warn!(%error, "could not tell the clients of the new identity"),
     }
     daemon.mentions.restart();
+}
+
+pub(crate) async fn google_token(daemon: &Daemon) -> Result<String> {
+    let settings = daemon.settings.get().office.clone();
+    let client = google::Client::from_settings(&settings)
+        .ok_or_else(|| Error::Unavailable("Google sign-in is unavailable".into()))?;
+    let secrets = Secrets::for_paths(&daemon.paths);
+    let refresh = secrets
+        .read(&REFRESH_TOKEN)
+        .ok_or_else(|| Error::Conflict("Sign in with Google to turn on mobile access".into()))?;
+    let token = client.id_token(&refresh).await.map_err(|_| {
+        Error::Unavailable("Could not verify your Google account. Sign in again and retry.".into())
+    })?;
+    if settings.dev_email.trim().is_empty()
+        && google::email_of(&token) == daemon.store.kv_get(EMAIL_KEY)?
+        && Some(refresh) == secrets.read(&REFRESH_TOKEN)
+    {
+        return Ok(token);
+    }
+    Err(Error::Conflict("Google sign-in changed. Try again.".into()))
 }
 
 /// Reads the team domain of a sign-in made before it was kept, from a fresh ID token, once.

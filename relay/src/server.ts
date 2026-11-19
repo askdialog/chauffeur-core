@@ -1,4 +1,5 @@
 import type { PushMessage } from "./fcm";
+import type { MobileGrant } from "./mobile-access";
 import { timingSafeEqual, createHash } from "node:crypto";
 import type { ServerWebSocket } from "bun";
 
@@ -6,6 +7,7 @@ const MAX_FRAME = 128 * 1024;
 const MAX_BUFFER = 256 * 1024;
 const ROOM_LIFETIME = 5 * 60_000;
 const DEVICE_LEASE = 24 * 60 * 60_000;
+const MANAGED_LEASE = 20 * 60_000;
 type Role = "host" | "phone";
 type SocketData = { trace: string; openedAt: number; forwardedBytes: number; lastReceivedAt: number; roomId: string; role?: Role; timer?: ReturnType<typeof setTimeout> };
 type Socket = ServerWebSocket<SocketData>;
@@ -17,6 +19,7 @@ type Room = {
   phone?: Socket;
   timer?: ReturnType<typeof setTimeout>;
   persistent?: boolean;
+  owner?: string;
   voice?: { window: number; count: number; inflight: boolean };
 };
 
@@ -34,7 +37,7 @@ export type RelayLog = {
   reason?: "invalid_frame" | "peer_unavailable" | "backpressure" | "send_failed" | "peer_timeout" | "push_unregistered" | "push_delivery_failed";
 };
 
-export function startRelay(options: { adminToken: string; hostname?: string; port?: number; maxRooms?: number; roomLifetimeMs?: number; diagnostic?: (message: string) => void; telemetry?: (event: RelayLog) => void; peerTimeoutMs?: number; voice?: (signal: AbortSignal) => Promise<string>; voiceTimeoutMs?: number; push?: (message: PushMessage) => Promise<"ok"|"unregistered"> }) {
+export function startRelay(options: { adminToken: string; mobileAccess?: (token: string) => Promise<MobileGrant | null>; hostname?: string; port?: number; maxRooms?: number; roomLifetimeMs?: number; diagnostic?: (message: string) => void; telemetry?: (event: RelayLog) => void; peerTimeoutMs?: number; voice?: (signal: AbortSignal) => Promise<string>; voiceTimeoutMs?: number; push?: (message: PushMessage) => Promise<"ok"|"unregistered"> }) {
   if (!/^[A-Za-z0-9_-]{43,128}$/.test(options.adminToken)) {
     throw new Error("RELAY_ADMIN_TOKEN must be a randomly generated token of at least 32 bytes");
   }
@@ -95,6 +98,16 @@ export function startRelay(options: { adminToken: string; hostname?: string; por
     return auth.length <= 256 && matches(auth, `Bearer ${options.adminToken}`);
   }
 
+  async function mobileGrant(request: Request) {
+    const auth = request.headers.get("authorization") ?? "";
+    if (!options.mobileAccess || auth.length > 4096 || !auth.startsWith("Bearer ")) return null;
+    return options.mobileAccess(auth.slice(7));
+  }
+
+  async function hostGrant(request: Request) {
+    return isAdmin(request) ? { subject: undefined, expiresAt: Infinity } : mobileGrant(request);
+  }
+
   const server = Bun.serve<SocketData>({
     hostname: options.hostname ?? "127.0.0.1",
     port: options.port ?? 41240,
@@ -103,23 +116,29 @@ export function startRelay(options: { adminToken: string; hostname?: string; por
       const url = new URL(request.url);
       const headers = { "Cache-Control": "no-store" };
       if (url.pathname === "/health" && request.method === "GET") return new Response("ok", { headers });
+      if (url.pathname === "/v1/mobile-access" && request.method === "POST") {
+        if (!options.mobileAccess) return new Response("Mobile beta unavailable", { status: 404, headers });
+        return new Response(null, { status: await mobileGrant(request) ? 204 : 403, headers });
+      }
       if (url.pathname === "/v1/rooms" && request.method === "POST") {
-        if (!isAdmin(request)) {
+        const grant = await hostGrant(request);
+        if (!grant) {
           return new Response("Unauthorized", { status: 401, headers });
         }
         if (rooms.size >= maxRooms) return new Response("Relay capacity reached", { status: 503, headers });
         const id = token(16);
         const hostToken = token();
         const phoneToken = token();
-        const expiresAt = Date.now() + roomLifetime;
+        const expiresAt = Math.min(Date.now() + roomLifetime, grant.expiresAt);
         const key = `rooms/${id}`;
-        const timer = setTimeout(() => endRoom(key), roomLifetime);
+        const timer = setTimeout(() => endRoom(key), expiresAt - Date.now());
         timer.unref();
         rooms.set(key, { hostToken, phoneToken, expiresAt, timer });
         return Response.json({ room: id, hostToken, phoneToken, expiresAt }, { status: 201, headers });
       }
       if (url.pathname === "/v1/devices" && request.method === "POST") {
-        if (!isAdmin(request)) return new Response("Unauthorized", { status: 401, headers });
+        const grant = await hostGrant(request);
+        if (!grant) return new Response("Unauthorized", { status: 401, headers });
         try {
           const registration = await request.json() as { deviceId?: unknown; hostToken?: unknown; phoneToken?: unknown };
           if (typeof registration.deviceId !== "string" || !/^[A-Za-z0-9_-]{22}$/.test(registration.deviceId) ||
@@ -129,13 +148,17 @@ export function startRelay(options: { adminToken: string; hostname?: string; por
           const previous = rooms.get(key);
           if (!previous && rooms.size >= maxRooms) return new Response("Relay capacity reached", { status: 503, headers });
           const unchanged = previous && matches(previous.hostToken, registration.hostToken) && matches(previous.phoneToken, registration.phoneToken);
+          if (previous && grant.subject !== previous.owner &&
+              !(grant.subject && !previous.owner && unchanged)) {
+            return new Response("Unauthorized", { status: 401, headers });
+          }
           if (!unchanged && previous) endRoom(key);
           if (unchanged) clearTimeout(previous.timer);
-          const expiresAt = Date.now() + DEVICE_LEASE;
-          const timer = setTimeout(() => endRoom(key), DEVICE_LEASE); timer.unref();
+          const expiresAt = Math.min(Date.now() + (grant.subject ? MANAGED_LEASE : DEVICE_LEASE), grant.expiresAt);
+          const timer = setTimeout(() => endRoom(key), expiresAt - Date.now()); timer.unref();
           // Renewal retains the same authorization generation and its mint budget.
-          if (unchanged) Object.assign(previous, { expiresAt, timer });
-          else rooms.set(key, { hostToken: registration.hostToken, phoneToken: registration.phoneToken, expiresAt, timer, persistent: true });
+          if (unchanged) Object.assign(previous, { expiresAt, timer, owner: grant.subject });
+          else rooms.set(key, { hostToken: registration.hostToken, phoneToken: registration.phoneToken, expiresAt, timer, persistent: true, owner: grant.subject });
           return Response.json({ registered: true }, { headers });
         } catch { return new Response("Invalid registration", { status: 400, headers }); }
       }
@@ -203,7 +226,9 @@ export function startRelay(options: { adminToken: string; hostname?: string; por
       const match = /^\/v1\/(rooms|devices)\/([A-Za-z0-9_-]{22})$/.exec(url.pathname);
       const key = match ? `${match[1]}/${match[2]}` : "";
       if (request.method === "DELETE" && match?.[1] === "devices") {
-        if (!isAdmin(request)) return new Response("Unauthorized", { status: 401, headers });
+        const grant = await hostGrant(request);
+        const room = rooms.get(key);
+        if (!grant || (grant.subject && room && room.owner !== grant.subject)) return new Response("Unauthorized", { status: 401, headers });
         endRoom(key); return new Response("ok", { headers });
       }
       if (request.method === "GET" && match && !url.search) {

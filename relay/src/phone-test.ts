@@ -9,6 +9,7 @@ import {
 import { startRelay } from "./server";
 import { createBridge } from "./bridge";
 import { TrustedHost } from "./trusted-host";
+import { hostCredential } from "./host-credential";
 
 function portFromEnvironment(key: string, fallback: number) {
   const port = Number(process.env[key] ?? fallback);
@@ -20,8 +21,9 @@ const localPort = portFromEnvironment("CHAUFFEUR_LOCAL_RELAY_PORT", 41240);
 const externalRelay = process.env.RELAY_ORIGIN;
 const relayOrigin = externalRelay ? relayUrl(externalRelay).origin : `ws://127.0.0.1:${localPort}`;
 const adminToken = externalRelay ? process.env.RELAY_ADMIN_TOKEN : randomToken();
-if (!adminToken || !/^[A-Za-z0-9_-]{43,128}$/.test(adminToken)) throw new Error("A valid RELAY_ADMIN_TOKEN is required for the external relay");
-const relay = externalRelay ? undefined : startRelay({ adminToken, port: localPort, diagnostic: process.argv.includes("--diagnose") ? (message) => console.info(`[relay] ${message}`) : undefined });
+if (!hostCredential() && !/^[A-Za-z0-9_-]{43,128}$/.test(adminToken ?? "")) throw new Error("A valid relay credential is required");
+const relay = externalRelay ? undefined : startRelay({ adminToken: adminToken!, port: localPort, diagnostic: process.argv.includes("--diagnose") ? (message) => console.info(`[relay] ${message}`) : undefined });
+const credential = () => hostCredential() ?? adminToken;
 const relayHttpOrigin = relayOrigin.replace(/^ws/, "http");
 const origin = `http://127.0.0.1:${pagePort}`;
 let svg = "";
@@ -31,7 +33,7 @@ let cancel = () => {};
 let lastIssued = 0;
 let expiresAt = 0;
 const daemonMode = process.argv.includes("--daemon");
-const trusted = daemonMode ? new TrustedHost({ relay: relayOrigin, adminToken }) : undefined;
+const trusted = daemonMode ? new TrustedHost({ relay: relayOrigin, credential }) : undefined;
 trusted?.start();
 let bridge: ReturnType<typeof createBridge> | undefined;
 let peer = "";
@@ -51,9 +53,11 @@ async function invite() {
   svg = "";
   status = "Preparing your code…";
   const identity = trusted ? await trusted.hostIdentity() : await generateIdentity("Ed25519");
+  const token = credential();
+  if (!token) throw new Error("Mobile access is unavailable. Check your Google sign-in.");
   const response = await fetch(`${relayHttpOrigin}/v1/rooms`, {
-    method: "POST", headers: { Authorization: `Bearer ${adminToken}` },
-    signal: controller.signal,
+    method: "POST", headers: { Authorization: `Bearer ${token}` },
+    redirect: "error", signal: controller.signal,
   });
   if (!response.ok) throw new Error("Could not create invitation");
   const room = await response.json() as { room: string; hostToken: string; phoneToken: string; expiresAt: number };

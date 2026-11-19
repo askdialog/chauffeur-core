@@ -4,7 +4,8 @@ import { connectDaemon, type DaemonConnection } from "./daemon";
 import { PushObserver } from "./push-observer";
 import { createBridge } from "./bridge";
 
-type Options = { relay: string; adminToken: string; connect?: () => Promise<DaemonConnection> };
+type Options = { relay: string; connect?: () => Promise<DaemonConnection> } &
+  ({ adminToken: string; credential?: never } | { credential: () => string | undefined; adminToken?: never });
 type Slot = { stop: (reason?: "revoked") => Promise<void>; device: RemoteDevice; connected: boolean };
 
 function pause(ms: number, signal: AbortSignal) {
@@ -73,7 +74,9 @@ export class TrustedHost {
   }
   private async registerRequest(path: string, method: string, body?: unknown) {
     const url = new URL(this.options.relay); url.protocol = url.protocol === "wss:" ? "https:" : "http:"; url.pathname = path;
-    const response = await fetch(url, { method, headers: { Authorization: `Bearer ${this.options.adminToken}`, "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(5000) });
+    const token = this.options.credential?.() ?? this.options.adminToken;
+    if (!token) throw new Error("Mobile access is unavailable. Check your Google sign-in.");
+    const response = await fetch(url, { method, redirect: "error", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error("Relay unavailable");
   }
   private register(device: RemoteDevice) {
