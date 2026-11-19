@@ -110,21 +110,17 @@ describe("starting", () => {
     }
   });
 
-  test("auto mode that Claude Code could not take says that the chat asks instead", async () => {
+  test("auto mode that Claude Code could not take says that the chat asks instead, once, from its first turn", async () => {
     const make = async (permission_mode: SessionStartParams["permission_mode"], current: string) => {
-      const host = new FakeHost();
-      const session = new ClaudeSession({ ...BASE, permission_mode, model: "claude-haiku-4-5-20251001" }, host, {
-        query: ({ prompt, options }) => {
-          const query = new FakeQuery(prompt, options);
-          query.initResult.current_permission_mode = current;
-          return query;
-        },
-        resolveExecutable: () => undefined,
-        baseEnv: {},
-        initTimeoutMs: 200,
-      });
-      await session.start();
-      return host.events;
+      const { query, host } = await started({ permission_mode, model: "claude-haiku-4-5-20251001" });
+      // As the SDK reports it, at each turn: its init says the mode asked, the status right after
+      // the mode Claude Code runs in.
+      for (let turn = 0; turn < 2; turn++) {
+        query.push({ type: "system", subtype: "init", session_id: "sess-1", model: "claude-haiku-4-5-20251001", permissionMode: permission_mode === "auto" ? "auto" : current } as never);
+        query.push({ type: "system", subtype: "status", status: null, permissionMode: current, uuid: `u${turn}`, session_id: "sess-1" } as never);
+        await flush();
+      }
+      return host.events.filter((event) => event.type !== "session_started");
     };
     expect(await make("auto", "default")).toEqual([
       // The daemon shows the chat asking, rather than in auto mode.
@@ -943,22 +939,21 @@ describe("configure and stop", () => {
   });
 
   test("a design chat without auto mode accepts edits instead, and says so", async () => {
-    // At start: Claude Code took default; the session switches to acceptEdits before any turn.
+    // At its first turn: Claude Code reports default; the session switches to acceptEdits.
     const host = new FakeHost();
     let made: FakeQuery | undefined;
     const session = new ClaudeSession({ ...BASE, cwd: DESIGN, design_dir: DESIGN, model: "claude-haiku-4-5-20251001" }, host, {
-      query: ({ prompt, options }) => {
-        made = new FakeQuery(prompt, options);
-        made.initResult.current_permission_mode = "default";
-        return made;
-      },
+      query: ({ prompt, options }) => (made = new FakeQuery(prompt, options)),
       resolveExecutable: () => undefined,
       baseEnv: {},
       initTimeoutMs: 200,
     });
     await session.start();
+    made!.push({ type: "system", subtype: "init", session_id: "sess-1", model: "claude-haiku-4-5-20251001", permissionMode: "auto" } as never);
+    made!.push({ type: "system", subtype: "status", status: null, permissionMode: "default", uuid: "u1", session_id: "sess-1" } as never);
+    await flush();
     expect(made?.calls).toEqual(["setPermissionMode:acceptEdits"]);
-    expect(host.events).toEqual([
+    expect(host.events.filter((event) => event.type !== "session_started")).toEqual([
       { type: "permission_mode_effective", mode: "default" },
       { type: "permission_mode_effective", mode: "accept_edits" },
       {

@@ -140,6 +140,8 @@ export class ClaudeSession implements AgentSession {
   private requestedMode: SdkPermissionMode;
   /** The permission mode Claude Code runs in, as last reported to the daemon. */
   private effectiveMode: PermissionMode | undefined;
+  /** Whether Claude Code was seen running in another mode than auto (said once). */
+  private autoModeChecked = false;
   private readonly mcp: McpTracker;
   /** The environment Claude Code was started with: an MCP server's `${VAR}` is checked in it. */
   private agentEnv: Record<string, string | undefined> = {};
@@ -228,9 +230,8 @@ export class ClaudeSession implements AgentSession {
     const timedOut = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error(`no answer after ${timeoutMs / 1000}s`)), timeoutMs);
     });
-    let init: unknown;
     try {
-      init = await Promise.race([query.initializationResult(), failed, timedOut]);
+      await Promise.race([query.initializationResult(), failed, timedOut]);
     } catch (error) {
       this.state = "ended";
       this.shutdown();
@@ -242,7 +243,6 @@ export class ClaudeSession implements AgentSession {
     if (this.state !== "starting") throw new RpcError(ErrorCode.UNAVAILABLE, "the session was stopped while starting");
     this.state = "running";
     this.markReady();
-    await this.checkAutoMode(init);
     this.mcp.start();
     return { agent_session_id: this.params.resume_session_id ?? null, ...(this.process.pid === undefined ? {} : { native_pid: this.process.pid }) };
   }
@@ -427,15 +427,11 @@ export class ClaudeSession implements AgentSession {
 
   /**
    * A session started in auto mode where it is unavailable runs in `default` (Claude Code
-   * downgrades it without an error): says so, from the mode the initialize handshake reports. A
-   * design chat is switched to `acceptEdits` then, so that it still writes its screens without
-   * asking.
+   * downgrades it without an error, at the first turn): says so. A design chat is switched to
+   * `acceptEdits` then, so that it still writes its screens without asking.
    */
-  private async checkAutoMode(init: unknown): Promise<void> {
-    const current = (init as { current_permission_mode?: unknown } | undefined)?.current_permission_mode;
-    this.reportMode(current);
+  private async checkAutoMode(): Promise<void> {
     if (this.requestedMode !== "auto") return;
-    if (typeof current !== "string" || current === "auto") return;
     const model = this.params.model ? ` with ${this.params.model}` : "";
     const why = `${AUTO_UNAVAILABLE}${model} (its model, plan or settings turn it off)`;
     if (!this.params.design_dir) {
@@ -535,9 +531,27 @@ export class ClaudeSession implements AgentSession {
     }
     // A suggestion for a turn already followed by another (a queued message, a steer) is stale.
     if (message.type === "prompt_suggestion" && this.busy) return;
-    // Each turn's init, and status messages, carry the mode Claude Code runs in.
-    if (message.type === "system" && (message.subtype === "init" || message.subtype === "status")) {
+    // Status messages carry the mode Claude Code runs in; a turn's init may only repeat the mode asked
+    // (the SDK's says auto, then its status says default where auto mode is unavailable), which does
+    // not undo a fallback already seen.
+    if (
+      message.type === "system" &&
+      (message.subtype === "status" ||
+        (message.subtype === "init" && message.permissionMode !== this.requestedMode))
+    ) {
       this.reportMode(message.permissionMode);
+    }
+    // Where auto mode is unavailable, Claude Code reports another mode at its first turn (its init
+    // says auto, the status right after says default); the initialize handshake no longer says it.
+    if (
+      message.type === "system" &&
+      (message.subtype === "init" || message.subtype === "status") &&
+      typeof message.permissionMode === "string" &&
+      message.permissionMode !== "auto" &&
+      !this.autoModeChecked
+    ) {
+      this.autoModeChecked = true;
+      void this.checkAutoMode();
     }
     if (message.type === "system" && message.subtype === "background_tasks_changed") {
       this.backgroundTasks = message.tasks.filter((task) => !task.ambient).length;

@@ -21,7 +21,7 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER
 # has no auto mode: its chats ask before acting, which the steps below cannot answer. (Claude Code
 # 2.1.314 gives Haiku 4.5 auto mode: step 1a2 would then see no fallback to check.)
 MODEL=${MODEL:-haiku}
-NO_AUTO_MODEL=${NO_AUTO_MODEL:-claude-3-5-haiku-20241022}
+NO_AUTO_MODEL=${NO_AUTO_MODEL:-claude-haiku-4-5-20251001}
 # The chats' Claude Code transcripts go with the folder; with KEEP=1, remove both afterwards:
 # `scripts/forget-transcripts.sh <folder> && rm -rf <folder>`.
 cleanup() {
