@@ -86,6 +86,8 @@ export function cloneWriteRefusal(toolName: string, toolInput: unknown, cwd: str
 const WRITERS = new Set(["rm", "rmdir", "unlink", "mkdir", "touch", "mv", "chmod", "chown", "chgrp", "truncate", "tee", "shred"]);
 /** Programs that read their sources and write their last path. */
 const COPIERS = new Set(["cp", "rsync", "install", "ln", "scp"]);
+/** Copiers whose `-t` / `--target-directory` names where they write (rsync's `-t` keeps times). */
+const TARGET_OPTION = new Set(["cp", "ln", "install"]);
 /** Programs that change their files with `-i` or `--in-place`. */
 const IN_PLACE = new Set(["sed", "perl", "gsed"]);
 /** Git subcommands that only read. */
@@ -137,7 +139,7 @@ export function cloneCommandRefusal(command: string, cwd: string, clones: Guarde
     // A `cd` alone moves the commands after it on the line; one in a group, a substitution or a
     // pipe stays there.
     const only = commands.length === 1 ? commands[0] : undefined;
-    if (only && isCd(only.program) && /^\s*(?:cd|pushd)\b/.test(text) && then !== "|") {
+    if (only && isCd(only.program) && /^\s*(?:\{\s*)?(?:cd|pushd)\b/.test(text) && then !== "|") {
       dir = cdTarget(dir, only.args);
       continue;
     }
@@ -206,6 +208,7 @@ function cdTarget(dir: string, args: string[]): string {
 /**
  * The command line's top-level commands, each with the operator after it: groups `( … )`,
  * substitutions `$( … )` and backticks stay inside the command they are in, as quoted text does.
+ * A `{ …; }` group is split as the shell runs it: a `cd` in it moves the commands after it.
  */
 function topLevel(command: string): { text: string; then: string }[] {
   const parts: { text: string; then: string }[] = [];
@@ -251,14 +254,14 @@ function writtenClone(program: string, args: string[], dir: string, clones: Guar
   const words = args.filter((arg) => !arg.startsWith("-") && redirection(arg) === undefined);
   if (WRITERS.has(program)) return firstClone(words, inClone);
   if (COPIERS.has(program)) {
-    const last = words.at(-1);
-    return last === undefined ? undefined : inClone(last);
+    const target = (TARGET_OPTION.has(program) ? optionValue(args, "-t", "--target-directory") : undefined) ?? words.at(-1);
+    return target === undefined ? undefined : inClone(target);
   }
   if (IN_PLACE.has(program) && args.some((arg) => /^-\w*i/.test(arg) || arg.startsWith("--in-place"))) return firstClone(words, inClone);
   if (program === "dd") return firstClone(args.filter((arg) => arg.startsWith("of=")).map((arg) => arg.slice(3)), inClone);
   if (program === "find" && (args.includes("-delete") || args.some((arg, i) => arg === "-exec" && args[i + 1] === "rm"))) {
     const roots = args.slice(0, Math.max(0, args.findIndex((arg) => arg.startsWith("-"))));
-    return firstClone(roots, inClone);
+    return firstClone(roots.length > 0 ? roots : ["."], inClone);
   }
   if (program === "git") return gitWrite(args, dir, clones);
   return undefined;
@@ -267,6 +270,8 @@ function writtenClone(program: string, args: string[], dir: string, clones: Guar
 /** The clone a git command changes: the one it runs in (`-C`, `--work-tree`, `--git-dir`, `cd`), unless it only reads. */
 function gitWrite(args: string[], dir: string, clones: GuardedClone[]): GuardedClone | undefined {
   let where = dir;
+  let workTree: string | undefined;
+  let gitDir: string | undefined;
   let i = 0;
   for (; i < args.length; i++) {
     const arg = args[i];
@@ -275,7 +280,8 @@ function gitWrite(args: string[], dir: string, clones: GuardedClone[]): GuardedC
     const [name, attached] = arg.startsWith("--") && arg.includes("=") ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg, undefined];
     const given = attached ?? (GIT_VALUE_OPTIONS.has(name) ? value : undefined);
     if (given !== undefined && name === "-C") where = at(where, given);
-    if (given !== undefined && (name === "--work-tree" || name === "--git-dir")) where = at(dir, given);
+    if (given !== undefined && name === "--work-tree") workTree = at(where, given);
+    if (given !== undefined && name === "--git-dir") gitDir = at(where, given);
     if (attached === undefined && GIT_VALUE_OPTIONS.has(name)) i++;
   }
   const sub = args[i];
@@ -288,9 +294,14 @@ function gitWrite(args: string[], dir: string, clones: GuardedClone[]): GuardedC
     const written = target === undefined ? undefined : cloneOf(at(where, target), clones);
     if (written) return written;
   }
-  const clone = cloneOf(where, clones);
-  if (!clone) return undefined;
   const words = rest.filter((arg) => !arg.startsWith("-"));
+  // `git clone` writes its destination, by default a folder in the one it runs from: a URL alone
+  // resolves there too.
+  if (sub === "clone") return cloneOf(at(where, words.at(-1) ?? "."), clones);
+  // Both `--work-tree` and `--git-dir` given, the folder it runs from no longer counts.
+  const places = workTree !== undefined && gitDir !== undefined ? [workTree, gitDir] : [where, workTree, gitDir];
+  const clone = places.map((place) => place && cloneOf(place, clones)).find((found) => found !== undefined);
+  if (!clone) return undefined;
   if (sub === undefined || GIT_READS.has(sub)) return undefined;
   if ((sub === "branch" || sub === "tag") && (words.length === 0 || rest.some((arg) => LISTING.has(arg.split("=")[0] ?? arg)))) return undefined;
   if (sub === "remote" && (words.length === 0 || words[0] === "get-url" || words[0] === "show")) return undefined;
@@ -300,6 +311,15 @@ function gitWrite(args: string[], dir: string, clones: GuardedClone[]): GuardedC
   const configWrite = rest.some((arg) => /^--(?:unset|remove-section)/.test(arg));
   if (sub === "config" && ((words.length === 1 && !configWrite) || rest.some((arg) => arg === "--list" || arg === "-l" || arg.startsWith("--get")))) return undefined;
   return clone;
+}
+
+/** The value of an option, given as `-t value`, `--long value` or `--long=value`. */
+function optionValue(args: string[], short: string, long: string): string | undefined {
+  for (const [k, arg] of args.entries()) {
+    if (arg === short || arg === long) return args[k + 1];
+    if (arg.startsWith(`${long}=`)) return arg.slice(long.length + 1);
+  }
+  return undefined;
 }
 
 function firstClone(words: string[], inClone: (word: string) => GuardedClone | undefined): GuardedClone | undefined {

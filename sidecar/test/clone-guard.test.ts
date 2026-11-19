@@ -119,6 +119,17 @@ describe("cloneCommandRefusal", () => {
     "git format-patch -3 --output-directory=/code/web/patches",
     "git -C /code/web config --unset user.email",
     "git -C /code/web config --remove-section user",
+    "git --work-tree=/ws/feat/web --git-dir=/code/web/.git checkout .",
+    "git --git-dir=/code/web/.git --work-tree=/ws/feat/web checkout .",
+    "cp -t /code/web a.ts",
+    "cp --target-directory=/code/web a.ts",
+    "cd /code/web && find -name '*.log' -delete",
+    "git clone https://example.com/x.git /code/web/vendor/x",
+    "cd /code/web && git clone https://example.com/x.git",
+    "{ cd /code/web; touch x; }",
+    "{ cd /code/web; } && touch x",
+    "{ cd /code/web; ls; }; touch x",
+    "git --git-dir=/ws/feat/web/.git --work-tree=/code/web checkout .",
   ];
   for (const command of refused) {
     test(`refuses: ${JSON.stringify(command)}`, () => {
@@ -166,6 +177,12 @@ describe("cloneCommandRefusal", () => {
     "git -C /code/web diff --output=/tmp/report.patch",
     "echo '$(rm -rf /code/web/build)'",
     "echo '\"$(rm -rf /code/web/build)\"'",
+    "cd /code/web && git --git-dir=/ws/feat/web/.git --work-tree=/ws/feat/web add .",
+    "cp -t /ws/feat/web /code/web/a.ts",
+    "rsync -t /code/web/a.ts web/a.ts",
+    "git clone https://example.com/x.git /tmp/x",
+    "cd /code/web && find . -name '*.ts' -exec grep -l x {} ;",
+    "( cd /code/web; ls ) && { cd web; touch x; }",
   ];
   for (const command of allowed) {
     test(`allows: ${JSON.stringify(command)}`, () => {
