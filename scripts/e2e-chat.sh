@@ -71,9 +71,7 @@ search = { semantic = false }
 url = ""
 TOML
 c() { "$BIN/chauffeur" "$@"; }
-# A check on a command's output (`c ls | has "^name"`): reads all of it first, so that under
-# pipefail the command never dies of SIGPIPE when grep stops at its first match.
-has() { local out; out=$(cat); grep -q "$@" <<< "$out"; }
+source "$(dirname "$0")/e2e-lib.sh"
 events() { sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "select payload from events where chat_id = '$1' order by seq"; }
 
 check_design_request() {

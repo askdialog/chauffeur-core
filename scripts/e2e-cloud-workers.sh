@@ -8,6 +8,7 @@
 # whose state is not ~/.chauffeur never touches ~/.ssh otherwise); no real gcloud, gh, editor or
 # GCP resource is used.
 set -euo pipefail
+source "$(dirname "$0")/e2e-lib.sh"
 cd "$(dirname "$0")/.."
 cargo build -q -p chauffeurd -p chauffeur-cli
 (cd sidecar && bun run build >/dev/null)
@@ -453,7 +454,7 @@ fi
 
 echo "== relay. the moved workspace's calls and ports reach the worker through its forwarded socket"
 echo "written there" > "$T/wrk/workspaces/moving/alpha/there.md"
-on src --json files moving | grep -q "there.md"
+on src --json files moving | has "there.md"
 rm "$T/wrk/workspaces/moving/alpha/there.md"
 port_base() { "$@" --json show moving | python3 -c 'import sys,json; print(json.load(sys.stdin)["port_base"])'; }
 SRC_BASE=$(port_base on src)
@@ -483,9 +484,8 @@ issue() { on src --json worker list | python3 -c 'import sys,json; print(json.lo
 test "$(issue)" = "None"
 cp "$T/user/.ssh/config" "$T/ssh-config.keep"
 printf 'Host mine\n' > "$T/user/.ssh/config"
-issue | grep -qF "Include \"$T/src/home/ssh_config\""
-if on src open moving --app cursor 2>"$T/refused"; then echo "a worker opened without its Include"; exit 1; fi
-grep -qF "Include \"$T/src/home/ssh_config\"" "$T/refused"
+issue | has -F "Include \"$T/src/home/ssh_config\""
+refuses "Include \"$T/src/home/ssh_config\"" on src open moving --app cursor
 cp "$T/ssh-config.keep" "$T/user/.ssh/config"
 test "$(issue)" = "None"
 
@@ -519,7 +519,7 @@ test "$(health)" = failed
 rm "$T/fake/storage-down"
 on src cloud backup moving >/dev/null
 test "$(count)" = 3
-on src cloud backup moving --status | grep -q "3 kept"
+on src cloud backup moving --status | has "3 kept"
 
 echo "== delete. refused while a workspace runs there"
 if on src worker delete w1 --yes 2>"$T/refused"; then echo "a worker running a workspace was deleted"; exit 1; fi
@@ -598,9 +598,7 @@ fi
 
 echo "== cancelled return. backups resume on the worker, and a later return still replaces the Mac's copy"
 chmod 555 "$T/src/workspaces"
-if on src cloud transfer moving --back 2>"$T/return-refused"; then
-  echo "a return replaced a copy in a read-only parent folder"; exit 1
-fi
+refuses "the destination could not restore it" on src cloud transfer moving --back
 on src --json cloud transfer moving --status | python3 -c 'import sys,json; t=json.load(sys.stdin); t=t.get("transfer",t); assert t["phase"]=="failed" and "restoring it on the destination" in t["log"], t'
 on src cloud transfer moving --back --cancel >/dev/null
 chmod 755 "$T/src/workspaces"
@@ -623,7 +621,7 @@ grep -q "compute instances delete chauffeur-worker-w1 --delete-disks=all --proje
 for _ in $(seq 1 20); do pgrep -f "$FORWARD" >/dev/null || break; sleep 0.1; done
 refute pgrep -f "$FORWARD"
 test ! -e "$T/src/home/workers/w1.sock"
-on src worker list | grep -q "^No worker.$"
+on src worker list | has "^No worker.$"
 # Its entry goes with it; the Include stays, the only line Chauffeur wrote in ~/.ssh/config.
 refute grep -q "$HOST" "$T/src/home/ssh_config"
 test "$(cat "$T/user/.ssh/config")" = "Include \"$T/src/home/ssh_config\""
@@ -681,7 +679,7 @@ if [ -n "${AUTOMATIC:-}" ]; then
   stopped
   echo "== automatic delete. a stopped worker is deleted on demand, its disk and account with it"
   on src worker delete "$AUTO" --yes >/dev/null
-  on src worker list | grep -q '^No worker.$'
+  on src worker list | has '^No worker.$'
   test ! -e "$T/fake/instances/chauffeur-worker-$AUTO"
   test ! -e "$T/fake/accounts/cw-backup-$AUTO@e2e-project.iam.gserviceaccount.com"
   refute grep -q "$AUTO" "$T/src/home/ssh_config"

@@ -59,9 +59,7 @@ login_remote = "echo 'Open https://phone.example/device'; echo 'Code: E2E2'"
 TOML
 
 c() { "$BIN/chauffeur" "$@"; }
-# A check on a command's output (`c ls | has "^name"`): reads all of it first, so that under
-# pipefail the command never dies of SIGPIPE when grep stops at its first match.
-has() { local out; out=$(cat); grep -q "$@" <<< "$out"; }
+source "$(dirname "$0")/e2e-lib.sh"
 c daemon start
 echo "== reviews. history is empty on a fresh daemon and no model runs without reports"
 bun scripts/app-call.ts reviews.info '{}' | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["reports"] == [] and r["followups"] == [] and r["projection"] is None and not r["running"] and not r["auto_refresh_enabled"], r'
@@ -138,7 +136,7 @@ r = json.load(sys.stdin)
 w = [w for w in r["workspaces"] if w["slug"] == "e2e-one"][0]
 assert w["section"] == "Back end" and w["section_id"] == r["sections"][0]["id"], r
 assert [s["name"] for s in r["sections"]] == ["Back end"], r'
-if c section new back end 2>/dev/null; then echo "a second section took the same name"; exit 1; fi
+refuses "a section is already named back end" c section new back end
 c section rm "Back end" | has "^no sections"
 c --json show e2e-one | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["section"] is None and w["section_id"] is None, w'
 echo "== section shortcuts. several repos are launchable on their own and as a group"
@@ -152,7 +150,7 @@ c section repos Shop alpha
 c --json section ls | python3 -c 'import sys,json; r=json.load(sys.stdin); assert [(s["name"], s["repos"]) for s in r["sections"]] == [("alpha", ["alpha"]), ("beta", ["beta"]), ("Shop", ["alpha"])], r'
 c --json show from-shop | python3 -c 'import sys,json; w=json.load(sys.stdin); assert [t["repo"] for t in w["worktrees"]] == ["beta", "alpha"], w'
 c section repos Shop
-if c new --section Shop --name cleared 2>/dev/null; then echo "a cleared section used the global defaults"; exit 1; fi
+refuses "Shop has no default repos" c new --section Shop --name cleared
 for name in from-alpha from-beta from-shop; do c archive "$name" --force; done
 for name in alpha beta Shop; do c section rm "$name"; done
 test -d "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/alpha"
@@ -177,7 +175,7 @@ ROUTINE_FILE="$CHAUFFEUR_WORKSPACES_DIR/routine-triage/.chauffeur/routine.toml"
 sed 's/"08:00"/"07:30"/' "$ROUTINE_FILE" > "$T/routine.toml"
 c routine edit Triage --file "$T/routine.toml" | has "v2"
 grep -q '"07:30"' "$ROUTINE_FILE"
-if printf 'name = "Triage"\n' | c routine edit Triage --file - 2>/dev/null; then echo "an invalid routine file was saved"; exit 1; fi
+printf 'name = "Triage"\n' | refuses "the routine's file is not valid" c routine edit Triage --file -
 # Inside the routine's workspace, the routine is that workspace's.
 CHAUFFEUR_WORKSPACE_ID="$ROUTINE_WS" c --json routine show | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["version"] == 2, r'
 c --json routine run Triage | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["trigger"] == "manual" and r["version"] == 2, r'
@@ -192,7 +190,7 @@ messages = [m["text"] for w in r["workspaces"] for chat in w["chats"] for m in c
 assert messages == ["Triage the new tickets"], r
 assert r["workspaces"][0]["path"].endswith("/e2e-routine-src"), r'
 c activity --since 1h | has "^- .*  Triage the new tickets$"
-if c activity --since yesterday 2>/dev/null; then echo "an unreadable time was taken"; exit 1; fi
+refuses "\"yesterday\" is not a time" c activity --since yesterday
 c routine rm Triage | has "its workspace stays"
 echo "== sessions. a declared login is checked, renewed through its link, then holds"
 c new --name e2e-sessions >/dev/null
@@ -249,7 +247,7 @@ c archive routine-triage --force >/dev/null
 c archive e2e-routine-src --force >/dev/null
 # Find routines: nothing waits before an analysis, and one with no day to read is refused.
 c routine suggestions | has "^no suggestion waiting"
-if c routine find --days 0 2>/dev/null; then echo "an analysis of 0 days started"; exit 1; fi
+refuses "reads from 1 to 90 days back, not 0" c routine find --days 0
 
 if [[ -f distribution/e2e-database.sh ]]; then
   # shellcheck source=/dev/null
@@ -265,10 +263,10 @@ test "$(chat_ids)" = "$FIRST"
 c chats e2e-one --all | has "^$SECOND .*Second look  \[closed"
 c chat reopen "$SECOND" >/dev/null
 test "$(chat_ids)" = "$FIRST $SECOND"
-if c chat delete "$SECOND" </dev/null 2>/dev/null; then echo "a chat was deleted without asking"; exit 1; fi
+refuses "Pass --yes to go ahead without being asked" c chat delete "$SECOND" </dev/null
 c chat delete "$SECOND" --yes >/dev/null
 test "$(chat_ids --all)" = "$FIRST"
-if c chat rename "$SECOND" again 2>/dev/null; then echo "a deleted chat was renamed"; exit 1; fi
+refuses "not found" c chat rename "$SECOND" again
 # A shell command (`!`), the app's way (the Unix socket the CLI uses refuses it): run in the
 # workspace folder, no agent started.
 shell_params() { python3 -c 'import sys,json; print(json.dumps({"chat": sys.argv[1], "command": sys.argv[2]}))' "$@"; }
@@ -292,7 +290,7 @@ import sys,json; c=json.load(sys.stdin)
 assert c["kind"] == "design" and c["agent"] == "codex" and c["permission_mode"] == "auto", c
 print(c["id"])')
 c chat delete "$CODEX_DESIGN" --yes >/dev/null
-if c chat e2e-one --from "$FIRST" 2>/dev/null; then echo "a chat that is not a design chat started from another"; exit 1; fi
+refuses "Usage: chauffeur chat --design --from" c chat e2e-one --from "$FIRST"
 # Its canvas: canvas.json read from its folder, the screens served on their own origin only.
 c canvas "$DESIGN" | has "no screens yet"
 DDIR="$CHAUFFEUR_WORKSPACES_DIR/e2e-one/.chauffeur/designs/$DESIGN"
@@ -318,7 +316,7 @@ if EXPORT_ERROR=$(c export "$DESIGN" other.html 2>&1); then
   echo "an export of an unlisted screen was accepted"; exit 1
 fi
 grep -q "other.html is not a screen of this design" <<< "$EXPORT_ERROR"
-if c export "$DESIGN" 2>/dev/null; then echo "an export without screens was accepted"; exit 1; fi
+refuses "Usage: chauffeur export <CHAT> <FILES>" c export "$DESIGN"
 # Comments (story 51): on a screen of the canvas, in comments.json, listed by screen; a reply follows its thread.
 c comments "$DESIGN" | has "no comments yet"
 # Sharing (story 51): off without a share service (Core names none); with one, the state of an
@@ -327,15 +325,15 @@ c share "$DESIGN" | has "sharing is off"
 sed -i.bak 's|^url = "" # e2e share url$|url = "https://share.example.com"|' "$CHAUFFEUR_HOME/settings.toml"
 sleep 1.5
 c share "$DESIGN" | has "not shared"
-if c share "$DESIGN" --with bob@example.com 2>/dev/null; then echo "a design was shared without a sign-in"; exit 1; fi
-if c share "$DESIGN" --team 2>/dev/null; then echo "a design was opened to the team without a sign-in"; exit 1; fi
-if c share "$FIRST" 2>/dev/null; then echo "a plain chat had a share state"; exit 1; fi
+refuses "Set office.google_client_id" c share "$DESIGN" --with bob@example.com
+refuses "Set office.google_client_id" c share "$DESIGN" --team
+refuses "only a design chat is shared" c share "$FIRST"
 # Workspace sharing (story 53): unshared at first; refused without the sign-in; no suggestion to dismiss.
 c share-workspace e2e-one | has "not shared"
-if c share-workspace e2e-one --suggest bob@example.com 2>/dev/null; then echo "a workspace was shared without a sign-in"; exit 1; fi
-if c share-workspace e2e-one --stop 2>/dev/null; then echo "an unshared workspace was stopped"; exit 1; fi
-if c import-design e2e-one "https://share.example.com/s/0123456789abcdef" 2>/dev/null; then echo "a design was imported without a sign-in"; exit 1; fi
-if c comment "$DESIGN" other.html "nope" 2>/dev/null; then echo "a comment on an unknown screen was accepted"; exit 1; fi
+refuses "Set office.google_client_id" c share-workspace e2e-one --suggest bob@example.com
+refuses "This workspace is not shared" c share-workspace e2e-one --stop
+refuses "Set office.google_client_id" c import-design e2e-one "https://share.example.com/s/0123456789abcdef"
+refuses "other.html is not a screen of this design" c comment "$DESIGN" other.html "nope"
 CID=$(c --json comment "$DESIGN" signed-out.html "Too low" --at 48,83 | python3 -c 'import sys,json; c=json.load(sys.stdin); assert c["pin"]["x"] == 48 and "sent" not in c, c; print(c["id"])')
 c comment "$DESIGN" signed-out.html "Seen" --reply-to "$CID" >/dev/null
 python3 -c 'import json,sys; f=json.load(open(sys.argv[1])); assert [c.get("reply_to") for c in f["comments"]] == [None, sys.argv[2]], f' "$DDIR/comments.json" "$CID"
@@ -346,7 +344,7 @@ c comments "$DESIGN" | has "      .*: Seen"
 # a reply follows its thread; any other file is refused; sending needs a chat that wrote the file.
 mkdir -p "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/.chauffeur/plans" && printf '# Plan\n\nShip it on Friday.\n' > "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/.chauffeur/plans/plan.md"
 c file-comments e2e-one .chauffeur/plans/plan.md | has "no comments yet"
-if c file-comment e2e-one .chauffeur/designs/"$DESIGN"/canvas.json "nope" 2>/dev/null; then echo "a comment on a file that is not markdown was accepted"; exit 1; fi
+refuses "takes no comments" c file-comment e2e-one .chauffeur/designs/"$DESIGN"/canvas.json "nope"
 FCID=$(c --json file-comment e2e-one .chauffeur/plans/plan.md "Too early" --quote "on Friday" | python3 -c 'import sys,json; c=json.load(sys.stdin); assert c["quote"] == "on Friday" and c["screen"] == ".chauffeur/plans/plan.md", c; print(c["id"])')
 c file-comment e2e-one .chauffeur/plans/plan.md "Monday then" --reply-to "$FCID" >/dev/null
 python3 -c 'import json,sys; f=json.load(open(sys.argv[1])); assert [c.get("reply_to") for c in f["comments"]] == [None, sys.argv[2]], f' "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/.chauffeur/comments.json" "$FCID"
@@ -356,9 +354,9 @@ grep -q "say which chat with --to" <<<"$out"
 # A markdown file shared alone (story 57): unshared at first; refused without the sign-in, and for
 # a file that is not markdown.
 c share-file e2e-one .chauffeur/plans/plan.md | has "not shared"
-if c share-file e2e-one .chauffeur/plans/plan.md --with bob@example.com 2>/dev/null; then echo "a file was shared without a sign-in"; exit 1; fi
-if c share-file e2e-one .chauffeur/comments.json 2>/dev/null; then echo "a file that is not markdown had a share state"; exit 1; fi
-if c share-file e2e-one .chauffeur/plans/plan.md --stop 2>/dev/null; then echo "an unshared file was stopped"; exit 1; fi
+refuses "Set office.google_client_id" c share-file e2e-one .chauffeur/plans/plan.md --with bob@example.com
+refuses "Share a markdown file or an HTML/PDF document" c share-file e2e-one .chauffeur/comments.json
+refuses ".chauffeur/plans/plan.md is not shared" c share-file e2e-one .chauffeur/plans/plan.md --stop
 # The capture script only on a screen framed by the app (capture=1), never on the file nor on a plain fetch.
 PLAIN=$(curl -sf "$URL")
 if has "chauffeur:element" <<< "$PLAIN"; then echo "the capture script was served without capture=1"; exit 1; fi
@@ -377,7 +375,7 @@ grep -q "Linear tickets: E2E-1, E2E-2, E2E-3" "$CHAUFFEUR_WORKSPACES_DIR/e2e-one
 c ticket remove E2E-1 e2e-3 --workspace e2e-one >/dev/null
 c ticket refresh --workspace e2e-one >/dev/null
 test "$(c --json show e2e-one | python3 -c 'import sys,json; print(" ".join(t["identifier"] for t in json.load(sys.stdin)["tickets"]))')" = "E2E-2"
-if c ticket add --workspace e2e-one -- '--upload-pack=touch /tmp/pwned' 2>/dev/null; then echo "a bad ticket was attached"; exit 1; fi
+refuses "is not a Linear ticket identifier" c ticket add --workspace e2e-one -- '--upload-pack=touch /tmp/pwned'
 test ! -e "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/.chauffeur/tickets.md"
 c archive e2e-one
 test ! -d "$CHAUFFEUR_WORKSPACES_DIR/e2e-one"
@@ -388,12 +386,12 @@ c archive e2e-one --force
 
 # Jev: off until a key is saved and it is turned on; the key stays in this daemon's secrets.
 c jev | has "off, from 60% of the context, no TypeSafe key"
-if c jev on 2>/dev/null; then echo "Jev turned on without a key"; exit 1; fi
+refuses "save a TypeSafe API key before turning Jev on" c jev on
 echo "ts_e2e-key" | c jev key >/dev/null
 test "$(cat "$CHAUFFEUR_HOME/secrets/jev-api-key")" = "ts_e2e-key"
 c jev on >/dev/null
 c jev threshold 40 | has "on, from 40% of the context, TypeSafe key saved"
-if c jev threshold 0 2>/dev/null; then echo "a 0% threshold was taken"; exit 1; fi
+refuses "the threshold is a percentage between 1 and 95" c jev threshold 0
 c jev key --remove | has "off, from 40% of the context, no TypeSafe key"
 test ! -e "$CHAUFFEUR_HOME/secrets/jev-api-key"
 
@@ -622,7 +620,7 @@ import sys,json; agents={a["agent"]: a for a in json.load(sys.stdin)["agents"]}
 local=[m for m in agents["codex"]["models"] if m["id"] == "ollama/tiny"]
 assert local and local[0]["name"] == "tiny (local)", agents["codex"]'
 c ollama | has "tiny"
-if c ollama pull "bad name" 2>/dev/null; then echo "a model name with a space was pulled"; exit 1; fi
+refuses "is not a model name" c ollama pull "bad name"
 
 # From inside a workspace or an agent's session, the daemon commands refuse to stop the default
 # daemon (~/.chauffeur): the one the agent's own chats run on. This throwaway daemon passes for it
