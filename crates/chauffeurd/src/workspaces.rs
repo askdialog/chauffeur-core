@@ -2787,12 +2787,24 @@ impl WorkspaceManager {
             self.progress(&row.id, format!("stopped {killed} leftover processes"));
         }
 
-        let worktrees: Vec<WorktreeRow> = d
+        if !row.explore
+            && let Err(error) = crate::worktree_sync::before_archive(&d, &git, &row).await
+        {
+            self.set_state(
+                &row.id,
+                WorkspaceState::CleanupFailed,
+                Some(format!("could not inventory worktrees: {error}")),
+            )?;
+            return self.get(&row.id);
+        }
+        let mut worktrees: Vec<WorktreeRow> = d
             .store
             .worktrees_of(&row.id)?
             .into_iter()
             .filter(|w| !w.removed)
             .collect();
+        // An adopted checkout can be inside another worktree. Snapshot it before removing its parent.
+        worktrees.sort_by_key(|w| std::cmp::Reverse(Path::new(&w.path).components().count()));
 
         for worktree in &worktrees {
             let settings = self
@@ -2836,6 +2848,17 @@ impl WorkspaceManager {
             let path = Path::new(&worktree.path);
             if !path.exists() {
                 d.store.set_worktree_removed(&worktree.id, true, None)?;
+                continue;
+            }
+            // A nested checkout whose snapshot or removal failed must survive with its parent.
+            if worktrees.iter().any(|nested| {
+                let nested_path = Path::new(&nested.path);
+                nested_path != path && nested_path.starts_with(path) && nested_path.exists()
+            }) {
+                errors.push(format!(
+                    "a nested worktree under {} could not be removed",
+                    path.display()
+                ));
                 continue;
             }
             if !row.explore

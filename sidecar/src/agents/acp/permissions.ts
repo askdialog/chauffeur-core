@@ -1,6 +1,6 @@
-// What a chat on an ACP agent allows by itself, refuses, or puts to the user. Vibe has no OS sandbox
-// and no hooks (docs/adr/mistral-vibe-third-agent.md): it runs in its `ask` mode, so every tool call
-// it gates comes to the sidecar as `session/request_permission`, and Chauffeur's guards live here.
+// What Chauffeur allows, refuses or puts to the user when an ACP agent requests permission.
+// Vibe has no OS sandbox. In native Smart Approve, Vibe may run a tool without requesting
+// permission (docs/adr/vibe-smart-approve.md).
 // They are weaker than a sandbox: a shell command allowed is not confined. So a shell command is
 // never allowed by itself in an exploration or a design chat, only by the user; `bypass_permissions`
 // alone runs them without asking.

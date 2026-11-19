@@ -29,6 +29,7 @@ export class FakeHost implements SessionHost {
   readonly events: ChatEvent[] = [];
   readonly worktrees: string[] = [];
   readonly removed: string[] = [];
+  readonly observed: string[] = [];
   endedCount = 0;
   worktreeError: Error | undefined;
 
@@ -45,6 +46,10 @@ export class FakeHost implements SessionHost {
   async removeWorktree(path: string): Promise<void> {
     if (this.worktreeError) throw this.worktreeError;
     this.removed.push(path);
+  }
+
+  async observeWorktree(path: string): Promise<void> {
+    this.observed.push(path);
   }
 
   /** The repos `listRepos` answers: web in the workspace, analytics not. */

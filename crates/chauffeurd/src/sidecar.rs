@@ -9,6 +9,7 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use anyhow::Context;
+use chauffeur_protocol::model::{AgentKind, ChatKind};
 use chauffeur_protocol::rpc::{Incoming, Request, Response, RpcError, codes};
 use chauffeur_protocol::sidecar::{
     Empty, SetEnvParams, SidecarCall, SidecarToDaemon, WorktreeCreateResult,
@@ -397,6 +398,19 @@ async fn handle_hook_call(daemon: &Arc<Daemon>, call: SidecarToDaemon) -> Result
                 .chats
                 .worktree_remove(&params.chat_id, &params.path)
                 .await?;
+            Ok(serde_json::to_value(Empty {})?)
+        }
+        SidecarToDaemon::WorktreeObserved(params) => {
+            let chat = daemon
+                .store
+                .chat(&params.chat_id)?
+                .ok_or_else(|| Error::not_found(format!("chat {}", params.chat_id)))?;
+            if chat.agent != AgentKind::Vibe || chat.kind == ChatKind::Design {
+                return Err(Error::BadRequest(
+                    "only Vibe workspace chats report Git worktrees".into(),
+                ));
+            }
+            crate::worktree_sync::observe(daemon, &chat.workspace_id, &params.path).await?;
             Ok(serde_json::to_value(Empty {})?)
         }
         SidecarToDaemon::ToolListRepos(params) => Ok(serde_json::to_value(

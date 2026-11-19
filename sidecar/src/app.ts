@@ -42,6 +42,9 @@ export function createSidecar(options: { agents: Agent[]; write: (line: string) 
       removeWorktree: async (chatId, path) => {
         await request("hook.worktree_remove", { chat_id: chatId, path });
       },
+      observeWorktree: async (chatId, path) => {
+        await request("hook.worktree_observed", { chat_id: chatId, path });
+      },
       listRepos: (chatId) => request("tool.list_repos", { chat_id: chatId }),
       addRepo: (chatId, repo) => request("tool.add_repo", { chat_id: chatId, repo }),
       delegate: (params) => request("tool.delegate", params),

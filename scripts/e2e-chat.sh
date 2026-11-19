@@ -131,6 +131,34 @@ PYDOC
   c archive document-request --force >/dev/null
 }
 
+check_vibe_smart_approve() {
+  local workspace_root
+  local -a args=(--agent vibe --permission-mode auto)
+  if [ -n "${VIBE_SMART_MODEL:-}" ]; then args+=(--model "$VIBE_SMART_MODEL"); fi
+  echo "== 5v2. Vibe Auto reports a direct Git worktree and Chauffeur archives it"
+  c new --name vibe-auto-worktree >/dev/null
+  workspace_root=$(c --json show vibe-auto-worktree | python3 -c 'import json,sys; print(json.load(sys.stdin)["path"])')
+  c chat vibe-auto-worktree "${args[@]}" --prompt "Run exactly \`git -C alpha worktree add --detach \"$workspace_root/smart-checkout\"\` from the workspace root with Bash. This makes a disposable checkout inside this test workspace. Reply with the result." >/dev/null
+  c --json wait vibe-auto-worktree --timeout 240 | python3 -c '
+import json, sys
+result = json.load(sys.stdin)
+assert not result["timed_out"] and not result["open_requests"], result
+'
+  c --json show vibe-auto-worktree | python3 -c '
+import json, sys
+worktrees = json.load(sys.stdin)["worktrees"]
+assert any(w["path"].endswith("/smart-checkout") and w["origin"] == "agent" for w in worktrees), worktrees
+'
+  c archive vibe-auto-worktree --force >/dev/null
+  test ! -e "$workspace_root/smart-checkout"
+}
+
+if [ "${VIBE_SMART_APPROVE_ONLY:-}" = 1 ]; then
+  check_vibe_smart_approve
+  echo "E2E VIBE SMART APPROVE OK"
+  exit 0
+fi
+
 if [ "${DOCUMENT_REQUEST_ONLY:-}" = 1 ]; then
   check_document_request
   echo "E2E DOCUMENT REQUEST OK"
@@ -1329,6 +1357,9 @@ assert chats[0]["agent"] == "vibe" and chats[0]["agent_session_id"], chats'
   c send vibe-one "Which single word did you reply just before? Reply with that word only." >/dev/null
   c --json wait vibe-one --timeout 240 | python3 -c 'import sys,json; t=json.load(sys.stdin)["last_text"]; print(t); assert "pong" in (t or "").lower(), t'
   c archive vibe-one --force >/dev/null
+  if [ -n "${VIBE_SMART_APPROVE:-}" ]; then
+    check_vibe_smart_approve
+  fi
 fi
 if [ -n "${OLLAMA:-}" ]; then
   # Needs Ollama installed and the model on disk (`chauffeur ollama pull qwen3.8`); no Codex login.

@@ -18,12 +18,16 @@ const BASE: SessionStartParams = {
   env: { CHAUFFEUR_WORKSPACE_ID: "ws-1" },
 };
 
-async function started(params: Partial<SessionStartParams> = {}) {
+async function started(params: Partial<SessionStartParams> = {}, smartApprove = true) {
   const host = new FakeHost();
   let acp: FakeAcp | undefined;
   let ids = 0;
   const session = new VibeSession({ ...BASE, ...params }, host, {
-    spawn: (options) => (acp = new FakeAcp(options)),
+    spawn: (options) => {
+      acp = new FakeAcp(options);
+      acp.smartApprove = smartApprove;
+      return acp;
+    },
     resolveExecutable: () => "/home/me/.local/bin/vibe-acp",
     baseEnv: { PATH: "/usr/bin" },
     initTimeoutMs: 500,
@@ -33,6 +37,42 @@ async function started(params: Partial<SessionStartParams> = {}) {
   const result = await session.start();
   return { session, host, result, acp: acp as FakeAcp };
 }
+
+test("Auto uses native Smart Approve, displays its shell calls, and reports successful literal worktree creations", async () => {
+  const { session, acp, host } = await started({ permission_mode: "auto" });
+  expect(acp.sent("session/set_mode")).toEqual([{ sessionId: SESSION_ID, modeId: "smart-approve" }]);
+  session.send("Make a worktree");
+  await flush();
+  const command = "git -C web worktree add --detach ../scratch";
+  acp.update({ sessionUpdate: "tool_call", toolCallId: "t1", kind: "execute", status: "pending", rawInput: { command } });
+  acp.update({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", rawOutput: { stdout: "HEAD is now at abc", stderr: "Preparing worktree" } });
+  acp.update({ sessionUpdate: "tool_call", toolCallId: "t2", kind: "execute", status: "completed", rawOutput: { command, exit_code: 1 } });
+  acp.update({ sessionUpdate: "tool_call", toolCallId: "t3", kind: "execute", status: "completed", rawOutput: { command: "cd web && git worktree add ../other", exit_code: 0 } });
+  expect(host.events.find((event) => event.type === "tool_call")).toMatchObject({ name: "Bash", input: { command } });
+  expect(host.types()).not.toContain("permission_request");
+  expect(host.events.find((event) => event.type === "notice")).toMatchObject({ level: "warning" });
+  expect(host.observed).toEqual(["/w/web/../scratch"]);
+  await session.configure({ permissionMode: "default" });
+  acp.endPrompt();
+  await flush();
+  session.send("Continue");
+  await flush();
+  expect(acp.sent("session/set_mode").at(-1)).toEqual({ sessionId: SESSION_ID, modeId: "ask" });
+  await session.stop();
+});
+
+test("Auto stays in Ask for read-only chats and when Smart Approve is unavailable", async () => {
+  for (const [parameters, offersSmartApprove] of [
+    [{ read_only: true }, true],
+    [{ design_dir: "/design" }, true],
+    [{}, false],
+  ] as const) {
+    const { session, acp, host } = await started({ permission_mode: "auto", ...parameters }, offersSmartApprove);
+    expect(acp.sent("session/set_mode")).toEqual([{ sessionId: SESSION_ID, modeId: "ask" }]);
+    expect(host.types().includes("notice")).toBe(!offersSmartApprove);
+    await session.stop();
+  }
+});
 
 test("a session opens in Vibe's ask mode, with the repos as directories and Chauffeur's tools over HTTP", async () => {
   const { session, result, acp, host } = await started({ model: "mistral-large-4-0", effort: "low", delegate: true });

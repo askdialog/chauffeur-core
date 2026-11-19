@@ -17,7 +17,7 @@ use tokio::sync::Mutex;
 use crate::git::Git;
 use crate::paths::AGENT_WORKTREES_DIR;
 use crate::store::{Store, WorkspaceRow, WorktreeRow, now};
-use crate::{Daemon, Result};
+use crate::{Daemon, Error, Result};
 
 /// What a pass changed.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -63,6 +63,47 @@ pub async fn sync(daemon: &Arc<Daemon>, workspace: &str) -> Result<()> {
     Ok(())
 }
 
+/// Verifies a direct Git worktree reported by Vibe against the workspace's inventory.
+pub async fn observe(daemon: &Arc<Daemon>, workspace: &str, path: &str) -> Result<()> {
+    let row = daemon.workspaces.row(workspace)?;
+    let _admission = daemon.execution.admit(&row.id)?;
+    let root = canonical(Path::new(&row.path));
+    let path = std::fs::canonicalize(path)?;
+    if path == root || !path.starts_with(&root) {
+        return Err(Error::BadRequest(format!(
+            "{} is outside the workspace",
+            path.display()
+        )));
+    }
+    sync(daemon, &row.id).await?;
+    if daemon
+        .store
+        .worktrees_of(&row.id)?
+        .iter()
+        .any(|w| !w.removed && canonical(Path::new(&w.path)) == path)
+    {
+        Ok(())
+    } else {
+        Err(Error::BadRequest(format!(
+            "Git did not confirm {} as a worktree of a workspace repository",
+            path.display()
+        )))
+    }
+}
+
+/// Adopts any remaining linked worktree before the archive can remove the workspace directory.
+pub(crate) async fn before_archive(daemon: &Daemon, git: &Git, row: &WorkspaceRow) -> Result<()> {
+    adopt_unknown(
+        &daemon.store,
+        git,
+        row,
+        &|clone| daemon.repos.lock_for(clone),
+        &mut Synced::default(),
+        true,
+    )
+    .await
+}
+
 pub async fn sync_workspace(
     store: &Store,
     git: &Git,
@@ -71,7 +112,7 @@ pub async fn sync_workspace(
 ) -> Result<Synced> {
     let mut synced = Synced::default();
     follow_branches(store, git, row, &mut synced).await?;
-    adopt_unknown(store, git, row, &lock_for, &mut synced).await?;
+    adopt_unknown(store, git, row, &lock_for, &mut synced, false).await?;
     Ok(synced)
 }
 
@@ -113,6 +154,7 @@ async fn adopt_unknown(
     row: &WorkspaceRow,
     lock_for: &impl Fn(&Path) -> Arc<Mutex<()>>,
     synced: &mut Synced,
+    require_inventory: bool,
 ) -> Result<()> {
     let folder = canonical(Path::new(&row.path));
     // One template per clone: what a worktree of that repo is named and cut from.
@@ -137,6 +179,7 @@ async fn adopt_unknown(
             .collect();
         let listed = match git.worktree_list(Path::new(&clone)).await {
             Ok(listed) => listed,
+            Err(error) if require_inventory => return Err(error.into()),
             Err(error) => {
                 tracing::warn!(%clone, "could not list the worktrees: {error:#}");
                 continue;
@@ -146,6 +189,7 @@ async fn adopt_unknown(
             let path = canonical(&entry.path);
             if entry.prunable
                 || path == canonical(Path::new(&clone))
+                || path == folder
                 || !path.starts_with(&folder)
                 || known.contains(&path)
             {

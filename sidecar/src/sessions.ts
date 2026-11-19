@@ -40,6 +40,7 @@ export interface DaemonLink {
   emit(chatId: string, event: ChatEvent): void;
   createWorktree(chatId: string, name: string): Promise<string>;
   removeWorktree(chatId: string, path: string): Promise<void>;
+  observeWorktree(chatId: string, path: string): Promise<void>;
   listRepos(chatId: string): Promise<ToolListReposResult>;
   addRepo(chatId: string, repo: string): Promise<ToolAddRepoResult>;
   delegate(params: ToolDelegateParams): Promise<ToolDelegateStarted>;
@@ -321,6 +322,7 @@ export class SessionManager {
       emit: (event) => this.events.push(chatId, event),
       createWorktree: (name) => daemon().createWorktree(chatId, name),
       removeWorktree: (path) => daemon().removeWorktree(chatId, path),
+      observeWorktree: (path) => daemon().observeWorktree(chatId, path),
       listRepos: () => daemon().listRepos(chatId),
       addRepo: (repo) => daemon().addRepo(chatId, repo),
       delegate: (params) => daemon().delegate({ ...params, chat_id: chatId }),

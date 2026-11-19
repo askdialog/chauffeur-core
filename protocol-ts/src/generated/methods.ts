@@ -385,6 +385,7 @@ import type { WorkspaceShareState } from "./WorkspaceShareState";
 import type { WorkspacesResult } from "./WorkspacesResult";
 import type { WorktreeCreateParams } from "./WorktreeCreateParams";
 import type { WorktreeCreateResult } from "./WorktreeCreateResult";
+import type { WorktreeObservedParams } from "./WorktreeObservedParams";
 import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 
 export const PROTOCOL_VERSION = 22;
@@ -785,6 +786,7 @@ export type SidecarMethods = {
 export type DaemonHookMethods = {
   "hook.worktree_create": [WorktreeCreateParams, WorktreeCreateResult];
   "hook.worktree_remove": [WorktreeRemoveParams, Empty];
+  "hook.worktree_observed": [WorktreeObservedParams, Empty];
   "tool.list_repos": [ToolChatParams, ToolListReposResult];
   "tool.add_repo": [ToolAddRepoParams, ToolAddRepoResult];
   "tool.delegate": [ToolDelegateParams, ToolDelegateStarted];
