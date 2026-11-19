@@ -36,9 +36,10 @@ export function SessionsSection({ workspace, session }: { workspace: WorkspaceIn
   const login = async (name: string) => {
     setLoggingIn(name);
     try {
-      const result = await client.call("session.login", { workspace: workspace.id, name });
+      const result = await client.call("session.login", { workspace: workspace.id, name, remote: false });
       if (result.url) await openExternal(result.url);
-      else if (result.output) toast(result.output, "info");
+      // The code the page asks for, when it asks one, or what the login said.
+      if (result.output) toast(result.output, "info");
     } catch (error) {
       toast(`Could not start the login: ${errorMessage(error)}`, "error");
     } finally {

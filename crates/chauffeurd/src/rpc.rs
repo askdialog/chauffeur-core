@@ -338,7 +338,7 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::SessionLogin(params) => to_value(
             daemon
                 .sessions
-                .login(daemon, &params.workspace, &params.name)
+                .login(daemon, &params.workspace, &params.name, params.remote)
                 .await?,
         ),
         ClientCall::ProcessSetup(params) => to_value(

@@ -251,7 +251,10 @@ mod tests {
     #[test]
     fn mobile_design_resources_are_user_only_and_other_phone_and_office_calls_are_shared() {
         for method in ClientMethod::ALL {
-            if *method == ClientMethod::DesignResource {
+            if matches!(
+                method,
+                ClientMethod::DesignResource | ClientMethod::SessionLogin
+            ) {
                 assert!(method.phone());
                 assert!(!method.office());
                 assert_eq!(method.scope(), Scope::User);

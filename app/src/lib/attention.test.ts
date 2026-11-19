@@ -50,7 +50,7 @@ describe("needingYou", () => {
 });
 
 test("a chat waiting on session logins only is told apart from one asking a permission", () => {
-  const session: OpenRequest = { chat_id: "c", request: { type: "session_request", request_id: "s", session: "aws", label: "AWS" } };
+  const session: OpenRequest = { chat_id: "c", request: { type: "session_request", request_id: "s", session: "aws", label: "AWS", remote_login: false } };
   const permission: OpenRequest = {
     chat_id: "c",
     request: { type: "permission_request", request_id: "p", tool_name: "Bash", input: {}, title: null },

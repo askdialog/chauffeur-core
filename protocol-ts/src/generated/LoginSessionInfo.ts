@@ -20,4 +20,8 @@ checked_at: string | null,
 /**
  * A login of it is running.
  */
-logging_in: boolean, };
+logging_in: boolean, 
+/**
+ * It declares a `login_remote`: it can be renewed from the phone.
+ */
+remote_login: boolean, };

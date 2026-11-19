@@ -55,6 +55,7 @@ url = "" # e2e share url
 label = "E2E service"
 check = "test -f $T/e2e-session && echo expires_at=2030-01-01T00:00:00Z"
 login = "echo 'Open https://login.example/device'; echo 'Code: E2E1'; touch $T/e2e-session"
+login_remote = "echo 'Open https://phone.example/device'; echo 'Code: E2E2'"
 TOML
 
 c() { "$BIN/chauffeur" "$@"; }
@@ -206,6 +207,10 @@ r = json.load(sys.stdin)
 assert r["url"] == "https://login.example/device" and "Code: E2E1" in r["output"], r'
 for _ in $(seq 1 50); do c session check e2e --workspace e2e-sessions >/dev/null 2>&1 && break; sleep 0.1; done
 c session check e2e --workspace e2e-sessions | has "holds until 2030-01-01"
+c --json session login e2e --remote --workspace e2e-sessions | python3 -c '
+import sys, json
+r = json.load(sys.stdin)
+assert r["url"] == "https://phone.example/device" and "Code: E2E2" in r["output"] and r["session"]["remote_login"], r'
 echo "== sessions. ensure asks the user in the chat; declined it fails, logged in it answers"
 rm -f "$T/e2e-session"
 c chat e2e-sessions >/dev/null
@@ -219,7 +224,7 @@ print(ids[0] if ids else "")')
     [ -n "$id" ] && { echo "$id"; return; }
     sleep 0.1
   done
-  echo "no session request was asked" >&2; exit 1
+  echo "no session request was asked: $(cat "$T/ensure.err" 2>/dev/null)" >&2; exit 1
 }
 c session ensure e2e --workspace e2e-sessions >/dev/null 2>"$T/ensure.err" & ensure=$!
 request=$(open_session_request)

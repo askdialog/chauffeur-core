@@ -191,6 +191,7 @@ import type { LoadoutParams } from "./LoadoutParams";
 import type { LoginSessionEnsureParams } from "./LoginSessionEnsureParams";
 import type { LoginSessionInfo } from "./LoginSessionInfo";
 import type { LoginSessionLogin } from "./LoginSessionLogin";
+import type { LoginSessionLoginParams } from "./LoginSessionLoginParams";
 import type { LoginSessionParams } from "./LoginSessionParams";
 import type { LoginSessionsResult } from "./LoginSessionsResult";
 import type { McpConnectParams } from "./McpConnectParams";
@@ -513,7 +514,7 @@ export type ClientMethods = {
   "process.setup": [SetupScriptParams, ProcessInfo];
   "session.list": [WorkspaceParams, LoginSessionsResult];
   "session.check": [LoginSessionParams, LoginSessionInfo];
-  "session.login": [LoginSessionParams, LoginSessionLogin];
+  "session.login": [LoginSessionLoginParams, LoginSessionLogin];
   "session.ensure": [LoginSessionEnsureParams, LoginSessionInfo];
   "process.stop": [StopProcessParams, ProcessInfo];
   "chat.create": [CreateChatParams, ChatInfo];
@@ -1119,6 +1120,7 @@ export const PHONE_METHODS = [
   "workspace.create",
   "workspace.list",
   "workspace.get",
+  "session.login",
   "chat.list",
   "chat.send",
   "chat.send_confirmed",

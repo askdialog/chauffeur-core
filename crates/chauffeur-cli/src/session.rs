@@ -2,8 +2,9 @@
 //! (docs/adr/declared-sessions.md). Inside a workspace, it is that workspace by default.
 use crate::client::Client;
 use chauffeur_protocol::client::{
-    ClientCall, LoginSessionEnsureParams, LoginSessionInfo, LoginSessionLogin, LoginSessionParams,
-    LoginSessionState, LoginSessionsResult, WorkspaceParams,
+    ClientCall, LoginSessionEnsureParams, LoginSessionInfo, LoginSessionLogin,
+    LoginSessionLoginParams, LoginSessionParams, LoginSessionState, LoginSessionsResult,
+    WorkspaceParams,
 };
 use clap::Subcommand;
 
@@ -27,8 +28,9 @@ pub enum Action {
         name: String,
         #[arg(long, env = "CHAUFFEUR_WORKSPACE_ID")]
         workspace: String,
-        /// The chat to ask in; by default the caller's, else the workspace's last active one.
-        #[arg(long, env = "CHAUFFEUR_CHAT_ID")]
+        /// The chat to ask in; by default the caller's (in its own workspace), else the
+        /// workspace's last active one.
+        #[arg(long)]
         chat: Option<String>,
     },
     /// Start a session's login, and print the link it gives to open. Refused to agents.
@@ -36,6 +38,9 @@ pub enum Action {
         name: String,
         #[arg(long, env = "CHAUFFEUR_WORKSPACE_ID")]
         workspace: String,
+        /// Run its `login_remote`: print the link (and code) to open on another device.
+        #[arg(long)]
+        remote: bool,
     },
 }
 
@@ -58,6 +63,16 @@ fn line(session: &LoginSessionInfo) -> String {
         "{}  {}  {state}{login}  ({from})",
         session.name, session.label
     )
+}
+
+/// The caller's chat (`CHAUFFEUR_CHAT_ID`), when it asks about its own workspace: a chat of
+/// another workspace is not where to ask.
+fn callers_chat(workspace: &str) -> Option<String> {
+    let own = std::env::var("CHAUFFEUR_WORKSPACE_ID").ok()?;
+    (own == workspace)
+        .then(|| std::env::var("CHAUFFEUR_CHAT_ID").ok())
+        .flatten()
+        .filter(|chat| !chat.is_empty())
 }
 
 fn print_or<T: serde::Serialize>(json: bool, value: &T, text: impl FnOnce() -> String) {
@@ -105,18 +120,23 @@ pub async fn run(client: &mut Client, action: Action, json: bool) -> anyhow::Res
         } => {
             let session: LoginSessionInfo = client
                 .call(ClientCall::SessionEnsure(LoginSessionEnsureParams {
+                    chat: chat.or_else(|| callers_chat(&workspace)),
                     workspace,
                     name,
-                    chat,
                 }))
                 .await?;
             print_or(json, &session, || line(&session));
         }
-        Action::Login { name, workspace } => {
+        Action::Login {
+            name,
+            workspace,
+            remote,
+        } => {
             let result: LoginSessionLogin = client
-                .call(ClientCall::SessionLogin(LoginSessionParams {
+                .call(ClientCall::SessionLogin(LoginSessionLoginParams {
                     workspace,
                     name,
+                    remote,
                 }))
                 .await?;
             print_or(json, &result, || {
