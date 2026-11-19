@@ -45,6 +45,7 @@ pub mod google;
 pub mod mail;
 mod mentions;
 mod mobile;
+mod questions;
 mod render;
 pub mod ses;
 pub mod session;
@@ -261,6 +262,14 @@ impl Service {
             .route("/v1/shares/{id}/daemon", get(daemon_upgrade))
             .route("/v1/shares/{id}/snapshot", get(snapshot))
             .route("/v1/shares/{id}/canvas", get(canvas))
+            .route(
+                "/v1/shares/{id}/questions",
+                get(questions::list).post(questions::publish),
+            )
+            .route(
+                "/v1/shares/{id}/questions/{question}/vote",
+                post(questions::vote),
+            )
             .route("/v1/shares/{id}/render/{token}/{*path}", get(render_file))
             .route("/v1/shares/{id}/reviewer", get(reviewer_upgrade))
             .route("/v1/shares/{id}/about", get(sign_in::design_about))

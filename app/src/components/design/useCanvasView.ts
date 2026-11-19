@@ -3,7 +3,7 @@
 // zooms. Shared by the app's canvas and a share's reviewer page.
 
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import { type CanvasLayout, fitView, type Size, type View, zoomCentred } from "@/lib/canvas";
+import { type CanvasLayout, fitView, rowTop, type Size, type View, zoomCentred } from "@/lib/canvas";
 
 export function useCanvasView(layout: CanvasLayout, pageIndex: number) {
   const [zoom, setZoom] = useState<View>({ scale: 1, x: 40, y: 40 });
@@ -26,5 +26,20 @@ export function useCanvasView(layout: CanvasLayout, pageIndex: number) {
     setZoom(fitView(layout, area));
   }, [area, layout, pageIndex]);
   const zoomTo = useCallback((scale: number) => area && moveView((z) => zoomCentred(layout, z, scale, area)), [area, layout, moveView]);
-  return { zoom, area, setArea, moveView, fit, zoomTo };
+  const reveal = useCallback((file: string) => {
+    if (!area) return;
+    for (const [index, section] of layout.sections.entries()) {
+      const screen = section.screens.find((screen) => screen.screen.file === file);
+      if (!screen) continue;
+      const left = zoom.x + zoom.scale * screen.x;
+      const top = rowTop(layout, zoom, index);
+      const width = zoom.scale * screen.width;
+      const height = zoom.scale * screen.height;
+      if (left < 0 || top < 0 || left + width > area.width || top + height > area.height) {
+        moveView((view) => ({ ...view, x: (area.width - width) / 2 - zoom.scale * screen.x, y: view.y + (area.height - height) / 2 - top }));
+      }
+      return;
+    }
+  }, [layout, zoom, area, moveView]);
+  return { zoom, area, setArea, moveView, fit, zoomTo, reveal };
 }

@@ -9,8 +9,8 @@
 // screen for the element under it and opens a bubble; the Comments panel lists them and sends
 // the new ones to the agent. "Keep these" sends it the selection, asking to drop the rest.
 
-import type { CanvasResult, ChatInfo, CommentAuthor, DesignComment, Mention } from "@chauffeur/protocol";
-import { Check, ImageDown, MessageSquare, MessageSquarePlus, MessageSquareText, Play, RotateCw, Scan, Send, Share2 } from "lucide-react";
+import type { CanvasResult, ChatInfo, CommentAuthor, DesignComment, DesignQuestion, DesignQuestionOption, Mention } from "@chauffeur/protocol";
+import { Check, Crosshair, ImageDown, MessageSquare, MessageSquarePlus, MessageSquareText, Play, RotateCw, Scan, Send, Share2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { canvasRevision, changedScreens, layoutCanvas, modifiedTimes, noScreens, pageSections, percent, presentOrder, type ShownSection, ZOOM_STEPS } from "@/lib/canvas";
 import type { ChatView } from "@/lib/chat";
@@ -27,6 +27,8 @@ import { Button, cx, Select, type SelectOption, Spinner } from "../ui";
 import { FullScreenSection, PresentScreens } from "./CanvasOverlays";
 import { CommentComposer, CommentsPanel, type Filter, ThreadView } from "./CommentsPanel";
 import { CanvasViewport } from "./CanvasViewport";
+import { DesignQuestions, QuestionsButton } from "./DesignQuestions";
+import { useQuestionScreens } from "./useQuestionScreens";
 import type { MentionSetup } from "./Mentions";
 import { ShareDialog } from "./ShareDialog";
 import type { ScreenCommenting } from "./ScreenComments";
@@ -154,7 +156,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
   useEffect(() => setCanvasPage(chat.id, pageScreens(sections)), [chat.id, sections]);
   const published = useMemo(() => publishedScreens(view.items, result?.dir ?? null), [view.items, result?.dir]);
 
-  const { zoom, area, setArea, moveView, fit, zoomTo } = useCanvasView(layout, pageIndex);
+  const { zoom, area, setArea, moveView, fit, zoomTo, reveal } = useCanvasView(layout, pageIndex);
   const snapshots = useScreenSnapshots(layout, zoom, area, picturesScreens);
   const [fullScreen, setFullScreen] = useState<number | null>(null);
   const [presenting, setPresenting] = useState<number | null>(null);
@@ -212,6 +214,35 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
   // open to; the owner may invite someone else in the same stroke.
   const identity = useApp((s) => s.identity);
   const live = share?.share && !share.share.stopped ? share.share : null;
+  const [questionsOpen, setQuestionsOpen] = useState(false);
+  const [attaching, setAttaching] = useState(false);
+  const [variants, setVariants] = useState<DesignQuestionOption[]>([]);
+  const questionsButton = useRef<HTMLButtonElement>(null);
+  const questionScreens = useQuestionScreens(result, pageIndex, setPage, select, reveal);
+  const loadQuestions = useCallback(() => client.call("design.questions", { chat: chat.id }), [chat.id, live?.id]);
+  const publishQuestion = (question: DesignQuestion) => client.call("design.question_publish", { chat: chat.id, question });
+  const closeQuestions = () => {
+    setQuestionsOpen(false);
+    setAttaching(false);
+    questionsButton.current?.focus();
+  };
+  const toggleQuestions = () => {
+    if (questionsOpen) {
+      closeQuestions();
+      return;
+    }
+    setQuestionsOpen(true);
+    setPanel(false);
+    setCommentMode(false);
+    setDraft(null);
+    setOpenThread(null);
+  };
+  const toggleVariant = (file: string) => {
+    if (!questionScreens.available.has(file)) return;
+    setVariants((options) => options.some((option) => option.file === file)
+      ? options.filter((option) => option.file !== file)
+      : options.length < 20 ? [...options, { file, label: [...labelOf(file)].slice(0, 240).join("") }] : options);
+  };
   const mentionSetup = useMemo<MentionSetup | undefined>(
     () =>
       live
@@ -296,7 +327,9 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
     if (await sendNow(chat, keep)) toast("Sent to the agent");
   };
   const escape = () => {
-    if (draft) setDraft(null);
+    if (attaching) setAttaching(false);
+    else if (questionsOpen) closeQuestions();
+    else if (draft) setDraft(null);
     else if (openThread) setOpenThread(null);
     else if (panel) setPanel(false);
     else if (commentMode) setCommentMode(false);
@@ -376,6 +409,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
   const commenting: ScreenCommenting = {
     commentMode,
     onToggleCommentMode: () => {
+      if (questionsOpen) closeQuestions();
       setCommentMode((on) => !on);
       setDraft(null);
     },
@@ -466,8 +500,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
             size="sm"
             variant={commentMode ? "secondary" : "ghost"}
             onClick={() => {
-              setCommentMode((on) => !on);
-              setDraft(null);
+              commenting.onToggleCommentMode();
             }}
             disabled={layout.sections.length === 0}
             title={commentMode ? "Leave Comment mode (C or Esc)" : "Comment mode (C): click a screen to comment on it, its label for the whole screen"}
@@ -479,7 +512,10 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
           <Button
             size="sm"
             variant={panel ? "secondary" : "ghost"}
-            onClick={() => setPanel((on) => !on)}
+            onClick={() => {
+              if (questionsOpen) closeQuestions();
+              setPanel((on) => !on);
+            }}
             title="The comments, by screen, and sending the new ones to the agent"
             aria-pressed={panel}
             data-testid="canvas-comments"
@@ -488,6 +524,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
             {counts.open > 0 && <span className="rounded-full bg-accent/15 px-1 text-[10.5px] text-accent">{counts.open}</span>}
             {counts.unsent > 0 && <span className="h-1.5 w-1.5 rounded-full bg-accent" title={`${counts.unsent} not sent to the agent`} />}
           </Button>
+          {!chat.brand && <QuestionsButton open={questionsOpen} onClick={toggleQuestions} buttonRef={questionsButton} />}
           <Button
             size="sm"
             variant="ghost"
@@ -550,78 +587,98 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
           </button>
         </div>
       )}
-      <div className="relative min-h-0 flex-1">
-        {!result ? (
-          error ? (
-            <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" data-testid="canvas-error">
-              <div className="max-w-md text-[12.5px] text-danger selectable">Could not read the canvas: {error}</div>
-              <Button size="sm" onClick={() => void reload()} busy={loading}>
-                <RotateCw size={12} /> Retry
-              </Button>
+      {questionsOpen && attaching && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line bg-accent/10 px-3 py-1 text-[12px] text-accent">
+          <Crosshair size={13} /><span className="flex-1">Click the screens to attach to this question.</span>
+          <span>{variants.length} selected</span>
+          <Button size="sm" onClick={() => setAttaching(false)}><Check size={13} /> Done</Button>
+        </div>
+      )}
+      <div className="flex min-h-0 flex-1">
+        <div className="relative min-w-0 flex-1">
+          {!result ? (
+            error ? (
+              <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center" data-testid="canvas-error">
+                <div className="max-w-md text-[12.5px] text-danger selectable">Could not read the canvas: {error}</div>
+                <Button size="sm" onClick={() => void reload()} busy={loading}>
+                  <RotateCw size={12} /> Retry
+                </Button>
+              </div>
+            ) : (
+              <div className="flex h-full items-center justify-center text-faint">
+                <Spinner size={16} />
+              </div>
+            )
+          ) : empty ? (
+            <div className="flex h-full items-center justify-center p-6 text-center text-[12.5px] text-faint" data-testid="canvas-empty">
+              No screens yet. Describe what you want to see in the chat.
             </div>
           ) : (
-            <div className="flex h-full items-center justify-center text-faint">
-              <Spinner size={16} />
-            </div>
-          )
-        ) : empty ? (
-          <div className="flex h-full items-center justify-center p-6 text-center text-[12.5px] text-faint" data-testid="canvas-empty">
-            No screens yet. Describe what you want to see in the chat.
-          </div>
-        ) : (
-          <CanvasViewport
-            key="viewport"
-            layout={layout}
-            zoom={zoom}
-            area={area}
-            setZoom={moveView}
-            onArea={setArea}
-            selection={selection}
-            onSelect={select}
-            flash={flash}
-            commentMode={commentMode}
-            pins={pins}
-            draft={draft}
-            openThread={shownThread}
-            onFrame={onFrame}
-            onCommentAt={startComment}
-            onOpenThread={commenting.onOpenThread}
-            onEscape={escape}
-            onToggleCommentMode={commenting.onToggleCommentMode}
-            popover={overlay ? null : popover}
-            onFullScreen={setFullScreen}
-            onExport={(index) => {
-              const request = sections[index] && sectionExport(sections[index]);
-              if (request && !exporting) void exportPng(request);
-            }}
-            onFit={fit}
-            onActualSize={() => zoomTo(1)}
-            published={published}
-            snapshots={picturesScreens ? snapshots : undefined}
-          />
-        )}
-      {panel && (
-          <CommentsPanel
-            me={identity?.email}
-            unread={unreadThreadIds}
-            threads={threads}
-            counts={counts}
-            stale={stale}
-            busy={busy}
-            error={commentsState.error}
-            filter={filter}
-            labelOf={labelOf}
-            onFilter={setFilter}
-            onSend={() => void sendComments()}
-            onSendThread={(threadId) => void sendThread(threadId)}
-            onOpen={(thread) => {
-              setDraft(null);
-              setOpenThread(thread.comment.id);
-            }}
-            onResolve={resolve}
-            onClose={() => setPanel(false)}
-          />
-        )}
+            <CanvasViewport
+              key="viewport"
+              layout={layout}
+              zoom={zoom}
+              area={area}
+              setZoom={moveView}
+              onArea={setArea}
+              selection={selection}
+              onSelect={select}
+              flash={flash}
+              commentMode={commentMode}
+              pins={pins}
+              draft={draft}
+              openThread={shownThread}
+              onFrame={onFrame}
+              onCommentAt={startComment}
+              onOpenThread={commenting.onOpenThread}
+              onEscape={escape}
+              onToggleCommentMode={commenting.onToggleCommentMode}
+              popover={overlay ? null : popover}
+              onFullScreen={setFullScreen}
+              onExport={(index) => {
+                const request = sections[index] && sectionExport(sections[index]);
+                if (request && !exporting) void exportPng(request);
+              }}
+              onFit={fit}
+              onActualSize={() => zoomTo(1)}
+              published={published}
+              snapshots={picturesScreens ? snapshots : undefined}
+              attachment={questionsOpen && attaching ? { selected: variants.map((option) => option.file), onToggle: toggleVariant } : undefined}
+            />
+          )}
+        {panel && (
+            <CommentsPanel
+              me={identity?.email}
+              unread={unreadThreadIds}
+              threads={threads}
+              counts={counts}
+              stale={stale}
+              busy={busy}
+              error={commentsState.error}
+              filter={filter}
+              labelOf={labelOf}
+              onFilter={setFilter}
+              onSend={() => void sendComments()}
+              onSendThread={(threadId) => void sendThread(threadId)}
+              onOpen={(thread) => {
+                setDraft(null);
+                setOpenThread(thread.comment.id);
+              }}
+              onResolve={resolve}
+              onClose={() => setPanel(false)}
+            />
+          )}
+        </div>
+      {!chat.brand && <DesignQuestions open={questionsOpen} load={live ? loadQuestions : null} {...questionScreens} onClose={closeQuestions}
+        author={{
+          options: variants,
+          attaching,
+          setAttaching,
+          clear: () => { setVariants([]); setAttaching(false); },
+          remove: (file) => setVariants((options) => options.filter((option) => option.file !== file)),
+          publish: live ? publishQuestion : null,
+          share: () => setSharing(true),
+        }} />}
       </div>
       {fullScreen != null && sections[fullScreen] && (
         <FullScreenSection section={sections[fullScreen]} onClose={() => setFullScreen(null)} commenting={commenting} />

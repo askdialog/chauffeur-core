@@ -1,6 +1,6 @@
 import type { Activity, AgentKind, WorkspaceInfo } from "@chauffeur/protocol";
 import { Check, ChevronDown, Loader2, Lock, PenTool, X } from "lucide-react";
-import { type ButtonHTMLAttributes, type ComponentPropsWithRef, type ReactNode, useEffect, useLayoutEffect, useId, useRef, useState } from "react";
+import { type ComponentPropsWithRef, type ReactNode, useEffect, useLayoutEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { dialogControls } from "@/lib/dialogFocus";
 
@@ -8,7 +8,7 @@ export function cx(...classes: Array<string | false | null | undefined>): string
   return classes.filter(Boolean).join(" ");
 }
 
-type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+type ButtonProps = ComponentPropsWithRef<"button"> & {
   variant?: "primary" | "secondary" | "ghost" | "danger" | "success";
   size?: "xs" | "sm" | "md";
   busy?: boolean;

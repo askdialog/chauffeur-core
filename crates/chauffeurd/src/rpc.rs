@@ -415,6 +415,8 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         // As with routines, sharing futures must not enlarge the reentrant transfer handler.
         call @ (ClientCall::DesignShareStart(_)
         | ClientCall::DesignShareUpdate(_)
+        | ClientCall::DesignQuestions(_)
+        | ClientCall::DesignQuestionPublish(_)
         | ClientCall::DesignShareStop(_)
         | ClientCall::DesignShared(_)
         | ClientCall::FilesShareStart(_)
@@ -1151,6 +1153,15 @@ fn handle_sharing(
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
     Box::pin(async move {
         match call {
+            ClientCall::DesignQuestions(params) => {
+                to_value(daemon.shares.questions(&params.chat, None).await?)
+            }
+            ClientCall::DesignQuestionPublish(params) => to_value(
+                daemon
+                    .shares
+                    .questions(&params.chat, Some(&params.question))
+                    .await?,
+            ),
             ClientCall::DesignShareStart(params) => to_value(daemon.shares.start(&params).await?),
             ClientCall::DesignShareUpdate(params) => to_value(daemon.shares.update(&params).await?),
             ClientCall::DesignShareStop(params) => {

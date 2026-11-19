@@ -1124,3 +1124,169 @@ async fn only_supported_document_names_can_be_shared() {
         assert_eq!(create(name).await.unwrap().status(), 200);
     }
 }
+
+#[tokio::test]
+async fn only_the_owner_publishes_and_each_reviewer_unlocks_results_with_one_vote() {
+    use chauffeur_protocol::design_share::DesignQuestionResult;
+    use serde_json::json;
+
+    let server = server().await;
+    let http = reqwest::Client::new();
+    let owner = "dev:carol@example.com";
+    let alice = session_cookie(&server.base, "alice@example.com").await;
+    let bob = session_cookie(&server.base, "bob@example.com").await;
+    let outsider = session_cookie(&server.base, "other@example.com").await;
+    let share: ShareStatus = http
+        .post(format!("{}/v1/shares", server.base))
+        .bearer_auth(owner)
+        .json(&json!({ "reviewers": ["alice@example.com", "bob@example.com"] }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let url = format!("{}/v1/shares/{}", server.base, share.id);
+    let questions = format!("{url}/questions");
+    for file in ["one.html", "two.html"] {
+        assert_eq!(
+            http.put(format!("{url}/files/{file}"))
+                .bearer_auth(owner)
+                .body("<p>Variant</p>")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            204
+        );
+    }
+    let mut question = json!({
+        "id": "q1",
+        "text": "Which variant?",
+        "options": [
+            { "file": "one.html", "label": "One" },
+            { "file": "two.html", "label": "Two" }
+        ]
+    });
+    let list = |cookie: &str| http.get(&questions).header("cookie", cookie);
+    assert_eq!(http.get(&questions).send().await.unwrap().status(), 401);
+    assert_eq!(list(&outsider).send().await.unwrap().status(), 403);
+    assert_eq!(
+        http.post(&questions)
+            .header("cookie", &alice)
+            .json(&question)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    let publish =
+        |question: &serde_json::Value| http.post(&questions).bearer_auth(owner).json(question);
+    for _ in 0..2 {
+        let result: Vec<DesignQuestionResult> = publish(&question)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            result.len(),
+            1,
+            "retrying a publication should be idempotent"
+        );
+        assert!(result[0].votes.as_ref().unwrap().is_empty());
+    }
+    question["id"] = json!("q2");
+    assert_eq!(publish(&question).send().await.unwrap().status(), 200);
+    question["id"] = json!("missing-screen");
+    question["options"][0]["file"] = json!("missing.html");
+    assert_eq!(publish(&question).send().await.unwrap().status(), 409);
+
+    let vote = |cookie: &str, file: &str, note: &str| {
+        http.post(format!("{questions}/q1/vote"))
+            .header("cookie", cookie)
+            .json(&json!({ "file": file, "note": note }))
+    };
+    assert_eq!(
+        vote(&outsider, "one.html", "")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(
+        vote(&alice, "missing.html", "")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    for _ in 0..2 {
+        let result: Vec<DesignQuestionResult> = vote(&alice, "one.html", "Easier to read")
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let votes = result[0].votes.as_ref().unwrap();
+        assert_eq!(votes.len(), 1);
+        assert!(votes[0].mine);
+        assert_eq!(votes[0].note, "Easier to read");
+        assert!(result[1].votes.is_none(), "questions unlock independently");
+    }
+    assert_eq!(
+        vote(&alice, "two.html", "").send().await.unwrap().status(),
+        409
+    );
+    let response = list(&bob).send().await.unwrap().error_for_status().unwrap();
+    assert_eq!(response.headers()["cache-control"], "private, no-store");
+    let before: Vec<DesignQuestionResult> = response.json().await.unwrap();
+    assert!(before.iter().all(|result| result.votes.is_none()));
+    let after: Vec<DesignQuestionResult> = vote(&bob, "two.html", "Clearer")
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let votes = after[0].votes.as_ref().unwrap();
+    assert_eq!(votes.len(), 2);
+    assert_eq!(votes[0].name, "Alice");
+    assert_eq!(votes[0].file, "one.html");
+    assert!(!votes[0].mine && votes[1].mine);
+
+    assert_eq!(
+        http.patch(&url)
+            .bearer_auth(owner)
+            .json(&json!({ "reviewers": ["bob@example.com"] }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(list(&alice).send().await.unwrap().status(), 403);
+    assert_eq!(
+        http.delete(&url)
+            .bearer_auth(owner)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(list(&bob).send().await.unwrap().status(), 410);
+}

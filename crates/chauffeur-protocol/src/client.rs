@@ -5,6 +5,7 @@
 
 use crate::cloud_backup::{BackupRecovered, BackupRecoveryPlan, BackupStatus};
 use crate::cloud_transfer::{CloudTransferMachines, CloudTransferStatus, TransferInfo};
+use crate::design_share::{DesignQuestionPublishParams, DesignQuestionResult};
 use crate::dev_services::{DevServices, DevServicesDetected, Previews};
 use crate::model::{ErrorReportOutcome, ErrorReports, PowerState, UpdateStatus};
 use crate::office::{JukeboxStream, OfficeBrowserLink, OfficeState};
@@ -838,6 +839,14 @@ methods! {
         #[access(Any)]
         #[relay(Local)]
         DesignShareState(ChatParams) -> DesignShareState,
+        #[serde(rename = "design.questions")]
+        #[access(User)]
+        #[relay(Local)]
+        DesignQuestions(ChatParams) -> Vec<DesignQuestionResult>,
+        #[serde(rename = "design.question_publish")]
+        #[access(User)]
+        #[relay(Local)]
+        DesignQuestionPublish(DesignQuestionPublishParams) -> Vec<DesignQuestionResult>,
         /// Shares a design chat with named reviewers: a new link each time.
         #[serde(rename = "design.share_start")]
         #[access(Any)]
