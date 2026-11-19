@@ -138,6 +138,9 @@ describe("cloneCommandRefusal", () => {
     ">/code/web/f echo hi",
     "2>>/code/web/err.log make",
     "2>&1 git -C /code/web commit -m x",
+    "> /tmp/out cp a.ts /code/web/a.ts",
+    "cp a.ts /code/web/a.ts 2> /dev/null",
+    "rm -rf /code/web/build > /dev/null",
   ];
   for (const command of refused) {
     test(`refuses: ${JSON.stringify(command)}`, () => {

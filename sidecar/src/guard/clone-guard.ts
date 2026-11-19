@@ -255,7 +255,7 @@ function writtenClone(program: string, args: string[], dir: string, clones: Guar
     const clone = inClone(target);
     if (clone) return clone;
   }
-  const words = args.filter((arg) => !arg.startsWith("-") && redirection(arg) === undefined);
+  const words = operands(args);
   if (WRITERS.has(program)) return firstClone(words, inClone);
   if (COPIERS.has(program)) {
     const target = (TARGET_OPTION.has(program) ? optionValue(args, "-t", "--target-directory") : undefined) ?? words.at(-1);
@@ -348,6 +348,18 @@ function redirection(word: string): { attached: string } | { next: true } | unde
   if (/^(?:\d|&)?>>?$/.test(word)) return { next: true };
   const match = /^[^\s>]*?(?:\d|&)?>>?([^\s>&]\S*)$/.exec(word);
   return match?.[1] ? { attached: match[1] } : undefined;
+}
+
+/** The words that are not options, redirections or a redirection's target. */
+function operands(args: string[]): string[] {
+  const words: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] as string;
+    const found = redirection(arg);
+    if (found && "next" in found) i++;
+    else if (!found && !arg.startsWith("-")) words.push(arg);
+  }
+  return words;
 }
 
 /** The files the command's output goes to. */
