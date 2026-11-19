@@ -19,12 +19,12 @@ Reactivating an exploration:
 - recreates its temporary folder and sets its chats back to idle;
 - runs no setup and takes no ports, as a new exploration.
 
-The agent is told that the code may have changed since the conversation (in a later pull request). At archive, Chauffeur records the commit of each checkout. After a reactivation, the first message sent in each chat carries a note, for example: "exploration reactivated on 2026-11-20; `api` was at `abc123` at archive, it is now at `def456` on `main` (42 commits); `git log abc123..def456` shows what changed". Without it, the agent would answer as if the code were still the one the conversation was about. The note is sent once per chat per reactivation.
+The agent is told that the code may have changed since the conversation. At archive, Chauffeur records the commit of each checkout (its HEAD then). After a reactivation, the first message sent in each chat opened before it carries a note, for example: "exploration reactivated on 2026-11-20; `api` was at `abc123` at archive, it is now at `def456` on `main` (42 commits); `git log abc123..def456` shows what changed". Without it, the agent would answer as if the code were still the one the conversation was about. The note is sent once per chat per reactivation, counted once the agent has the message, across restarts.
 
 ## Consequences
 
 - `restore()` stops refusing explorations and takes its own path for them: no snapshot to apply, a fresh detached checkout instead. The rest (folder, notes, chats unarchived, configuration written again) is shared with a workspace's restore.
-- The checkouts may hold newer code than the one the chats talked about; for an exploration that is what we want, and the resume note (in a later pull request) tells the agent.
-- Explorations archived before this change can be reactivated too. Without a recorded commit, their resume note (in a later pull request) gives the archive date and the current commit; a history exploration made by the import gives the conversation's date and the current commit.
-- It ships in steps: the reactivation first, then the resume note.
+- The checkouts may hold newer code than the one the chats talked about; for an exploration that is what we want, and the resume note tells the agent.
+- Explorations archived before this change can be reactivated too. Their checkouts' commit at creation stands for the one at archive; without one, their resume note gives the archive date and the current commit. A history exploration made by the import (in a later pull request) gives the conversation's date and the current commit.
+- It shipped in two steps: the reactivation first, then the resume note.
 - The SPEC's Explorations section is updated and cites this ADR.
