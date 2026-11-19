@@ -19,7 +19,7 @@ Reactivating an exploration:
 - recreates its temporary folder and sets its chats back to idle;
 - runs no setup and takes no ports, as a new exploration.
 
-The agent is told that the code may have changed since the conversation. At archive, Chauffeur records the commit of each checkout (its HEAD then). After a reactivation, the first message sent in each chat opened before it carries a note, for example: "exploration reactivated on 2026-11-20; `api` was at `abc123` at archive, it is now at `def456` on `main` (42 commits); `git log abc123..def456` shows what changed". Without it, the agent would answer as if the code were still the one the conversation was about. The note is sent once per chat per reactivation, counted once the agent has the message, across restarts.
+The agent is told that the code may have changed since the conversation. At archive, Chauffeur records the commit of each checkout (its HEAD then). After a reactivation, the first message sent in each chat that talked before it (a fork: in the chat it copied) carries a note, for example: "exploration reactivated on 2026-11-20; `api` was at `abc123` at archive, it is now at `def456` on `main` (42 commits); `git log abc123..def456` shows what changed". Without it, the agent would answer as if the code were still the one the conversation was about. The note is sent once per chat per reactivation, counted once the agent has the message, across restarts; a failed turn resumed when the user is back carries it too, and an agent switched to the other provider, which reads the conversation as text, is told again. A chat that said nothing over several reactivations is told about the code it talked about, from the first archive it missed.
 
 ## Consequences
 

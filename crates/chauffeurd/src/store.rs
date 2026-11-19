@@ -1587,7 +1587,8 @@ impl Store {
         Ok(())
     }
 
-    /// The commit an exploration's checkout was at when archived.
+    /// A worktree's base commit, set again: an archived exploration's is the commit its checkout
+    /// was at then.
     pub fn set_base_commit(&self, id: &str, base_commit: &str) -> Result<()> {
         self.with(|c| {
             c.execute(
@@ -2290,6 +2291,17 @@ impl Store {
                 .collect()
         })?;
         envelopes(rows)
+    }
+
+    /// When a chat's first event of one `type` was logged (a fork's: in the chat it copied).
+    pub fn first_event_at(&self, chat_id: &str, kind: &str) -> Result<Option<String>> {
+        self.read(|c| {
+            c.query_row(
+                &format!("SELECT MIN(ts) FROM events WHERE chat_id = ?1 AND {EVENT_TYPE} = ?2"),
+                params![chat_id, kind],
+                |row| row.get(0),
+            )
+        })
     }
 
     /// A chat's persisted events of one `type` after the sequence number `after`, oldest first.

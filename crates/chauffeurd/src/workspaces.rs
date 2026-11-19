@@ -41,12 +41,38 @@ pub struct WorkspaceManager {
 /// How long a new workspace's worktrees wait for its name before keeping the generated one; the
 /// repos are fetched meanwhile.
 const NAMING_WAIT: Duration = Duration::from_secs(15);
-/// `kv` key prefix of an exploration's last reactivation, by workspace: when, when it had been
-/// archived, the commit each checkout was at before, and whether it ended
-/// (`{"at": …, "archived_at": …, "commits": {<worktree id>: <commit or null>}, "done": …}`).
+/// `kv` key prefix of an exploration's reactivations (`Reactivations`), by workspace.
 pub const REACTIVATION_KEY: &str = "reactivated:";
-/// `kv` key prefix, by chat: the `at` of the reactivation its agent was told about.
-pub const REACTIVATION_TOLD_KEY: &str = "reactivation_told:";
+/// `kv` key prefix, by chat: the `at` of the last reactivation its agent was told about.
+const REACTIVATION_TOLD_KEY: &str = "reactivation_told:";
+
+/// One reactivation of an exploration: when, when it had been archived, and the commit each
+/// checkout was at before, by worktree id (none: not recorded).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Reactivation {
+    at: String,
+    #[serde(default)]
+    archived_at: Option<String>,
+    commits: BTreeMap<String, Option<String>>,
+}
+
+/// An exploration's reactivations: the last, whether it ended, and the ones before it, for a
+/// chat that said nothing since one of them.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Reactivations {
+    #[serde(flatten)]
+    last: Reactivation,
+    done: bool,
+    #[serde(default)]
+    earlier: Vec<Reactivation>,
+}
+
+/// What a reactivated exploration's chat is told (`WorkspaceManager::moved_since_archive`), and
+/// the reactivation it is for.
+pub struct MovedNote {
+    pub note: String,
+    pub at: String,
+}
 /// `kv` key prefix of the last local-settings notice said, by workspace and repo.
 const LOCAL_SETTINGS_NOTICE_KEY: &str = "local-settings-notice:";
 /// A fetch this recent is not repeated.
@@ -2813,7 +2839,7 @@ impl WorkspaceManager {
             // The commit the chats talked about, for their agents to be told what moved once the
             // exploration is reactivated.
             if row.explore
-                && let Ok(head) = git.run(path, &["rev-parse", "HEAD"]).await
+                && let Ok(head) = git.rev_parse(path, "HEAD").await
             {
                 d.store.set_base_commit(&worktree.id, head.trim())?;
             }
@@ -3074,24 +3100,28 @@ impl WorkspaceManager {
             // The commits the chats talked about, for their agents to be told what moved: kept when
             // a reactivation starts, unless it tries again one that did not end.
             let key = format!("{REACTIVATION_KEY}{}", row.id);
-            let record = || -> Result<Option<serde_json::Value>> {
-                Ok(d.store
-                    .kv_get(&key)?
-                    .and_then(|text| serde_json::from_str(&text).ok()))
+            let mut record = match self.reactivations(&row.id)? {
+                Some(unfinished) if !unfinished.done => unfinished,
+                before => {
+                    let commits = checkouts
+                        .iter()
+                        .map(|w| (w.id.clone(), w.base_commit.clone()))
+                        .collect();
+                    let earlier = before
+                        .map(|before| [before.earlier, vec![before.last]].concat())
+                        .unwrap_or_default();
+                    Reactivations {
+                        last: Reactivation {
+                            at: now(),
+                            archived_at: row.archived_at.clone(),
+                            commits,
+                        },
+                        done: false,
+                        earlier,
+                    }
+                }
             };
-            if !record()?.is_some_and(|record| record["done"] == false) {
-                let commits: BTreeMap<&str, Option<&str>> = checkouts
-                    .iter()
-                    .map(|w| (w.id.as_str(), w.base_commit.as_deref()))
-                    .collect();
-                let started = serde_json::json!({
-                    "at": now(),
-                    "archived_at": row.archived_at,
-                    "commits": commits,
-                    "done": false,
-                });
-                d.store.kv_set(&key, &started.to_string())?;
-            }
+            d.store.kv_set(&key, &serde_json::to_string(&record)?)?;
             let git = self.git();
             let mut failed = Vec::new();
             for worktree in &checkouts {
@@ -3138,10 +3168,8 @@ impl WorkspaceManager {
             self.regenerate_config(&row.id)?;
             if failed.is_empty() {
                 self.unarchive_chats(&row.id)?;
-                if let Some(mut done) = record()? {
-                    done["done"] = serde_json::json!(true);
-                    d.store.kv_set(&key, &done.to_string())?;
-                }
+                record.done = true;
+                d.store.kv_set(&key, &serde_json::to_string(&record)?)?;
             }
             Ok(failed)
         }
@@ -3162,43 +3190,55 @@ impl WorkspaceManager {
         self.get(&row.id)
     }
 
-    /// What the agent of a reactivated exploration's chat is told with its first message since
-    /// (docs/adr/reactivate-archived-explorations.md): per repo, the commit its conversation was
-    /// about and the one checked out now. With the reactivation's `at`, to tell it once; none for
-    /// a chat opened since, or already told.
-    pub async fn moved_since_archive(&self, chat: &ChatInfo) -> Result<Option<(String, String)>> {
-        let d = self.d();
-        let Some(record) = d
+    fn reactivations(&self, workspace: &str) -> Result<Option<Reactivations>> {
+        let record = self
+            .d()
             .store
-            .kv_get(&format!("{REACTIVATION_KEY}{}", chat.workspace_id))?
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .kv_get(&format!("{REACTIVATION_KEY}{workspace}"))?;
+        Ok(record.and_then(|text| serde_json::from_str(&text).ok()))
+    }
+
+    /// What the agent of a reactivated exploration's chat is told before what it reads next
+    /// (docs/adr/reactivate-archived-explorations.md): per repo, the commit its conversation was
+    /// about and the one checked out now. None for a chat that talked only since, or was told.
+    pub async fn moved_since_archive(&self, chat: &ChatInfo) -> Result<Option<MovedNote>> {
+        let d = self.d();
+        let Some(record) = self.reactivations(&chat.workspace_id)? else {
+            return Ok(None);
+        };
+        // Its conversation began with its first message (a fork's: in the chat it copied).
+        let Some(began) = d.store.first_event_at(&chat.id, "user_message")? else {
+            return Ok(None);
+        };
+        // An agent handed the conversation as text reads it without the notes the chat got.
+        let told = match chat.forked_from_agent.is_some() && chat.agent_session_id.is_none() {
+            true => None,
+            false => d
+                .store
+                .kv_get(&format!("{REACTIVATION_TOLD_KEY}{}", chat.id))?,
+        };
+        let since = told.unwrap_or_default().max(began);
+        // The first reactivation the chat did not talk since: the code it talked about.
+        let Some(missed) = record
+            .earlier
+            .iter()
+            .chain([&record.last])
+            .find(|reactivation| reactivation.at > since)
         else {
             return Ok(None);
         };
-        let Some(at) = record["at"].as_str() else {
-            return Ok(None);
-        };
-        if chat.created_at.as_str() >= at
-            || d.store
-                .kv_get(&format!("{REACTIVATION_TOLD_KEY}{}", chat.id))?
-                .as_deref()
-                == Some(at)
-        {
-            return Ok(None);
-        }
         let day = |at: &str| at.get(..10).unwrap_or(at).to_string();
-        let workspace = self.row(&chat.workspace_id)?;
         let git = self.git();
         let mut lines = Vec::new();
-        for worktree in d.store.worktrees_of(&workspace.id)? {
+        for worktree in d.store.worktrees_of(&chat.workspace_id)? {
             let (Some(was), Some(now)) = (
-                record["commits"].get(&worktree.id),
+                missed.commits.get(&worktree.id),
                 worktree.base_commit.as_deref(),
             ) else {
                 continue;
             };
             let (repo, branch) = (&worktree.repo, &worktree.base_branch);
-            lines.push(match was.as_str() {
+            lines.push(match was.as_deref() {
                 Some(was) if was == now => {
                     format!("- `{repo}` is still at `{now}` on `{branch}`, as at archive")
                 }
@@ -3217,15 +3257,15 @@ impl WorkspaceManager {
                         Some(count) => format!(", {count} commits later"),
                         None => String::new(),
                     };
-                    let dir = Path::new(&worktree.path);
-                    let dir = dir.strip_prefix(&workspace.path).unwrap_or(dir).display();
                     format!(
-                        "- `{repo}` was at `{was}` at archive; it is now at `{now}` on `{branch}`{later}: `git -C {dir} log {range}` shows them"
+                        "- `{repo}` was at `{was}` at archive; it is now at `{now}` on `{branch}`{later}: `git -C {} log {range}` shows them",
+                        worktree.path
                     )
                 }
                 None => {
-                    let archived = record["archived_at"]
-                        .as_str()
+                    let archived = missed
+                        .archived_at
+                        .as_deref()
                         .map_or("its archive date is unknown too".to_string(), |at| {
                             format!("archived on {}", day(at))
                         });
@@ -3240,10 +3280,20 @@ impl WorkspaceManager {
         }
         let note = format!(
             "(Chauffeur: this exploration was archived, then reactivated on {}: each repo is checked out again at its base branch as it is now, so the code may not be the one this conversation was about.\n{})\n\n",
-            day(at),
+            day(&record.last.at),
             lines.join("\n")
         );
-        Ok(Some((note, at.to_string())))
+        Ok(Some(MovedNote {
+            note,
+            at: record.last.at,
+        }))
+    }
+
+    /// Keeps that a chat's agent was told of the reactivation at `at`.
+    pub fn told_what_moved(&self, chat: &str, at: &str) -> Result<()> {
+        self.d()
+            .store
+            .kv_set(&format!("{REACTIVATION_TOLD_KEY}{chat}"), at)
     }
 
     /// An archived workspace's folder made again, its notes brought back from the archive.
