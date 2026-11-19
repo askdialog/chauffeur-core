@@ -442,8 +442,11 @@ pub struct SessionDecl {
     pub label: Option<String>,
     /// Exits 0 while the session holds; may end with a line `expires_at=<RFC 3339>`.
     pub check: Option<String>,
-    /// Renews it, with no terminal; may print the link to open.
+    /// Renews it, with no terminal, from the Mac: may open its browser, or print the link to open.
     pub login: Option<String>,
+    /// Renews it for an approval from another device (the phone): prints the link, and the code
+    /// its page asks for. Optional: without it, the session is renewed from the Mac only.
+    pub login_remote: Option<String>,
 }
 
 /// A session every key of which was declared.
@@ -452,6 +455,7 @@ pub struct SessionSpec {
     pub label: String,
     pub check: String,
     pub login: String,
+    pub login_remote: Option<String>,
 }
 
 impl SessionDecl {
@@ -465,6 +469,9 @@ impl SessionDecl {
         }
         if over.login.is_some() {
             self.login.clone_from(&over.login);
+        }
+        if over.login_remote.is_some() {
+            self.login_remote.clone_from(&over.login_remote);
         }
     }
 
@@ -480,6 +487,7 @@ impl SessionDecl {
             label: present(&self.label)?,
             check: present(&self.check)?,
             login: present(&self.login)?,
+            login_remote: present(&self.login_remote),
         })
     }
 }
@@ -1308,7 +1316,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             clone.path().join(".chauffeur/settings.local.toml"),
-            "[sessions.aws]\nlogin = \"aws login --no-browser\"\n",
+            "[sessions.aws]\nlogin = \"aws login --no-browser\"\nlogin_remote = \"aws login --device\"\n",
         )
         .unwrap();
         let settings = RepoSettings::load(clone.path(), worktree.path(), None).unwrap();
@@ -1320,6 +1328,7 @@ mod tests {
                 label: "AWS".into(),
                 check: "aws check".into(),
                 login: "aws login --no-browser".into(),
+                login_remote: Some("aws login --device".into()),
             })
         );
         assert_eq!(settings.sessions["half"].spec(), None);

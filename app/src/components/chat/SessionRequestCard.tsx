@@ -30,14 +30,17 @@ export function SessionRequestCard({
   const workspace = useContext(WorkspaceIdContext);
   const [busy, setBusy] = useState<"login" | "decline" | null>(null);
   const [started, setStarted] = useState(false);
+  // What the login printed: the code its page asks for, when it asks one.
+  const [printed, setPrinted] = useState("");
   const open = item.state === "open" && !readOnly && workspace !== null;
 
   const login = async () => {
     if (workspace === null) return;
     setBusy("login");
     try {
-      const result = await client.call("session.login", { workspace, name: item.session });
+      const result = await client.call("session.login", { workspace, name: item.session, remote: false });
       setStarted(true);
+      setPrinted(result.output);
       if (result.url) await openExternal(result.url);
     } catch (error) {
       toast(`Could not start the login: ${errorMessage(error)}`, "error");
@@ -65,6 +68,11 @@ export function SessionRequestCard({
       <div className="text-[12px] text-muted">
         {started ? "Finish the login in your browser: this card closes once it holds." : "A command waits on this session, which has expired."}
       </div>
+      {started && printed && item.state === "open" && (
+        <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-panel px-2 py-1.5 font-mono text-[11.5px] text-muted selectable" data-testid="session-login-output">
+          {printed}
+        </pre>
+      )}
       {open && (
         <div className="mt-2 flex gap-1.5">
           <Button variant="primary" size="sm" busy={busy === "login"} onClick={() => void login()}>

@@ -37,6 +37,10 @@ export function allowedRequest(method: string, params: unknown): boolean {
   if (method === "linear.search") return Object.keys(p).every(key => ["query", "mine", "limit"].includes(key)) &&
     (p.query === undefined || (typeof p.query === "string" && p.query.length <= 200)) && (p.mine === undefined || typeof p.mine === "boolean") &&
     (p.limit === undefined || (Number.isInteger(p.limit) && Number(p.limit) >= 1 && Number(p.limit) <= 50));
+  // The phone logs in to a declared session through its `login_remote` only: the Mac's `login`
+  // may open a browser on a Mac nobody is in front of.
+  if (method === "session.login") return Object.keys(p).every(key => ["workspace", "name", "remote"].includes(key)) &&
+    text(p.workspace, 200) && text(p.name, 200) && p.remote === true;
   if (method === "cloud.transfer.interrupt") return Object.keys(p).length === 1 && typeof p.workspace === "string";
   if (method === "previews.list" || method === "workspace.seen") return Object.keys(p).length === 1 && typeof p.workspace === "string";
   if (method === "chat.send" || method === "chat.send_confirmed") return typeof p.text === "string" && p.text.trim().length > 0 && p.text.length <= 16_000 && !p.images;

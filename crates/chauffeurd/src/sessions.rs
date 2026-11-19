@@ -113,9 +113,20 @@ impl Sessions {
         d: &Arc<Daemon>,
         workspace: &str,
         name: &str,
+        remote: bool,
     ) -> Result<LoginSessionLogin> {
         let (row, declared) = declared(d, workspace)?;
         let session = find(&row, declared, name)?;
+        let command = match (remote, &session.spec.login_remote) {
+            (false, _) => session.spec.login.clone(),
+            (true, Some(command)) => command.clone(),
+            (true, None) => {
+                return Err(Error::BadRequest(format!(
+                    "{} logs in from the Mac only: it declares no login_remote",
+                    session.spec.label
+                )));
+            }
+        };
         let key = (row.id.clone(), session.name.clone());
         if !self.logging_in.lock().unwrap().insert(key.clone()) {
             return Err(Error::Conflict(format!(
@@ -123,7 +134,7 @@ impl Sessions {
                 session.spec.label
             )));
         }
-        let started = match Login::start(&session.spec.login, &session.cwd, &session.env) {
+        let started = match Login::start(&command, &session.cwd, &session.env) {
             Ok(started) => started,
             Err(error) => {
                 self.logging_in.lock().unwrap().remove(&key);
@@ -243,6 +254,7 @@ impl Sessions {
                 request_id: request.id.clone(),
                 session: session.name.clone(),
                 label: session.spec.label.clone(),
+                remote_login: session.spec.login_remote.is_some(),
             },
         );
         let (sessions, d, row, session) = (self.clone(), d.clone(), row.clone(), session.clone());
@@ -340,6 +352,7 @@ impl Sessions {
                 .and_then(|checked| checked.expires_at.clone()),
             checked_at: checked.map(|checked| checked.stamp),
             logging_in,
+            remote_login: session.spec.login_remote.is_some(),
         }
     }
 

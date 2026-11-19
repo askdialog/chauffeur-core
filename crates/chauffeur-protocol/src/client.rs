@@ -620,12 +620,13 @@ methods! {
         #[access(Any)]
         #[relay(Act)]
         SessionCheck(LoginSessionParams) -> LoginSessionInfo,
-        /// Starts a session's login; answers once it printed a link or ended. Never for an agent:
-        /// an agent renews a session through a request the user approves.
+        /// Starts a session's login (`remote`: its `login_remote`, for an approval from the phone);
+        /// answers once it printed a link or ended. Never for an agent: an agent renews a session
+        /// through a request the user approves.
         #[serde(rename = "session.login")]
-        #[access(User)]
+        #[access(User, phone)]
         #[relay(Act)]
-        SessionLogin(LoginSessionParams) -> LoginSessionLogin,
+        SessionLogin(LoginSessionLoginParams) -> LoginSessionLogin,
         /// Answers once the session holds. When it does not, asks the user to log in, in `chat` or
         /// the workspace's first chat that waits on nothing, and waits up to 15 minutes; a request
         /// already open for the session is joined. Declined or unanswered, it fails.
@@ -2212,6 +2213,9 @@ pub struct LoginSessionInfo {
     pub checked_at: Option<String>,
     /// A login of it is running.
     pub logging_in: bool,
+    /// It declares a `login_remote`: it can be renewed from the phone.
+    #[serde(default)]
+    pub remote_login: bool,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
@@ -2235,6 +2239,16 @@ pub struct LoginSessionsResult {
 pub struct LoginSessionParams {
     pub workspace: String,
     pub name: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct LoginSessionLoginParams {
+    pub workspace: String,
+    pub name: String,
+    /// Runs the session's `login_remote`, for an approval from another device than the Mac.
+    #[serde(default)]
+    pub remote: bool,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]

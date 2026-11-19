@@ -119,6 +119,8 @@ export type SessionRequestItem = Base & {
   /** Its name, as `session.login` takes it. */
   session: string;
   label: string;
+  /** It declares a `login_remote`: the phone can log in to it. */
+  remoteLogin: boolean;
   state: RequestState;
   outcome: string | null;
 };
@@ -578,6 +580,7 @@ function apply(current: ChatView, event: ChatEvent, envelope: EventEnvelope): Ch
         requestId: event.request_id,
         session: event.session,
         label: event.label,
+        remoteLogin: event.remote_login,
         state: "open",
         outcome: null,
       });

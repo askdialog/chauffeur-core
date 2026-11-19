@@ -10,6 +10,7 @@ const base: LoginSessionInfo = {
   expires_at: null,
   checked_at: null,
   logging_in: false,
+  remote_login: false,
 };
 const now = Date.parse("2026-11-18T10:00:00Z");
 

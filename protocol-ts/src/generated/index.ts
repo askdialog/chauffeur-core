@@ -304,6 +304,7 @@ export type { LoadoutParams } from "./LoadoutParams";
 export type { LoginSessionEnsureParams } from "./LoginSessionEnsureParams";
 export type { LoginSessionInfo } from "./LoginSessionInfo";
 export type { LoginSessionLogin } from "./LoginSessionLogin";
+export type { LoginSessionLoginParams } from "./LoginSessionLoginParams";
 export type { LoginSessionParams } from "./LoginSessionParams";
 export type { LoginSessionState } from "./LoginSessionState";
 export type { LoginSessionsResult } from "./LoginSessionsResult";

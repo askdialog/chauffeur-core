@@ -219,12 +219,12 @@ describe("reduceChat", () => {
   test("a session request stays open past the turn's end, until the daemon closes it", () => {
     let view = buildChatView([
       p({ type: "turn_started" }),
-      p({ type: "session_request", request_id: "s1", session: "aws-staging", label: "AWS SSO (staging)" }),
+      p({ type: "session_request", request_id: "s1", session: "aws-staging", label: "AWS SSO (staging)", remote_login: true }),
       p({ type: "turn_ended", outcome: "success", duration_ms: 10, cost_usd: null, context_tokens: null, error: null }),
     ]);
     const open = openRequests(view);
     expect(open.map((r) => r.requestId)).toEqual(["s1"]);
-    expect(open[0]).toMatchObject({ kind: "session", session: "aws-staging", label: "AWS SSO (staging)", state: "open" });
+    expect(open[0]).toMatchObject({ kind: "session", session: "aws-staging", label: "AWS SSO (staging)", remoteLogin: true, state: "open" });
 
     view = reduceChat(view, p({ type: "request_resolved", request_id: "s1", outcome: "answered" }));
     expect(openRequests(view)).toHaveLength(0);

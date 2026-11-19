@@ -237,3 +237,10 @@ test("a phone creates a workspace in the background from repos cloned on this Ma
   expect(types).toEqual(["transfer", "progress", "process_started", "process_output", "process_exited", "state_changed"]);
   expect(JSON.stringify(f.messages.filter((m) => m.type === "event"))).not.toMatch(/secret/);
 });
+
+test("the phone logs in to a declared session through its remote login only", () => {
+  expect(allowedRequest("session.login", { workspace: "w", name: "aws-sso", remote: true })).toBe(true);
+  expect(allowedRequest("session.login", { workspace: "w", name: "aws-sso", remote: false })).toBe(false);
+  expect(allowedRequest("session.login", { workspace: "w", name: "aws-sso" })).toBe(false);
+  expect(allowedRequest("session.login", { workspace: "w", name: "aws-sso", remote: true, command: "sh" })).toBe(false);
+});

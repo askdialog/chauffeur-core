@@ -440,6 +440,9 @@ pub enum ChatEvent {
         /// The session's name, as `session.login` takes it.
         session: String,
         label: String,
+        /// It declares a `login_remote`: the phone can log in to it.
+        #[serde(default)]
+        remote_login: bool,
     },
     /// A permission request or a question was answered. `outcome`: `allowed`, `denied`,
     /// `answered` or `cancelled` (by an interrupt).

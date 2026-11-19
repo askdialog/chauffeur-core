@@ -21726,6 +21726,12 @@ login = "true"
 
 [sessions.incomplete]
 label = "No check nor login"
+
+[sessions.phoned]
+label = "From the phone too"
+check = "false"
+login = "echo 'Open https://mac.example/loopback'"
+login_remote = "echo 'Open https://phone.example/device'; echo 'Code: PH0N'"
 "#,
             on = on.display()
         ),
@@ -21742,20 +21748,20 @@ label = "No check nor login"
     let names: Vec<_> = sessions.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(
         names,
-        ["everywhere", "svc"],
+        ["everywhere", "phoned", "svc"],
         "an incomplete one is not offered"
     );
-    let svc = &sessions[1];
+    let svc = &sessions[2];
     assert_eq!(svc.repo.as_deref(), Some("repo-a"));
     assert_eq!(svc.state, LoginSessionState::Expired);
     assert_eq!(sessions[0].repo, None);
     assert_eq!(sessions[0].state, LoginSessionState::Holds);
 
-    let login = d.sessions.login(d, &ws.id, "svc").await.unwrap();
+    let login = d.sessions.login(d, &ws.id, "svc", false).await.unwrap();
     assert_eq!(login.url.as_deref(), Some("https://login.example/device"));
     assert!(login.output.contains("Code: AB12"), "{}", login.output);
     assert!(login.session.logging_in);
-    let again = d.sessions.login(d, &ws.id, "svc").await.unwrap_err();
+    let again = d.sessions.login(d, &ws.id, "svc", false).await.unwrap_err();
     assert!(again.to_string().contains("already running"), "{again}");
 
     let mut held = None;
@@ -21775,6 +21781,15 @@ label = "No check nor login"
 
     let unknown = d.sessions.check(d, &ws.id, "nope").await.unwrap_err();
     assert!(unknown.to_string().contains("session nope"), "{unknown}");
+
+    // No login_remote: the phone cannot log in to it; with one, it runs that command.
+    assert!(!held.remote_login);
+    let remote = d.sessions.login(d, &ws.id, "svc", true).await.unwrap_err();
+    assert!(remote.to_string().contains("from the Mac only"), "{remote}");
+    let phone = d.sessions.login(d, &ws.id, "phoned", true).await.unwrap();
+    assert!(phone.session.remote_login);
+    assert_eq!(phone.url.as_deref(), Some("https://phone.example/device"));
+    assert!(phone.output.contains("Code: PH0N"), "{}", phone.output);
 }
 
 /// The `session_request` events of a chat, newest last.
@@ -21880,7 +21895,7 @@ login = "true"
         .unwrap_err();
     assert!(allowed.to_string().contains("logging in"), "{allowed}");
 
-    d.sessions.login(d, &ws.id, "svc").await.unwrap();
+    d.sessions.login(d, &ws.id, "svc", false).await.unwrap();
     for waiter in [first, second] {
         let session = tokio::time::timeout(Duration::from_secs(10), waiter)
             .await
