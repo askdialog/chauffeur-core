@@ -25,7 +25,7 @@ export default defineConfig({
       "/v1": { target: process.env.SHARE_SERVICE || "http://127.0.0.1:8090", ws: true },
     },
   },
-  // The app's public/ (its icon, the Office's art) is not the page's.
+  // The share service serves bundled assets only.
   publicDir: false,
   envPrefix: ["VITE_"],
   build: {
