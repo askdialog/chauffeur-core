@@ -3117,31 +3117,8 @@ impl WorkspaceManager {
                 .filter(|w| w.origin == WorktreeOrigin::Workspace)
                 .collect();
             self.bring_back_folder(&row)?;
-            // The commits the chats talked about, for their agents to be told what moved: kept when
-            // a reactivation starts, unless it tries again one that did not end.
-            let key = format!("{REACTIVATION_KEY}{}", row.id);
-            let mut record = match self.reactivations(&row.id)? {
-                Some(unfinished) if !unfinished.done => unfinished,
-                before => {
-                    let commits = checkouts
-                        .iter()
-                        .map(|w| (w.id.clone(), w.base_commit.clone()))
-                        .collect();
-                    let earlier = before
-                        .map(|before| [before.earlier, vec![before.last]].concat())
-                        .unwrap_or_default();
-                    Reactivations {
-                        last: Reactivation {
-                            at: now(),
-                            archived_at: row.archived_at.clone(),
-                            commits,
-                        },
-                        done: false,
-                        earlier,
-                    }
-                }
-            };
-            d.store.kv_set(&key, &serde_json::to_string(&record)?)?;
+            let mut record = self.start_reactivation(&row, &checkouts)?;
+            self.keep_reactivations(&row.id, &record)?;
             let git = self.git();
             let mut failed = Vec::new();
             for worktree in &checkouts {
@@ -3157,20 +3134,15 @@ impl WorkspaceManager {
                     &worktree.base_branch,
                 )
                 .await;
+                let path = Path::new(&worktree.path);
                 let checkout = async {
-                    let path = Path::new(&worktree.path);
                     if !worktree.removed {
                         git.worktree_remove(clone, path).await?;
                     }
                     // A checkout removed by hand before the archive is still registered.
                     git.run(clone, &["worktree", "prune"]).await?;
-                    self.checkout_base_detached(
-                        clone,
-                        Path::new(&worktree.path),
-                        &base_remote,
-                        &worktree.base_branch,
-                    )
-                    .await
+                    self.checkout_base_detached(clone, path, &base_remote, &worktree.base_branch)
+                        .await
                 }
                 .await;
                 match checkout {
@@ -3197,7 +3169,7 @@ impl WorkspaceManager {
             if failed.is_empty() {
                 self.unarchive_chats(&row.id)?;
                 record.done = true;
-                d.store.kv_set(&key, &serde_json::to_string(&record)?)?;
+                self.keep_reactivations(&row.id, &record)?;
             }
             Ok(failed)
         }
@@ -3216,6 +3188,39 @@ impl WorkspaceManager {
             )?;
         }
         self.get(&row.id)
+    }
+
+    /// The record of a reactivation that starts: the commits the chats talked about, for their
+    /// agents to be told what moved. A try again of one that did not end gets its record back.
+    fn start_reactivation(
+        &self,
+        row: &WorkspaceRow,
+        checkouts: &[WorktreeRow],
+    ) -> Result<Reactivations> {
+        Ok(match self.reactivations(&row.id)? {
+            Some(unfinished) if !unfinished.done => unfinished,
+            before => Reactivations {
+                last: Reactivation {
+                    at: now(),
+                    archived_at: row.archived_at.clone(),
+                    commits: checkouts
+                        .iter()
+                        .map(|w| (w.id.clone(), w.base_commit.clone()))
+                        .collect(),
+                },
+                done: false,
+                earlier: before
+                    .map(|before| [before.earlier, vec![before.last]].concat())
+                    .unwrap_or_default(),
+            },
+        })
+    }
+
+    fn keep_reactivations(&self, workspace: &str, record: &Reactivations) -> Result<()> {
+        self.d().store.kv_set(
+            &format!("{REACTIVATION_KEY}{workspace}"),
+            &serde_json::to_string(record)?,
+        )
     }
 
     fn reactivations(&self, workspace: &str) -> Result<Option<Reactivations>> {
@@ -3239,11 +3244,11 @@ impl WorkspaceManager {
             return Ok(None);
         };
         // An agent handed the conversation as text reads it without the notes the chat got.
-        let told = match chat.forked_from_agent.is_some() && chat.agent_session_id.is_none() {
-            true => None,
-            false => d
-                .store
-                .kv_get(&format!("{REACTIVATION_TOLD_KEY}{}", chat.id))?,
+        let told = if chat.forked_from_agent.is_some() && chat.agent_session_id.is_none() {
+            None
+        } else {
+            d.store
+                .kv_get(&format!("{REACTIVATION_TOLD_KEY}{}", chat.id))?
         };
         let since = told.unwrap_or_default().max(began);
         // The first reactivation the chat did not talk since: the code it talked about.
@@ -3255,53 +3260,16 @@ impl WorkspaceManager {
         else {
             return Ok(None);
         };
-        let day = |at: &str| at.get(..10).unwrap_or(at).to_string();
         let git = self.git();
         let mut lines = Vec::new();
         for worktree in d.store.worktrees_of(&chat.workspace_id)? {
-            let (Some(was), Some(now)) = (
+            if let (Some(was), Some(now)) = (
                 missed.commits.get(&worktree.id),
                 worktree.base_commit.as_deref(),
-            ) else {
-                continue;
-            };
-            let (repo, branch) = (&worktree.repo, &worktree.base_branch);
-            lines.push(match was.as_deref() {
-                Some(was) if was == now => {
-                    format!("- `{repo}` is still at `{now}` on `{branch}`, as at archive")
-                }
-                Some(was) => {
-                    let range = format!("{was}..{now}");
-                    let count = git
-                        .run(
-                            Path::new(&worktree.clone_path),
-                            &["rev-list", "--count", &range],
-                        )
-                        .await
-                        .ok()
-                        .and_then(|count| count.trim().parse::<u64>().ok());
-                    let later = match count {
-                        Some(1) => ", 1 commit later".to_string(),
-                        Some(count) => format!(", {count} commits later"),
-                        None => String::new(),
-                    };
-                    format!(
-                        "- `{repo}` was at `{was}` at archive; it is now at `{now}` on `{branch}`{later}: `git -C {} log {range}` shows them",
-                        worktree.path
-                    )
-                }
-                None => {
-                    let archived = missed
-                        .archived_at
-                        .as_deref()
-                        .map_or("its archive date is unknown too".to_string(), |at| {
-                            format!("archived on {}", day(at))
-                        });
-                    format!(
-                        "- `{repo}`: its commit at archive was not recorded ({archived}); it is now at `{now}` on `{branch}`"
-                    )
-                }
-            });
+            ) {
+                let archived_at = missed.archived_at.as_deref();
+                lines.push(moved_line(&git, &worktree, was.as_deref(), now, archived_at).await);
+            }
         }
         if lines.is_empty() {
             return Ok(None);
@@ -3489,6 +3457,52 @@ pub fn activity(statuses: impl Iterator<Item = ChatStatus>) -> Activity {
     } else {
         Activity::Idle
     }
+}
+
+/// What moved in one repo since its archive (`archived_at`): the commit then (`was`), the one
+/// checked out now, and how to read the commits between them.
+async fn moved_line(
+    git: &Git,
+    worktree: &WorktreeRow,
+    was: Option<&str>,
+    now: &str,
+    archived_at: Option<&str>,
+) -> String {
+    let (repo, branch) = (&worktree.repo, &worktree.base_branch);
+    let Some(was) = was else {
+        let archived = archived_at.map_or("its archive date is unknown too".to_string(), |at| {
+            format!("archived on {}", day(at))
+        });
+        return format!(
+            "- `{repo}`: its commit at archive was not recorded ({archived}); it is now at `{now}` on `{branch}`"
+        );
+    };
+    if was == now {
+        return format!("- `{repo}` is still at `{now}` on `{branch}`, as at archive");
+    }
+    let range = format!("{was}..{now}");
+    let count = git
+        .run(
+            Path::new(&worktree.clone_path),
+            &["rev-list", "--count", &range],
+        )
+        .await
+        .ok()
+        .and_then(|count| count.trim().parse::<u64>().ok());
+    let later = match count {
+        Some(1) => ", 1 commit later".to_string(),
+        Some(count) => format!(", {count} commits later"),
+        None => String::new(),
+    };
+    format!(
+        "- `{repo}` was at `{was}` at archive; it is now at `{now}` on `{branch}`{later}: `git -C {} log {range}` shows them",
+        worktree.path
+    )
+}
+
+/// The day of an RFC 3339 time.
+fn day(at: &str) -> &str {
+    at.get(..10).unwrap_or(at)
 }
 
 fn worktree_info(row: WorktreeRow) -> WorktreeInfo {
