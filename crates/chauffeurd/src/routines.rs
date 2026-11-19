@@ -660,7 +660,7 @@ I will then run it by hand. When I tell you what went wrong in a run, read the r
 fn by_hand_prompt() -> String {
     format!(
         r#"This workspace holds a Chauffeur routine: a prompt Chauffeur runs by itself at set times, each run a new chat of this workspace. Its file is `{FILE}` (TOML: name, prompt, repos, agent, model, effort, permission_mode, and [schedule] with days mon…sun, or every_days from a date, and times of day, local time). I made it by hand: its prompt is, for now, my description of what a run should do, also in `{SOURCE}`. Its schedule (weekdays at 08:00) is a placeholder.
-Your job is to make the routine good enough to run unattended. Read the file and the repos, then tell me in a few lines what a run will do and what you would question, and ask me when it should run unless my description says so. Then rewrite the file's prompt: an agent starting from nothing must be able to do the work alone, so say the goal, the steps, what to check, what not to do, and what to report at the end. Save every change with `chauffeur routine edit --file {FILE}`: it records a new version, and refuses an invalid file saying why.
+Your job is to make the routine good enough to run unattended. Read the file and the repos, then tell me in a few lines what a run will do and what you would question, and ask me when it should run unless my description says so. Save that time, the one my description gives or the one I confirm, in the file's [schedule], replacing the placeholder. Then rewrite the file's prompt: an agent starting from nothing must be able to do the work alone, so say the goal, the steps, what to check, what not to do, and what to report at the end. Save every change with `chauffeur routine edit --file {FILE}`: it records a new version, and refuses an invalid file saying why.
 I will then run it by hand. When I tell you what went wrong in a run, read the runs with `chauffeur routine history`, then fix the file. Do not run, activate or pause the routine yourself: I do."#
     )
 }
@@ -762,12 +762,15 @@ pub async fn create_by_hand(
         ));
     }
     check_name_free(d, &name, None)?;
+    let model = params.model.filter(|m| !m.trim().is_empty());
+    // Before the workspace and the draft exist: a refused choice leaves nothing behind.
+    crate::chats::check_agent_model(params.agent, model.as_deref())?;
     let spec = RoutineSpec {
         name: name.clone(),
         prompt: description.clone(),
         repos,
         agent: params.agent,
-        model: params.model.filter(|m| !m.trim().is_empty()),
+        model,
         effort: params.effort.filter(|e| !e.trim().is_empty()),
         permission_mode: Default::default(),
         sessions: Vec::new(),

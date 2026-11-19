@@ -21501,7 +21501,21 @@ async fn a_routine_made_by_hand_starts_from_its_description_and_its_refining_cha
     ] {
         assert!(routines::create_by_hand(d, params).await.is_err());
     }
+    // A model the agent cannot run is refused before anything is made, so a retry keeps the name.
+    let local_on_claude = RoutineCreateByHandParams {
+        agent: AgentKind::Claude,
+        model: Some("ollama/qwen3".into()),
+        ..by_hand("Triage", vec!["repo-a".into()], "Triage the new tickets")
+    };
+    assert!(routines::create_by_hand(d, local_on_claude).await.is_err());
     assert!(routines::list(d).unwrap().is_empty());
+    assert!(
+        d.workspaces
+            .list(true, None)
+            .unwrap()
+            .iter()
+            .all(|w| w.section.as_deref() != Some("Routines"))
+    );
 
     let routine = routines::create_by_hand(
         d,
@@ -21546,6 +21560,7 @@ async fn a_routine_made_by_hand_starts_from_its_description_and_its_refining_cha
     let prompt = first_prompt(d, &refine.id);
     assert!(prompt.contains("I made it by hand"), "{prompt}");
     assert!(prompt.contains("ask me when it should run"), "{prompt}");
+    assert!(prompt.contains("[schedule]"), "{prompt}");
     assert!(prompt.contains("chauffeur routine edit"), "{prompt}");
 
     // A name another routine has is refused.

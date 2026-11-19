@@ -52,7 +52,8 @@ async function withDom(run: (dom: DomTest) => Promise<void>) {
         const input = document.querySelector<HTMLInputElement>(selector);
         if (!input) throw new Error(`Missing input: ${selector}`);
         await act(async () => {
-          const setter = Object.getOwnPropertyDescriptor(browser.HTMLInputElement.prototype, "value")?.set;
+          const prototype = input.tagName === "TEXTAREA" ? browser.HTMLTextAreaElement.prototype : browser.HTMLInputElement.prototype;
+          const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
           setter?.call(input, value);
           input.dispatchEvent(new Event("input", { bubbles: true }));
         });

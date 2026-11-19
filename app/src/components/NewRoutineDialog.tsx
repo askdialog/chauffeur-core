@@ -92,7 +92,7 @@ function Dialog() {
               <RepoChip key={key} name={key} onRemove={() => toggleRepo(key)} />
             ))}
             <span ref={repoButton}>
-              <Button size="sm" variant="ghost" onClick={() => setPicking(!picking)} disabled={busy} data-testid="new-routine-add-repo">
+              <Button type="button" size="sm" variant="ghost" onClick={() => setPicking(!picking)} disabled={busy} data-testid="new-routine-add-repo">
                 <Plus size={12} /> Add repo
               </Button>
             </span>
