@@ -1212,6 +1212,8 @@ impl WorkspaceManager {
                         WorkspaceState::CleanupFailed,
                         Some("restore interrupted when Chauffeur stopped: restore it again".into()),
                     );
+                    // The chats opened meanwhile, read-only with the others.
+                    d.chats.close_workspace(&row.id).await;
                 } else {
                     d.workspaces
                         .abandon(
@@ -3086,21 +3088,21 @@ impl WorkspaceManager {
                 WorkspaceState::CleanupFailed,
                 Some(format!("restore failed: {}", errors.join("; "))),
             )?;
-            // A chat opened meanwhile is closed with the others; it starts once restored.
-            d.chats.close_workspace(&row.id).await;
+            d.chats.restore_failed(&row.id).await;
             return self.get(&row.id);
         }
         // Snapshots stay until expiry: restoring again after a new archive replaces them.
         for worktree in &restorable {
             d.store.clear_snapshot_ref(&worktree.id)?;
         }
-        self.unarchive_chats(&row.id)?;
+        // Ready first: a message to a chat back from the archive never waits for a ready state.
         self.set_state(&row.id, WorkspaceState::Ready, None)?;
-        d.chats.workspace_ready(&row.id).await;
+        self.unarchive_chats(&row.id)?;
         self.start_setup_scripts(&row.id, None)?;
         for group in &groups {
             self.start_setup_scripts(&row.id, Some(group))?;
         }
+        d.chats.workspace_ready(&row.id).await;
         self.get(&row.id)
     }
 
@@ -3170,7 +3172,6 @@ impl WorkspaceManager {
             }
             self.regenerate_config(&row.id)?;
             if failed.is_empty() {
-                self.unarchive_chats(&row.id)?;
                 record.done = true;
                 self.keep_reactivations(&row.id, &record)?;
             }
@@ -3179,7 +3180,9 @@ impl WorkspaceManager {
         .await;
         let failed = reactivated.unwrap_or_else(|error| vec![error.to_string()]);
         if failed.is_empty() {
+            // Ready first: a message to a chat back from the archive never waits for a ready state.
             self.set_state(&row.id, WorkspaceState::Ready, None)?;
+            self.unarchive_chats(&row.id)?;
             d.chats.workspace_ready(&row.id).await;
         } else {
             self.set_state(
@@ -3190,8 +3193,7 @@ impl WorkspaceManager {
                     failed.join("; ")
                 )),
             )?;
-            // A chat opened meanwhile is closed with the others; it starts once reactivated.
-            d.chats.close_workspace(&row.id).await;
+            d.chats.restore_failed(&row.id).await;
         }
         self.get(&row.id)
     }
