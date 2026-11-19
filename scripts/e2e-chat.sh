@@ -69,6 +69,9 @@ search = { semantic = false }
 url = ""
 TOML
 c() { "$BIN/chauffeur" "$@"; }
+# A check on a command's output (`c ls | has "^name"`): reads all of it first, so that under
+# pipefail the command never dies of SIGPIPE when grep stops at its first match.
+has() { local out; out=$(cat); grep -q "$@" <<< "$out"; }
 events() { sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "select payload from events where chat_id = '$1' order by seq"; }
 
 check_design_request() {
@@ -207,10 +210,10 @@ echo "== 1b2. a turn cut by a killed daemon resumes on its own once it starts ag
 c send chat-one "Run the shell command 'sleep 20 && echo hi > $T/resumed.txt' with the Bash tool, in the foreground, then reply with the single word written." >/dev/null
 CUT_CHAT=$(c --json chats chat-one | python3 -c 'import sys,json; print(json.load(sys.stdin)["chats"][0]["id"])')
 for _ in $(seq 1 90); do
-  sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "select 1 from events where chat_id = '$CUT_CHAT' and payload like '%\"tool_call\"%' and payload like '%resumed.txt%'" | grep -q 1 && break
+  sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "select 1 from events where chat_id = '$CUT_CHAT' and payload like '%\"tool_call\"%' and payload like '%resumed.txt%'" | has 1 && break
   sleep 1
 done
-sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "select 1 from events where chat_id = '$CUT_CHAT' and payload like '%\"tool_call\"%' and payload like '%resumed.txt%'" | grep -q 1 \
+sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "select 1 from events where chat_id = '$CUT_CHAT' and payload like '%\"tool_call\"%' and payload like '%resumed.txt%'" | has 1 \
   || { echo "the model did not call its Bash tool with the command"; exit 1; }
 CUT_AFTER=$(sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "select max(seq) from events")
 kill -9 "$(python3 -c 'import sys,json; print(json.load(open(sys.argv[1]))["pid"])' "$CHAUFFEUR_HOME/daemon.json")"
@@ -230,7 +233,7 @@ test -f "$T/resumed.txt" || { echo "the resumed agent did not write resumed.txt"
 
 echo "== 1c. a repo's skill is listed for / and runs"
 c commands chat-one | tee "$T/commands.txt" | grep -E "^/e2e-ping"
-! grep -qE "^/(model|clear) " "$T/commands.txt"
+if grep -qE "^/(model|clear) " "$T/commands.txt"; then echo "the chat's command list offers /model or /clear"; exit 1; fi
 c send chat-one "/e2e-ping" >/dev/null
 c --json wait chat-one --timeout 180 | python3 -c 'import sys,json; t=json.load(sys.stdin)["last_text"]; print(t); assert "PONG-SKILL" in (t or "")'
 
@@ -396,8 +399,8 @@ c send tasks-one "Without using any tool, write a 1500-word essay about lighthou
 for _ in $(seq 1 30); do [ "$(c --json chats tasks-one | python3 -c 'import sys,json; print(json.load(sys.stdin)["chats"][0]["status"])')" = working ] && break; sleep 1; done
 sleep 3
 c interrupt tasks-one >/dev/null
-for _ in $(seq 1 30); do sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "SELECT payload FROM events WHERE chat_id = '$TASKS_CHAT' AND payload LIKE '%\"outcome\":\"interrupted\"%'" | grep -q turn_ended && break; sleep 1; done
-sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "SELECT payload FROM events WHERE chat_id = '$TASKS_CHAT' AND payload LIKE '%\"outcome\":\"interrupted\"%'" | grep -q turn_ended
+for _ in $(seq 1 30); do sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "SELECT payload FROM events WHERE chat_id = '$TASKS_CHAT' AND payload LIKE '%\"outcome\":\"interrupted\"%'" | has turn_ended && break; sleep 1; done
+sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "SELECT payload FROM events WHERE chat_id = '$TASKS_CHAT' AND payload LIKE '%\"outcome\":\"interrupted\"%'" | has turn_ended
 sleep 3
 task_events ended | python3 -c '
 import sys,json
@@ -474,7 +477,7 @@ assert any("lighthouse keeper" in t.lower() for t in texts + handed), r
 assert all(e.get("parent_tool_use_id") is None for e in r["events"] if e["type"] in ("assistant_text","tool_call")), r'
 SUB_AGENT=$(c --json subagent sub-one "$SUB_CALL" | python3 -c 'import sys,json; print(json.load(sys.stdin)["agent_id"])')
 c --json subagent sub-one "$SUB_AGENT" | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["found"] and r["events"], r'
-c subagent sub-one "$SUB_AGENT" | grep -qi "lighthouse keeper"
+c subagent sub-one "$SUB_AGENT" | has -i "lighthouse keeper"
 c --json subagent sub-one a0000000000000000 | python3 -c 'import sys,json; r=json.load(sys.stdin); assert not r["found"] and r["events"] == [], r'
 c archive --force sub-one >/dev/null
 
@@ -511,7 +514,7 @@ echo "== 1e. with Jev on, a chat past the threshold compacts after its turn"
 # shows that the plugin ran and the compaction happened.
 echo "not-a-typesafe-key" | c jev key >/dev/null
 c jev threshold 1 >/dev/null
-c jev on | grep -q "on, from 1% of the context"
+c jev on | has "on, from 1% of the context"
 c new --name jev-one --model "$MODEL" --prompt "Reply with the single word pong and nothing else." >/dev/null
 c --json wait jev-one --timeout 300 >/dev/null
 JEV_CHAT=$(c --json chats jev-one | python3 -c 'import sys,json; print(json.load(sys.stdin)["chats"][0]["id"])')
@@ -627,7 +630,7 @@ c send explore-one "Use your Write tool (not the shell) to create alpha/scratch.
 c wait explore-one --timeout 240 | tail -4
 test ! -e "$CHAUFFEUR_WORKSPACES_DIR/explore-one/alpha/scratch.txt"
 test "$(heads explore-one)" = "$BEFORE"
-! git -C "$T/clones/alpha" log --all --format=%s | grep -q explore-commit
+if git -C "$T/clones/alpha" log --all --format=%s | has explore-commit; then echo "the exploration's commit reached the clone"; exit 1; fi
 c --json chats explore-one | python3 -c '
 import sys,json; chats=json.load(sys.stdin)["chats"]
 assert all(c["permission_mode"] == "plan" for c in chats), chats'
@@ -637,10 +640,10 @@ PLANS="$CHAUFFEUR_WORKSPACES_DIR/explore-one/.chauffeur/plans"
 c send explore-one "Write a three-line plan for adding a CONTRIBUTING.md to alpha into your plan file now, with your Write tool, at the plan file path your plan-mode instructions give. Do not call ExitPlanMode. Reply with the plan file path only." >/dev/null
 c wait explore-one --timeout 240 | tail -2
 ls "$PLANS"/*.md >/dev/null
-test -s "$(ls "$PLANS"/*.md | head -1)"
+test -s "$(ls "$PLANS"/*.md | sed -n 1p)"
 test -z "$(git -C "$CHAUFFEUR_WORKSPACES_DIR/explore-one/alpha" status --porcelain)"
 test "$(heads explore-one)" = "$BEFORE"
-PLAN_NAME=$(basename "$(ls "$PLANS"/*.md | head -1)")
+PLAN_NAME=$(basename "$(ls "$PLANS"/*.md | sed -n 1p)")
 
 echo "== 4c3. Always allow holds in plan mode: the tool is not asked again in the chat"
 # Plan mode asks for each write but the plan file, and Claude Code suggests no rule then.
@@ -773,7 +776,7 @@ test -z "$(git -C "$T/clones/alpha" status --porcelain)"
 echo "== 4e. an exploration continues as a workspace: its agent writes and commits, its conversation kept"
 c new --explore --name explore-two --model "$MODEL" --prompt "What is the secret word written in alpha/STAGING.md? Reply with that word only." >/dev/null
 c --json wait explore-two --timeout 180 >/dev/null
-c promote explore-two | grep -q explore-two
+c promote explore-two | has explore-two
 c --json show explore-two | python3 -c '
 import sys,json; w=json.load(sys.stdin)
 assert not w["explore"] and w["branch"] == "e2e/explore-two" and w["port_count"] > 0, w'
@@ -855,7 +858,8 @@ DIR="$CHAUFFEUR_WORKSPACES_DIR/design-one/.chauffeur/designs/$DESIGN"
 BEFORE=$(heads design-one)
 c send "$DESIGN" "Write the screen login.html in your design folder: a login page with a Reconnect button. Then write canvas.json listing it in one section. Reply DONE." >/dev/null
 c --json wait design-one --timeout 240 >/dev/null
-test -f "$DIR/login.html" && grep -qi reconnect "$DIR/login.html"
+test -f "$DIR/login.html"
+grep -qi reconnect "$DIR/login.html"
 python3 -c 'import sys,json; c=json.load(open(sys.argv[1])); assert c["pages"][0]["sections"][0]["screens"], c' "$DIR/canvas.json"
 # It checks a render in its own browser, which opens no window, not in the user's.
 c send "$DESIGN" "Check how login.html renders at 390 x 844 and reply with the page title you see." >/dev/null
@@ -898,7 +902,7 @@ printf '#!/bin/sh\nif echo x > "%s/alpha/hack3.txt" 2>/dev/null; then echo PROBE
 c send "$DESIGN" "Run exactly this shell command from your design folder: sh probe.sh . It is a check script of this folder. Reply with its output only." >/dev/null
 c --json wait design-one --timeout 240 >/dev/null
 test ! -e "$CHAUFFEUR_WORKSPACES_DIR/design-one/alpha/hack3.txt"
-sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "select payload from events where chat_id = '$DESIGN' and payload like '%tool_result%'" | grep -q PROBE-BLOCKED
+sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "select payload from events where chat_id = '$DESIGN' and payload like '%tool_result%'" | has PROBE-BLOCKED
 test ! -e "$CHAUFFEUR_WORKSPACES_DIR/design-one/alpha/hack.txt"
 test ! -e "$CHAUFFEUR_WORKSPACES_DIR/design-one/alpha/hack2.txt"
 test "$(heads design-one)" = "$BEFORE"
@@ -994,7 +998,7 @@ c chat close "$ACROSS" >/dev/null
   grep -q "PONG-CODEX" "$T/codex-skill.txt"
 
   echo "== 5b2. /compact compacts a Codex chat Codex's own way while Jev is off, in a turn of its own"
-  c commands codex-one --agent codex | grep -qE "^/compact"
+  c commands codex-one --agent codex | has -E "^/compact"
   CODEX_ONE=$(chat_id codex-one)
   codex_events() {
     sqlite3 "$CHAUFFEUR_HOME/chauffeur.db" "SELECT payload FROM events WHERE chat_id = '$CODEX_ONE' ORDER BY seq"
@@ -1246,7 +1250,8 @@ print(c["id"])')
   BEFORE=$(heads design-codex)
   c send "$CDESIGN" "Write the screen login.html in your working directory: a login page with a Reconnect button. Then write canvas.json there, listing it in one section. Reply DONE." >/dev/null
   c --json wait design-codex --timeout 300 >/dev/null
-  test -f "$CDIR/login.html" && grep -qi reconnect "$CDIR/login.html"
+  test -f "$CDIR/login.html"
+  grep -qi reconnect "$CDIR/login.html"
   python3 -c 'import sys,json; c=json.load(open(sys.argv[1])); assert c["pages"][0]["sections"][0]["screens"], c' "$CDIR/canvas.json"
   # Named in full: a small model may reach for the user's own Playwright server, which asks first and
   # is therefore refused here.

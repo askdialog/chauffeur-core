@@ -56,6 +56,9 @@ login = "echo 'Open https://login.example/device'; echo 'Code: E2E1'; touch $T/e
 TOML
 
 c() { "$BIN/chauffeur" "$@"; }
+# A check on a command's output (`c ls | has "^name"`): reads all of it first, so that under
+# pipefail the command never dies of SIGPIPE when grep stops at its first match.
+has() { local out; out=$(cat); grep -q "$@" <<< "$out"; }
 c daemon start
 echo "== reviews. history is empty on a fresh daemon and no model runs without reports"
 bun scripts/app-call.ts reviews.info '{}' | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["reports"] == [] and r["followups"] == [] and r["projection"] is None and not r["running"] and not r["auto_refresh_enabled"], r'
@@ -123,9 +126,9 @@ done
 c ls
 # Sections: one created, a workspace filed in it and listed under its header; deleted, the
 # workspace goes back to no section.
-c section new Back end | grep -q "^Back end "
-c move e2e-one "back END" | grep -q "in section Back end$"
-c ls | grep -q "^── Back end (1)$"
+c section new Back end | has "^Back end "
+c move e2e-one "back END" | has "in section Back end$"
+c ls | has "^── Back end (1)$"
 c --json ls | python3 -c '
 import sys, json
 r = json.load(sys.stdin)
@@ -133,9 +136,10 @@ w = [w for w in r["workspaces"] if w["slug"] == "e2e-one"][0]
 assert w["section"] == "Back end" and w["section_id"] == r["sections"][0]["id"], r
 assert [s["name"] for s in r["sections"]] == ["Back end"], r'
 if c section new back end 2>/dev/null; then echo "a second section took the same name"; exit 1; fi
-c section rm "Back end" | grep -q "^no sections"
+c section rm "Back end" | has "^no sections"
 c --json show e2e-one | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["section"] is None and w["section_id"] is None, w'
-test -d "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/alpha" && test -d "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/beta"
+test -d "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/alpha"
+test -d "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/beta"
 PATH_A=$(c --json worktree add --workspace e2e-one --repo alpha --name probe | python3 -c 'import sys,json; print(json.load(sys.stdin)["path"])')
 test -d "$PATH_A/alpha"
 c worktree remove probe --workspace e2e-one
@@ -154,15 +158,15 @@ ROUTINE_WS=$(c --json routine show Triage | python3 -c 'import sys,json; print(j
 c --json show "$ROUTINE_WS" | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["section"] == "Routines" and w["slug"] == "routine-triage", w'
 ROUTINE_FILE="$CHAUFFEUR_WORKSPACES_DIR/routine-triage/.chauffeur/routine.toml"
 sed 's/"08:00"/"07:30"/' "$ROUTINE_FILE" > "$T/routine.toml"
-c routine edit Triage --file "$T/routine.toml" | grep -q "v2"
+c routine edit Triage --file "$T/routine.toml" | has "v2"
 grep -q '"07:30"' "$ROUTINE_FILE"
 if printf 'name = "Triage"\n' | c routine edit Triage --file - 2>/dev/null; then echo "an invalid routine file was saved"; exit 1; fi
 # Inside the routine's workspace, the routine is that workspace's.
 CHAUFFEUR_WORKSPACE_ID="$ROUTINE_WS" c --json routine show | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["version"] == 2, r'
 c --json routine run Triage | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["trigger"] == "manual" and r["version"] == 2, r'
-c routine activate Triage | grep -q "(active, next run "
-c routine history Triage | grep -q "^run .* by hand, v2"
-c routine pause Triage | grep -q "(paused)"
+c routine activate Triage | has "(active, next run "
+c routine history Triage | has "^run .* by hand, v2"
+c routine pause Triage | has "(paused)"
 # Activity: the user's messages of a period, a routine's own (its refining chat, its runs) left out.
 c --json activity --since 1h | python3 -c '
 import sys, json
@@ -170,9 +174,9 @@ r = json.load(sys.stdin)
 messages = [m["text"] for w in r["workspaces"] for chat in w["chats"] for m in chat["messages"]]
 assert messages == ["Triage the new tickets"], r
 assert r["workspaces"][0]["path"].endswith("/e2e-routine-src"), r'
-c activity --since 1h | grep -q "^- .*  Triage the new tickets$"
+c activity --since 1h | has "^- .*  Triage the new tickets$"
 if c activity --since yesterday 2>/dev/null; then echo "an unreadable time was taken"; exit 1; fi
-c routine rm Triage | grep -q "its workspace stays"
+c routine rm Triage | has "its workspace stays"
 echo "== sessions. a declared login is checked, renewed through its link, then holds"
 c new --name e2e-sessions >/dev/null
 c --json session ls --workspace e2e-sessions | python3 -c '
@@ -185,7 +189,7 @@ import sys, json
 r = json.load(sys.stdin)
 assert r["url"] == "https://login.example/device" and "Code: E2E1" in r["output"], r'
 for _ in $(seq 1 50); do c session check e2e --workspace e2e-sessions >/dev/null 2>&1 && break; sleep 0.1; done
-c session check e2e --workspace e2e-sessions | grep -q "holds until 2030-01-01"
+c session check e2e --workspace e2e-sessions | has "holds until 2030-01-01"
 echo "== sessions. ensure asks the user in the chat; declined it fails, logged in it answers"
 rm -f "$T/e2e-session"
 c chat e2e-sessions >/dev/null
@@ -219,11 +223,11 @@ import sys, json
 r = json.load(sys.stdin)
 assert r["spec"]["prompt"].strip() == "Accept old links in `share_id_of` and in `chauffeur new --workspace-share`, with $HOME untouched.", r'
 c routine rm Stdin >/dev/null
-c routine ls | grep -q "^no routines"
+c routine ls | has "^no routines"
 c archive routine-triage --force >/dev/null
 c archive e2e-routine-src --force >/dev/null
 # Find routines: nothing waits before an analysis, and one with no day to read is refused.
-c routine suggestions | grep -q "^no suggestion waiting"
+c routine suggestions | has "^no suggestion waiting"
 if c routine find --days 0 2>/dev/null; then echo "an analysis of 0 days started"; exit 1; fi
 
 if [[ -f distribution/e2e-database.sh ]]; then
@@ -234,10 +238,10 @@ fi
 chat_ids() { c --json chats e2e-one "$@" | python3 -c 'import sys,json; print(" ".join(c["id"] for c in json.load(sys.stdin)["chats"]))'; }
 FIRST=$(c --json chat e2e-one | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
 SECOND=$(c --json chat e2e-one | python3 -c 'import sys,json; print(json.load(sys.stdin)["id"])')
-c chat rename "$SECOND" Second look | grep -q "Second look$"
-c chat close "$SECOND" | grep -q "\[closed, last active "
+c chat rename "$SECOND" Second look | has "Second look$"
+c chat close "$SECOND" | has "\[closed, last active "
 test "$(chat_ids)" = "$FIRST"
-c chats e2e-one --all | grep -q "^$SECOND .*Second look  \[closed"
+c chats e2e-one --all | has "^$SECOND .*Second look  \[closed"
 c chat reopen "$SECOND" >/dev/null
 test "$(chat_ids)" = "$FIRST $SECOND"
 if c chat delete "$SECOND" </dev/null 2>/dev/null; then echo "a chat was deleted without asking"; exit 1; fi
@@ -269,16 +273,16 @@ print(c["id"])')
 c chat delete "$CODEX_DESIGN" --yes >/dev/null
 if c chat e2e-one --from "$FIRST" 2>/dev/null; then echo "a chat that is not a design chat started from another"; exit 1; fi
 # Its canvas: canvas.json read from its folder, the screens served on their own origin only.
-c canvas "$DESIGN" | grep -q "no screens yet"
+c canvas "$DESIGN" | has "no screens yet"
 DDIR="$CHAUFFEUR_WORKSPACES_DIR/e2e-one/.chauffeur/designs/$DESIGN"
 mkdir -p "$DDIR" && echo '<p>signed out</p>' > "$DDIR/signed-out.html" && echo 'x' > "$DDIR/notes.txt"
 echo '{"pages": [{"name": "Login", "sections": [{"title": "Sign in", "screens": [{"file": "signed-out.html", "label": "Signed out"}, {"file": "gone.html"}]}]}]}' > "$DDIR/canvas.json"
-c canvas "$DESIGN" | grep -q "gone.html  390×844  \[missing\]"
+c canvas "$DESIGN" | has "gone.html  390×844  \[missing\]"
 URL=$(c --json canvas "$DESIGN" | python3 -c '
 import sys,json; c=json.load(sys.stdin); s=c["pages"][0]["sections"][0]["screens"]
 assert s[0]["label"] == "Signed out" and "url" not in s[1], c
 print(s[0]["url"])')
-curl -sfD "$T/screen-headers" "$URL" | grep -q "signed out"
+curl -sfD "$T/screen-headers" "$URL" | has "signed out"
 grep -qi "^content-security-policy: .*frame-ancestors" "$T/screen-headers"
 test "$(curl -s -o /dev/null -w '%{http_code}' "${URL%signed-out.html}notes.txt")" = 404
 # Export PNG: only screens of the canvas that are in the folder (the rendering itself needs a
@@ -286,25 +290,25 @@ test "$(curl -s -o /dev/null -w '%{http_code}' "${URL%signed-out.html}notes.txt"
 if EXPORT_ERROR=$(c export "$DESIGN" gone.html 2>&1); then
   echo "an export of a missing screen was accepted"; exit 1
 fi
-printf '%s\n' "$EXPORT_ERROR" | grep -q "gone.html is missing from the design folder"
+printf '%s\n' "$EXPORT_ERROR" | has "gone.html is missing from the design folder"
 if EXPORT_ERROR=$(c export "$DESIGN" other.html 2>&1); then
   echo "an export of an unlisted screen was accepted"; exit 1
 fi
-printf '%s\n' "$EXPORT_ERROR" | grep -q "other.html is not a screen of this design"
+printf '%s\n' "$EXPORT_ERROR" | has "other.html is not a screen of this design"
 if c export "$DESIGN" 2>/dev/null; then echo "an export without screens was accepted"; exit 1; fi
 # Comments (story 51): on a screen of the canvas, in comments.json, listed by screen; a reply follows its thread.
-c comments "$DESIGN" | grep -q "no comments yet"
+c comments "$DESIGN" | has "no comments yet"
 # Sharing (story 51): off without a share service (Core names none); with one, the state of an
 # unshared design, and without the Office's sign-in a share is refused.
-c share "$DESIGN" | grep -q "sharing is off"
+c share "$DESIGN" | has "sharing is off"
 sed -i.bak 's|^url = "" # e2e share url$|url = "https://share.example.com"|' "$CHAUFFEUR_HOME/settings.toml"
 sleep 1.5
-c share "$DESIGN" | grep -q "not shared"
+c share "$DESIGN" | has "not shared"
 if c share "$DESIGN" --with bob@example.com 2>/dev/null; then echo "a design was shared without a sign-in"; exit 1; fi
 if c share "$DESIGN" --team 2>/dev/null; then echo "a design was opened to the team without a sign-in"; exit 1; fi
 if c share "$FIRST" 2>/dev/null; then echo "a plain chat had a share state"; exit 1; fi
 # Workspace sharing (story 53): unshared at first; refused without the sign-in; no suggestion to dismiss.
-c share-workspace e2e-one | grep -q "not shared"
+c share-workspace e2e-one | has "not shared"
 if c share-workspace e2e-one --suggest bob@example.com 2>/dev/null; then echo "a workspace was shared without a sign-in"; exit 1; fi
 if c share-workspace e2e-one --stop 2>/dev/null; then echo "an unshared workspace was stopped"; exit 1; fi
 if c import-design e2e-one "https://share.example.com/s/0123456789abcdef" 2>/dev/null; then echo "a design was imported without a sign-in"; exit 1; fi
@@ -312,34 +316,34 @@ if c comment "$DESIGN" other.html "nope" 2>/dev/null; then echo "a comment on an
 CID=$(c --json comment "$DESIGN" signed-out.html "Too low" --at 48,83 | python3 -c 'import sys,json; c=json.load(sys.stdin); assert c["pin"]["x"] == 48 and "sent" not in c, c; print(c["id"])')
 c comment "$DESIGN" signed-out.html "Seen" --reply-to "$CID" >/dev/null
 python3 -c 'import json,sys; f=json.load(open(sys.argv[1])); assert [c.get("reply_to") for c in f["comments"]] == [None, sys.argv[2]], f' "$DDIR/comments.json" "$CID"
-c comments "$DESIGN" | grep -q "signed-out.html"
-c comments "$DESIGN" | grep -q "\[new\]: Too low"
-c comments "$DESIGN" | grep -q "      .*: Seen"
+c comments "$DESIGN" | has "signed-out.html"
+c comments "$DESIGN" | has "\[new\]: Too low"
+c comments "$DESIGN" | has "      .*: Seen"
 # A markdown file's comments (story 57): on a passage of a plan, kept in the notes' comments.json;
 # a reply follows its thread; any other file is refused; sending needs a chat that wrote the file.
 mkdir -p "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/.chauffeur/plans" && printf '# Plan\n\nShip it on Friday.\n' > "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/.chauffeur/plans/plan.md"
-c file-comments e2e-one .chauffeur/plans/plan.md | grep -q "no comments yet"
+c file-comments e2e-one .chauffeur/plans/plan.md | has "no comments yet"
 if c file-comment e2e-one .chauffeur/designs/"$DESIGN"/canvas.json "nope" 2>/dev/null; then echo "a comment on a file that is not markdown was accepted"; exit 1; fi
 FCID=$(c --json file-comment e2e-one .chauffeur/plans/plan.md "Too early" --quote "on Friday" | python3 -c 'import sys,json; c=json.load(sys.stdin); assert c["quote"] == "on Friday" and c["screen"] == ".chauffeur/plans/plan.md", c; print(c["id"])')
 c file-comment e2e-one .chauffeur/plans/plan.md "Monday then" --reply-to "$FCID" >/dev/null
 python3 -c 'import json,sys; f=json.load(open(sys.argv[1])); assert [c.get("reply_to") for c in f["comments"]] == [None, sys.argv[2]], f' "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/.chauffeur/comments.json" "$FCID"
-c file-comments e2e-one .chauffeur/plans/plan.md | grep -q 'on "on Friday"  \[new\]: Too early'
+c file-comments e2e-one .chauffeur/plans/plan.md | has 'on "on Friday"  \[new\]: Too early'
 if out=$(c file-comments e2e-one .chauffeur/plans/plan.md --send 2>&1); then echo "comments were sent with no chat to send them to"; exit 1; fi
 grep -q "say which chat with --to" <<<"$out"
 # A markdown file shared alone (story 57): unshared at first; refused without the sign-in, and for
 # a file that is not markdown.
-c share-file e2e-one .chauffeur/plans/plan.md | grep -q "not shared"
+c share-file e2e-one .chauffeur/plans/plan.md | has "not shared"
 if c share-file e2e-one .chauffeur/plans/plan.md --with bob@example.com 2>/dev/null; then echo "a file was shared without a sign-in"; exit 1; fi
 if c share-file e2e-one .chauffeur/comments.json 2>/dev/null; then echo "a file that is not markdown had a share state"; exit 1; fi
 if c share-file e2e-one .chauffeur/plans/plan.md --stop 2>/dev/null; then echo "an unshared file was stopped"; exit 1; fi
 # The capture script only on a screen framed by the app (capture=1), never on the file nor on a plain fetch.
-curl -s "$URL" | grep -q "chauffeur:element" && { echo "the capture script was served without capture=1"; exit 1; }
-curl -s "$URL?capture=1" | grep -q "chauffeur:element"
+curl -s "$URL" | has "chauffeur:element" && { echo "the capture script was served without capture=1"; exit 1; }
+curl -s "$URL?capture=1" | has "chauffeur:element"
 grep -q "chauffeur:element" "$DDIR/signed-out.html" && { echo "the capture script was written into the file"; exit 1; }
 c chat delete "$DESIGN" --yes >/dev/null
 test "$(chat_ids --all)" = "$FIRST"
 # Tickets attached and detached after creation: with Linear off, by identifier only, as at creation.
-c ticket add e2e-2 E2E-3 --workspace e2e-one | grep -q "E2E-2 .*(not read from Linear)"
+c ticket add e2e-2 E2E-3 --workspace e2e-one | has "E2E-2 .*(not read from Linear)"
 c --json show e2e-one | python3 -c '
 import sys, json
 tickets = json.load(sys.stdin)["tickets"]
@@ -359,14 +363,14 @@ test -f "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/alpha/README.md"
 c archive e2e-one --force
 
 # Jev: off until a key is saved and it is turned on; the key stays in this daemon's secrets.
-c jev | grep -q "off, from 60% of the context, no TypeSafe key"
+c jev | has "off, from 60% of the context, no TypeSafe key"
 if c jev on 2>/dev/null; then echo "Jev turned on without a key"; exit 1; fi
 echo "ts_e2e-key" | c jev key >/dev/null
 test "$(cat "$CHAUFFEUR_HOME/secrets/jev-api-key")" = "ts_e2e-key"
 c jev on >/dev/null
-c jev threshold 40 | grep -q "on, from 40% of the context, TypeSafe key saved"
+c jev threshold 40 | has "on, from 40% of the context, TypeSafe key saved"
 if c jev threshold 0 2>/dev/null; then echo "a 0% threshold was taken"; exit 1; fi
-c jev key --remove | grep -q "off, from 40% of the context, no TypeSafe key"
+c jev key --remove | has "off, from 40% of the context, no TypeSafe key"
 test ! -e "$CHAUFFEUR_HOME/secrets/jev-api-key"
 
 # The Linear key goes through the daemon too, into this daemon's own secrets.
@@ -473,12 +477,12 @@ subs = [(p["group"], p["number"], p["ahead"]) for p in prs if p["group"]]
 assert subs == [("sub-1", 7, 1), ("sub-2", 8, 1)], prs
 assert [p["repo"] for p in prs if p["group"] is None] == ["alpha", "beta"], prs
 '
-c prs e2e-prs | grep -q "alpha (sub-2)"
+c prs e2e-prs | has "alpha (sub-2)"
 # Both repos are on the workspace's branch, only alpha has a PR on it: merging beta's merges nothing.
 if c merge e2e-prs --pr beta:e2e/e2e-prs > "$T/merge-beta.out"; then exit 1; fi
 grep -q "beta has no open pull request on e2e/e2e-prs" "$T/merge-beta.out"
 test ! -e "$T/merges.log"
-c merge e2e-prs | grep -q "alpha .*--sub-2 merged"
+c merge e2e-prs | has "alpha .*--sub-2 merged"
 test "$(cat "$T/merges.log")" = "$(printf 'alpha 5 --squash\nalpha 7 --squash\nedit 8 --base main\nalpha 8 --squash')"
 # An image an agent's answer names is served from the workspace, with the token; no other file is.
 WS=$(c --json show e2e-prs | python3 -c 'import sys,json; w=json.load(sys.stdin); print(w["id"], w["path"])')
@@ -503,7 +507,7 @@ test "$(curl -s -o /dev/null -w '%{http_code} %{content_type}' "$SOUND_URL?token
 test "$(curl -s -o /dev/null -w '%{http_code}' "$SOUND_URL")" = "401"
 # A variable exported in the login shell's profile since the daemon started: reloading the
 # environment names it, never its value.
-c env reload | grep -q "Nothing changed"
+c env reload | has "Nothing changed"
 echo 'export E2E_MCP_TOKEN=s3cr3t' > "$T/profile"
 c env reload > "$T/reload.out"
 grep -q "Added: E2E_MCP_TOKEN" "$T/reload.out"
@@ -528,10 +532,12 @@ print(message.strip())
 assert "alpha: README.md" in message and "beta: .cache/" in message, message
 PY_CHECK
 grep -q -- "--discard" "$T/promote.err"
-grep -q scribble "$LOOK/alpha/README.md" && test -e "$LOOK/beta/.cache/out"
+grep -q scribble "$LOOK/alpha/README.md"
+test -e "$LOOK/beta/.cache/out"
 c --json show e2e-look | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["explore"], w'
-c promote e2e-look --discard | grep -q e2e-look
-test "$(cat "$LOOK/alpha/README.md")" = alpha && test ! -e "$LOOK/beta/.cache"
+c promote e2e-look --discard | has e2e-look
+test "$(cat "$LOOK/alpha/README.md")" = alpha
+test ! -e "$LOOK/beta/.cache"
 test "$(git -C "$LOOK/alpha" branch --show-current)" = e2e/e2e-look
 c archive e2e-look --force >/dev/null
 
@@ -550,7 +556,7 @@ if [ "$(uname)" = Darwin ]; then
   c --json update | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["available"] is None, r'
   # Published after the daemon's own look: `chauffeur update` asks GitHub again and sees it at once.
   mv "$T/staged" "$T/release"
-  c update | grep -q "Chauffeur 99.0.0 is available"
+  c update | has "Chauffeur 99.0.0 is available"
   c --json update --install | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["phase"] == "installed" and r["available"] == "99.0.0", r'
   test "$(cat "$T/Applications/Chauffeur.app/Contents/MacOS/chauffeurd")" = new
   test "$(ls -A "$T/Applications")" = Chauffeur.app
@@ -571,7 +577,7 @@ c --json models | python3 -c '
 import sys,json; agents={a["agent"]: a for a in json.load(sys.stdin)["agents"]}
 local=[m for m in agents["codex"]["models"] if m["id"] == "ollama/tiny"]
 assert local and local[0]["name"] == "tiny (local)", agents["codex"]'
-c ollama | grep -q "tiny"
+c ollama | has "tiny"
 if c ollama pull "bad name" 2>/dev/null; then echo "a model name with a space was pulled"; exit 1; fi
 
 # From inside a workspace or an agent's session, the daemon commands refuse to stop the default
@@ -677,7 +683,7 @@ w = {w["name"]: w["outcome"] for w in r["workspaces"]}
 assert w == {"Pricing filters": "already_imported", "Linked work": "already_imported", "Old work": "imported", "Cloudy": "skipped"}, w'
 c --json show old-work | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["state"] == "archived", w'
 grep -q "An old question" "$CHAUFFEUR_HOME/archive/old-work/conductor/Old chat.md"
-c import conductor --yes --include-archived --db "$CDB" | grep -q "^Old work: already imported, as old-work$"
+c import conductor --yes --include-archived --db "$CDB" | has "^Old work: already imported, as old-work$"
 # A Conductor whose schema this Chauffeur does not know: stopped before any change.
 cp "$CDB" "$T/conductor-other.db"
 sqlite3 "$T/conductor-other.db" "ALTER TABLE workspaces DROP COLUMN linked_directory_paths"
@@ -704,16 +710,16 @@ grep -q "(CLAUDECODE is set)" "$T/refused.err"
 # the user's real LaunchAgent, whatever HOME says.)
 c daemon status >/dev/null
 # A throwaway daemon is stopped from a workspace, named by its CHAUFFEUR_HOME.
-CHAUFFEUR_WORKSPACE_ID=01e2e CLAUDECODE=1 c daemon stop | grep -q "chauffeurd stopped"
+CHAUFFEUR_WORKSPACE_ID=01e2e CLAUDECODE=1 c daemon stop | has "chauffeurd stopped"
 # Start, refused in a workspace, says so rather than that the daemon is not running.
 if CHAUFFEUR_WORKSPACE_ID=01e2e c daemon start 2> "$T/refused.err"; then exit 1; fi
 grep -q "refusing to start a daemon from inside a Chauffeur workspace" "$T/refused.err"
 if grep -q "is not running" "$T/refused.err"; then cat "$T/refused.err"; exit 1; fi
 # The user's override, which the refusal never names; and outside, the default daemon stops as before.
 c daemon start >/dev/null
-outside CHAUFFEUR_WORKSPACE_ID=01e2e "$BIN/chauffeur" daemon stop --real-daemon | grep -q "chauffeurd stopped"
+outside CHAUFFEUR_WORKSPACE_ID=01e2e "$BIN/chauffeur" daemon stop --real-daemon | has "chauffeurd stopped"
 if c daemon status >/dev/null; then echo "the override did not stop the daemon"; exit 1; fi
 c daemon start >/dev/null
-outside "$BIN/chauffeur" daemon stop | grep -q "chauffeurd stopped"
+outside "$BIN/chauffeur" daemon stop | has "chauffeurd stopped"
 if c daemon status >/dev/null; then echo "daemon stop outside a workspace did not stop it"; exit 1; fi
 echo "E2E CLI OK"
