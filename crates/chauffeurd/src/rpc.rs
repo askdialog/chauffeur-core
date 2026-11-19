@@ -560,9 +560,13 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
             daemon,
             &params.name,
             params.workspace.as_deref(),
+            &params.repos,
         )?),
         ClientCall::SectionRename(params) => {
             to_value(sections::rename(daemon, &params.section, &params.name)?)
+        }
+        ClientCall::SectionSetRepos(params) => {
+            to_value(sections::set_repos(daemon, &params.section, &params.repos)?)
         }
         ClientCall::SectionFold(params) => {
             to_value(sections::fold(daemon, &params.section, params.folded)?)

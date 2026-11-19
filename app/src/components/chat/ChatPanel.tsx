@@ -1214,7 +1214,7 @@ export function ChatConversation({
             <Spinner size={14} className="text-working" /> Loading the conversation…
           </div>
         ) : items.length === 0 ? (
-          <EmptyState title={working ? "Starting the agent…" : "Nothing here yet"}>
+          <EmptyState title={working && !settingUp ? "Starting the agent…" : "Nothing here yet"}>
             {readOnly ? "This chat is read-only." : "Messages, tool calls and answers will appear here."}
           </EmptyState>
         ) : (
@@ -1411,15 +1411,13 @@ export function ChatConversation({
           draftKey={chat.id}
           working={working && !settingUp}
           placeholder={
-            settingUp
-              ? "Write already: the message waits for the agent to start…"
-              : working
-                ? `Steer the agent (↵), or queue for after its turn (${kbd("⌘↵")})…`
-                : banner?.state === "writing"
-                  ? "The brief fills this box once written…"
-                  : design
-                    ? "Describe the screens to design…"
-                    : "Message the agent…"
+            working && !settingUp
+              ? `Steer the agent (↵), or queue for after its turn (${kbd("⌘↵")})…`
+              : banner?.state === "writing"
+                ? "The brief fills this box once written…"
+                : design
+                  ? "Describe the screens to design…"
+                  : "Message the agent…"
           }
           commandsFor={commandsFor}
           shell={shellOffered}

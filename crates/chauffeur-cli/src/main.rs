@@ -122,6 +122,9 @@ enum Command {
         /// Create a child workspace of this one (id or slug).
         #[arg(long, env = "CHAUFFEUR_PARENT")]
         parent: Option<String>,
+        /// The sidebar section to start in, using its default repos unless --repo is given.
+        #[arg(long, conflicts_with = "parent")]
+        section: Option<String>,
         /// First message of a chat started in the workspace; `-` reads it from standard input
         /// (a quoted heredoc keeps backticks and `$` as written).
         #[arg(short, long)]
@@ -810,6 +813,9 @@ enum SectionAction {
         /// A workspace to file in it.
         #[arg(long)]
         workspace: Option<String>,
+        /// A default repo for new workspaces in the section (repeatable).
+        #[arg(short, long = "repo")]
+        repos: Vec<String>,
     },
     /// Rename a section.
     Rename {
@@ -817,6 +823,8 @@ enum SectionAction {
         #[arg(required = true, num_args = 1.., trailing_var_arg = true)]
         name: Vec<String>,
     },
+    /// Set a section's default repos, or clear them when no repos are given.
+    Repos { section: String, repos: Vec<String> },
     /// Move a section above another one, or last.
     Move {
         section: String,
@@ -1212,6 +1220,7 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
             name,
             branch,
             parent,
+            section,
             prompt,
             images,
             agent,
@@ -1233,9 +1242,10 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
                     name,
                     branch,
                     parent,
+                    chat_kind: section.as_ref().map(|_| ChatKind::Chat),
+                    section,
                     prompt: prompt.map(text_or_stdin).transpose()?,
                     images: image_inputs(&images)?,
-                    chat_kind: None,
                     agent: agent.map(Into::into),
                     model,
                     effort,
@@ -1317,11 +1327,16 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
                         client.call(ClientCall::SectionList(EmptyParams {})).await?;
                     print_or(json, &result, || sections(&result));
                 }
-                SectionAction::New { name, workspace } => {
+                SectionAction::New {
+                    name,
+                    workspace,
+                    repos,
+                } => {
                     let result: SectionInfo = client
                         .call(ClientCall::SectionCreate(CreateSectionParams {
                             name: name.join(" "),
                             workspace,
+                            repos,
                         }))
                         .await?;
                     print_or(json, &result, || render::section_line(&result));
@@ -1331,6 +1346,15 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
                         .call(ClientCall::SectionRename(RenameSectionParams {
                             section,
                             name: name.join(" "),
+                        }))
+                        .await?;
+                    print_or(json, &result, || render::section_line(&result));
+                }
+                SectionAction::Repos { section, repos } => {
+                    let result: SectionInfo = client
+                        .call(ClientCall::SectionSetRepos(SetSectionReposParams {
+                            section,
+                            repos,
                         }))
                         .await?;
                     print_or(json, &result, || render::section_line(&result));

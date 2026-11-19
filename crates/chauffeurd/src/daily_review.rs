@@ -734,7 +734,7 @@ mod tests {
 
         // Deleted, it comes back with the next review; a section the user named so is taken.
         crate::sections::delete(&d, &id).unwrap();
-        let mine = crate::sections::create(&d, "daily REVIEWS", None).unwrap();
+        let mine = crate::sections::create(&d, "daily REVIEWS", None, &[]).unwrap();
         assert_eq!(section(&d).unwrap(), mine.id);
         crate::sections::delete(&d, &mine.id).unwrap();
         let again = section(&d).unwrap();

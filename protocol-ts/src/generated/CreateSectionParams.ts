@@ -4,4 +4,8 @@ export type CreateSectionParams = { name: string,
 /**
  * A workspace to file in the new section.
  */
-workspace?: string, };
+workspace?: string, 
+/**
+ * Repos for the new-workspace shortcut. Empty creates an ordinary section.
+ */
+repos: Array<string>, };

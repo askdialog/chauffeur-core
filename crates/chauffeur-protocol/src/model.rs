@@ -207,6 +207,10 @@ pub struct SectionInfo {
     /// Folded in the sidebar: its workspaces hidden, ⌘1–9 skipping them.
     #[serde(default)]
     pub folded: bool,
+    /// Ordered repos for the section's new-workspace shortcut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repos: Option<Vec<String>>,
     // The daemon-owned reviews section, independent of its user-editable name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

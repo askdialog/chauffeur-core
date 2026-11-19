@@ -8,4 +8,8 @@ export type SectionInfo = { id: string, name: string,
 /**
  * Folded in the sidebar: its workspaces hidden, ⌘1–9 skipping them.
  */
-folded: boolean, reviews?: boolean, };
+folded: boolean, 
+/**
+ * Ordered repos for the section's new-workspace shortcut.
+ */
+repos?: Array<string>, reviews?: boolean, };

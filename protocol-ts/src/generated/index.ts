@@ -530,6 +530,7 @@ export type { SessionStopResult } from "./SessionStopResult";
 export type { SessionTaskParams } from "./SessionTaskParams";
 export type { SetEnvParams } from "./SetEnvParams";
 export type { SetSectionParams } from "./SetSectionParams";
+export type { SetSectionReposParams } from "./SetSectionReposParams";
 export type { SetTicketsParams } from "./SetTicketsParams";
 export type { SetTicketsResult } from "./SetTicketsResult";
 export type { SettingsUpdate } from "./SettingsUpdate";

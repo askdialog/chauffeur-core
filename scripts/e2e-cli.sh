@@ -140,6 +140,20 @@ assert [s["name"] for s in r["sections"]] == ["Back end"], r'
 if c section new back end 2>/dev/null; then echo "a second section took the same name"; exit 1; fi
 c section rm "Back end" | has "^no sections"
 c --json show e2e-one | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["section"] is None and w["section_id"] is None, w'
+echo "== section shortcuts. several repos are launchable on their own and as a group"
+c section new alpha --repo alpha
+c section new beta --repo beta
+c section new Shop --repo beta --repo alpha
+c --json new --section alpha --name from-alpha | python3 -c 'import sys,json; r=json.load(sys.stdin); w=r["workspace"]; assert w["section"] == "alpha" and [t["repo"] for t in w["worktrees"]] == ["alpha"] and r["chat"]["agent_session_id"] is None, r'
+c --json new --section beta --name from-beta | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["workspace"]["section"] == "beta" and [t["repo"] for t in r["workspace"]["worktrees"]] == ["beta"], r'
+c --json new --section Shop --name from-shop | python3 -c 'import sys,json; r=json.load(sys.stdin); w=r["workspace"]; assert w["section"] == "Shop" and [t["repo"] for t in w["worktrees"]] == ["beta", "alpha"] and r["chat"]["agent_session_id"] is None, r'
+c section repos Shop alpha
+c --json section ls | python3 -c 'import sys,json; r=json.load(sys.stdin); assert [(s["name"], s["repos"]) for s in r["sections"]] == [("alpha", ["alpha"]), ("beta", ["beta"]), ("Shop", ["alpha"])], r'
+c --json show from-shop | python3 -c 'import sys,json; w=json.load(sys.stdin); assert [t["repo"] for t in w["worktrees"]] == ["beta", "alpha"], w'
+c section repos Shop
+if c new --section Shop --name cleared 2>/dev/null; then echo "a cleared section used the global defaults"; exit 1; fi
+for name in from-alpha from-beta from-shop; do c archive "$name" --force; done
+for name in alpha beta Shop; do c section rm "$name"; done
 test -d "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/alpha"
 test -d "$CHAUFFEUR_WORKSPACES_DIR/e2e-one/beta"
 PATH_A=$(c --json worktree add --workspace e2e-one --repo alpha --name probe | python3 -c 'import sys,json; print(json.load(sys.stdin)["path"])')

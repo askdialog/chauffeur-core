@@ -633,8 +633,27 @@ impl WorkspaceManager {
 
     // --- creation ---
 
-    pub async fn create(&self, params: CreateWorkspaceParams) -> Result<CreateWorkspaceResult> {
-        self.create_for_review(params, None, None).await
+    pub async fn create(&self, mut params: CreateWorkspaceParams) -> Result<CreateWorkspaceResult> {
+        let section = if let Some(key) = &params.section {
+            if params.parent.is_some() {
+                return Err(Error::BadRequest(
+                    "a child workspace uses its parent's section".into(),
+                ));
+            }
+            let section = crate::sections::resolve(&self.d(), key)?;
+            if params.repos.is_empty() && !params.no_repos {
+                params.repos = section.repos.ok_or_else(|| {
+                    Error::BadRequest(format!(
+                        "{} has no default repos: pick repos or edit the section",
+                        section.name
+                    ))
+                })?;
+            }
+            Some(section.id)
+        } else {
+            None
+        };
+        self.create_for_review(params, None, section).await
     }
 
     /// The workspace the daemon keeps for `purpose` in `path`, made the first time: an exploration
@@ -866,8 +885,7 @@ impl WorkspaceManager {
             position: 0.0,
             title,
             title_source,
-            // A child goes into its parent's section, a daily review into the reviews' one; any
-            // other workspace on top of the others.
+            // A child goes into its parent's section; other workspaces use the requested section.
             section_id: parent
                 .as_ref()
                 .and_then(|p| p.section_id.clone())
@@ -3266,7 +3284,7 @@ pub fn read_only(row: &WorkspaceRow, what: &str) -> Result<()> {
 
 /// Repos named in a request (`name` or `owner/name`): valid, and one per folder, since a
 /// workspace holds each repo in a folder of its short name.
-fn check_repo_refs(forge: Forge, references: &[String]) -> Result<()> {
+pub(crate) fn check_repo_refs(forge: Forge, references: &[String]) -> Result<()> {
     let mut folders: HashMap<&str, &str> = HashMap::new();
     for reference in references {
         parse_repo_ref(forge, reference)?;
@@ -3423,26 +3441,24 @@ fn with_design(prompt: Option<&str>, title: &str, folder: &str) -> String {
     }
 }
 
-/// The first chat a creation opens: on a first message, images, or an explicit design.
+/// The first chat a creation opens: on a first message, images, or an explicit chat kind.
 fn first_chat_params(
     workspace_id: &str,
     params: &CreateWorkspaceParams,
 ) -> Option<CreateChatParams> {
     let prompt = params.prompt.clone().filter(|p| !p.trim().is_empty());
     let has_images = params.images.as_ref().is_some_and(|i| !i.is_empty());
-    (prompt.is_some() || has_images || params.chat_kind == Some(ChatKind::Design)).then(|| {
-        CreateChatParams {
-            workspace: workspace_id.to_string(),
-            kind: params.chat_kind,
-            agent: params.agent,
-            model: params.model.clone(),
-            effort: params.effort.clone(),
-            fast: params.fast,
-            images: params.images.clone(),
-            permission_mode: params.permission_mode,
-            prompt,
-            ..Default::default()
-        }
+    (prompt.is_some() || has_images || params.chat_kind.is_some()).then(|| CreateChatParams {
+        workspace: workspace_id.to_string(),
+        kind: params.chat_kind,
+        agent: params.agent,
+        model: params.model.clone(),
+        effort: params.effort.clone(),
+        fast: params.fast,
+        images: params.images.clone(),
+        permission_mode: params.permission_mode,
+        prompt,
+        ..Default::default()
     })
 }
 

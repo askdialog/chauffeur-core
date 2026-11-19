@@ -554,6 +554,11 @@ methods! {
         #[access(Any)]
         #[relay(Local)]
         SectionRename(RenameSectionParams) -> SectionInfo,
+        /// Changes the repositories a section creates workspaces with. Empty clears the shortcut.
+        #[serde(rename = "section.set_repos")]
+        #[access(Any)]
+        #[relay(Local)]
+        SectionSetRepos(SetSectionReposParams) -> SectionInfo,
         /// Folds or unfolds a section in the sidebar.
         #[serde(rename = "section.fold")]
         #[access(Any)]
@@ -1645,6 +1650,9 @@ pub struct CreateWorkspaceParams {
     /// Makes this a child workspace of the given workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// Start in this sidebar section, using its repos if none are specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
     /// Starts a first chat with this prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
@@ -2003,6 +2011,9 @@ pub struct CreateSectionParams {
     /// A workspace to file in the new section.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// Repos for the new-workspace shortcut. Empty creates an ordinary section.
+    #[serde(default)]
+    pub repos: Vec<String>,
 }
 
 /// Names a section by its id or its name (any case).
@@ -2017,6 +2028,13 @@ pub struct SectionParams {
 pub struct RenameSectionParams {
     pub section: String,
     pub name: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct SetSectionReposParams {
+    pub section: String,
+    pub repos: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]

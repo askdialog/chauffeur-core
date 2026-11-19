@@ -6,7 +6,9 @@ import {
   ClipboardCheck,
   Copy,
   CornerDownRight,
+  Ellipsis,
   ExternalLink,
+  Folder,
   FolderInput,
   FolderOpen,
   FolderPlus,
@@ -16,6 +18,7 @@ import {
   GitPullRequestClosed,
   GitPullRequestDraft,
   Layers,
+  ListPlus,
   Mail,
   MailOpen,
   Pencil,
@@ -60,6 +63,7 @@ import {
 } from "@/lib/workspaceOrder";
 import {
   client,
+  createInSection,
   createSection,
   deleteSection,
   foldSection,
@@ -95,6 +99,7 @@ import { RetitleWorkspaceDialog } from "./RetitleWorkspaceDialog";
 import { PromoteDialog } from "./PromoteDialog";
 import { DevServicesDialog } from "./DevServicesDialog";
 import { WorkspaceShareDialog } from "./WorkspaceShareDialog";
+import { SectionReposDialog, type SectionReposAction } from "./SectionReposDialog";
 import { chatIdsOf, pendingCount, shareIndicator } from "@/lib/workspaceShare";
 import { useWorkspaceShares } from "@/state/workspaceShares";
 import { PR_STATUS_LABEL, prSummary, prSummaryTitle, type PrStatusKind } from "@/lib/prSummary";
@@ -104,7 +109,7 @@ import { TransferDialog } from "./TransferDialog";
 import { devServicesCopy } from "@/lib/devServices";
 import { batchCounts, transferCopy, transferUnavailable } from "@/lib/transfer";
 import { clearPicked, openBatch, pick, useTransfers } from "@/state/transfers";
-import { Badge, Button, cx, IconButton, Kbd, Spinner, StatusDot } from "./ui";
+import { Badge, Button, cx, IconButton, Kbd, Popover, Spinner, StatusDot } from "./ui";
 import { kbd } from "../lib/keys";
 import { SIDEBAR_DEFAULT_WIDTH } from "@/lib/sidebarWidth";
 
@@ -189,6 +194,7 @@ export function Sidebar() {
   const [sharing, setSharing] = useState<WorkspaceInfo | null>(null);
   // The name of a new section, typed in place; for a workspace to file in it, when asked from its menu.
   const [newSection, setNewSection] = useState<{ workspace?: string } | null>(null);
+  const [sectionRepos, setSectionRepos] = useState<SectionReposAction | null>(null);
   // The rows are memoised: their actions take the workspace and stay the same objects, reading the
   // selection as it is when they run.
   const selection = useRef({ picked, pickedWorkspaces, shown });
@@ -305,7 +311,7 @@ export function Sidebar() {
   const renderGroup = (group: SidebarGroup) => {
     if (group.kind === "section") {
       return (
-        <Fragment key={group.key}>
+        <div key={group.key} className="mb-1">
           <SectionHeading
             section={group.section}
             rows={group.rows}
@@ -319,12 +325,13 @@ export function Sidebar() {
             }}
             onDragEnd={endDrag}
             routines={group.key === routinesSectionId}
+            onEditRepos={() => setSectionRepos(group.section)}
             {...headingDrop(group.key, true)}
           />
           {group.key === routinesSectionId && <SuggestionsEntry />}
           {group.key === reviewSectionId && <ReviewsEntry selected={reviewsShown} />}
           {!group.section.folded && shownRows(group.rows, collapsed).map(renderRow)}
-        </Fragment>
+        </div>
       );
     }
     const title = group.kind === "pinned" ? "Pinned" : "Workspaces";
@@ -339,6 +346,7 @@ export function Sidebar() {
           title={title}
           highlighted={dragging?.kind === "workspace" && !!headingTarget(group.key)}
           onNewSection={group.kind === "workspaces" ? () => setNewSection({}) : undefined}
+          onAddRepos={group.kind === "workspaces" ? setSectionRepos : undefined}
           {...headingDrop(group.key, false)}
         />
         {group.kind === "workspaces" && activeCount === 0 ? (
@@ -382,7 +390,7 @@ export function Sidebar() {
         </div>
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3" aria-label="Workspaces">
+      <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 [&::-webkit-scrollbar]:w-2" aria-label="Workspaces">
         {!loaded && connection.status !== "open" ? (
           <>
             <SectionTitle>Workspaces</SectionTitle>
@@ -432,6 +440,7 @@ export function Sidebar() {
       {transferring && <TransferDialog workspaces={transferring} onClose={() => setTransferring(null)} />}
       {servicesOf && <DevServicesDialog workspace={servicesOf} onClose={() => setServicesOf(null)} />}
       {sharing && <WorkspaceShareDialog workspace={sharing} onClose={() => setSharing(null)} />}
+      {sectionRepos && <SectionReposDialog action={sectionRepos} onClose={() => setSectionRepos(null)} />}
       <SidebarEdge />
     </aside>
   );
@@ -570,26 +579,61 @@ type DropHandlers = {
   onDrop: (event: React.DragEvent<HTMLElement>) => void;
 };
 
-/** "Pinned" or "Workspaces": a workspace dropped on it goes on top; "Workspaces" offers a new section on hover. */
+/** "Pinned" or "Workspaces": a workspace dropped on it goes on top. */
 function GroupHeading({
   title,
   highlighted,
   onNewSection,
+  onAddRepos,
   ...drop
-}: { title: string; highlighted: boolean; onNewSection?: () => void } & DropHandlers) {
+}: {
+  title: string;
+  highlighted: boolean;
+  onNewSection?: () => void;
+  onAddRepos?: (action: "repo" | "group") => void;
+} & DropHandlers) {
+  const [repoMenu, setRepoMenu] = useState(false);
+  const repoMenuAnchor = useRef<HTMLSpanElement>(null);
+  const addRepos = (action: "repo" | "group") => {
+    repoMenuAnchor.current?.querySelector("button")?.focus();
+    setRepoMenu(false);
+    onAddRepos?.(action);
+  };
   return (
     <div
       {...drop}
       data-group-heading={title}
-      className={cx("group/heading flex items-center justify-between rounded-md", highlighted && "bg-accent/10 ring-1 ring-accent/40")}
+      className={cx("flex items-center justify-between rounded-md", highlighted && "bg-accent/10 ring-1 ring-accent/40")}
     >
       <SectionTitle>{title}</SectionTitle>
-      {onNewSection && (
-        <span className="mr-1 mt-1 hidden group-hover/heading:block">
-          <IconButton title="New section, to file workspaces by theme" className="h-5 w-5" onClick={onNewSection} data-testid="new-section">
-            <FolderPlus size={12} />
+      <div className="mr-1 flex items-center gap-px">
+        {onNewSection && (
+          <IconButton title="New manual section" onClick={onNewSection} data-testid="new-section">
+            <FolderPlus size={14} />
           </IconButton>
-        </span>
+        )}
+        {onAddRepos && (
+          <span ref={repoMenuAnchor}>
+            <IconButton
+              title="Add a repository or group to the sidebar"
+              aria-expanded={repoMenu}
+              className={cx(repoMenu && "bg-hover text-fg")}
+              onClick={() => setRepoMenu(!repoMenu)}
+            >
+              <ListPlus size={14} />
+            </IconButton>
+          </span>
+        )}
+      </div>
+      {onAddRepos && repoMenu && (
+        <Popover anchor={repoMenuAnchor} width={210} height={68} className="p-1" onClose={() => setRepoMenu(false)}>
+          <Button data-autofocus variant="ghost" className="justify-start" onClick={() => addRepos("repo")}>
+            <GitBranch size={13} /> Add repository…
+          </Button>
+          <Button variant="ghost" className="justify-start" onClick={() => addRepos("group")}>
+            <Layers size={13} /> New repository group…
+          </Button>
+        </Popover>
       )}
     </div>
   );
@@ -608,6 +652,7 @@ function SectionHeading({
   target,
   onDragStart,
   onDragEnd,
+  onEditRepos,
   routines = false,
   ...drop
 }: {
@@ -618,16 +663,30 @@ function SectionHeading({
   target: { below: boolean } | null;
   onDragStart: (event: React.DragEvent<HTMLElement>) => void;
   onDragEnd: () => void;
+  onEditRepos: () => void;
   /** The routines' section: it holds Find routines. */
   routines?: boolean;
 } & DropHandlers) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [renaming, setRenaming] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const repos = section.repos ?? [];
+  const busy = creating || rows.some(({ workspace }) => workspace.state === "creating");
   const indicator = section.folded ? foldedIndicator(rows) : null;
   const toggle = () => void foldSection(section.id, !section.folded);
+  async function create() {
+    setCreating(true);
+    try {
+      await createInSection(section);
+    } catch (error) {
+      toast(`Could not create a workspace in ${section.name}: ${errorMessage(error)}`, "error");
+    } finally {
+      setCreating(false);
+    }
+  }
   return (
     <div
-      className="relative mt-1"
+      className="relative"
       draggable={!renaming}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
@@ -643,7 +702,7 @@ function SectionHeading({
           setMenu({ x: event.clientX, y: event.clientY });
         }}
         className={cx(
-          "flex h-7 items-center gap-1.5 rounded-md pl-1 pr-2 text-[11px] font-medium uppercase tracking-wide text-faint hover:text-muted",
+          "flex h-7 items-center gap-1.5 rounded-md pl-1 pr-2 text-[11px] font-medium uppercase tracking-wide text-muted hover:bg-hover/60",
           target && draggingKind === "workspace" && "bg-accent/10 ring-1 ring-accent/40",
           dragging && "opacity-40",
         )}
@@ -661,11 +720,13 @@ function SectionHeading({
           <button
             type="button"
             onClick={toggle}
-            title={section.folded ? "Unfold" : "Fold"}
+            title={repos.length ? repos.join(" · ") : section.folded ? "Unfold" : "Fold"}
             aria-expanded={!section.folded}
-            className="flex min-w-0 flex-1 items-center gap-1 text-left uppercase"
+            className={cx("flex h-full min-w-0 flex-1 items-center gap-1 text-left", repos.length > 0 ? "normal-case tracking-normal" : "uppercase")}
           >
-            <ChevronRight size={12} className={cx("shrink-0 transition-transform", !section.folded && "rotate-90")} />
+            <ChevronRight size={12} className={cx("shrink-0 text-faint transition-transform", !section.folded && "rotate-90")} />
+            {repos.length === 1 && <GitBranch size={12} className="shrink-0 text-faint" />}
+            {repos.length > 1 && <Layers size={12} className="shrink-0 text-faint" />}
             <span className="truncate">{section.name}</span>
           </button>
         )}
@@ -680,9 +741,21 @@ function SectionHeading({
         {routines && <FindRoutinesButton />}
         {/* The reviews' section lists none: its count would always read 0. */}
         {!section.reviews && (
-          <span className="shrink-0 text-[10.5px] font-normal tabular-nums normal-case" data-testid="section-count">
+          <span title={`${rows.length} ${rows.length === 1 ? "workspace" : "workspaces"}`} className="min-w-3 shrink-0 text-center text-[11px] font-normal tabular-nums normal-case text-faint" data-testid="section-count">
             {rows.length}
           </span>
+        )}
+        {repos.length > 0 && !renaming && (
+          <IconButton
+            title={`New workspace in ${section.name}`}
+            className="h-5 w-5 shrink-0"
+            disabled={busy}
+            aria-busy={busy}
+            onClick={() => void create()}
+            data-testid="section-new-workspace"
+          >
+            {busy ? <Spinner size={11} /> : <Plus size={13} />}
+          </IconButton>
         )}
       </div>
       {menu && (
@@ -691,6 +764,7 @@ function SectionHeading({
           y={menu.y}
           items={[
             { label: "Rename", icon: <Pencil size={13} />, shortcut: "r", onSelect: () => setRenaming(true) },
+            ...(!section.reviews && !routines ? [{ label: "Edit default repos…", icon: <GitBranch size={13} />, onSelect: onEditRepos }] : []),
             { label: section.folded ? "Unfold" : "Fold", icon: <ChevronRight size={13} />, shortcut: "f", onSelect: toggle },
             "separator",
             {
@@ -880,7 +954,7 @@ const WorkspaceRow = memo(function WorkspaceRow({
   const routine = useApp((s) => routineOfWorkspace(s.routines, workspace.id));
   // Marked unread from its menu, the workspace shown says so too.
   const unread = !!workspace.unread;
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; anchor?: HTMLButtonElement } | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [autoRenaming, setAutoRenaming] = useState(false);
   const repos = workspace.state === "archived" ? workspaceRepoNames(workspace) : workspaceRepos(workspace);
@@ -889,7 +963,7 @@ const WorkspaceRow = memo(function WorkspaceRow({
   const archivable = workspace.state === "ready" || workspace.state === "cleanup_failed";
   const indicator = children && childrenFolded ? foldedIndicator(children) : null;
   return (
-    <div className="group relative">
+    <div className="group/row relative">
       {/* A div while renaming: in a button, the field's spaces would press it. */}
       <RowTag
         renaming={renaming}
@@ -914,10 +988,12 @@ const WorkspaceRow = memo(function WorkspaceRow({
         aria-pressed={pickedCount > 0 ? picked : undefined}
         data-picked={picked ? "" : undefined}
         className={cx(
-          "group relative flex w-full flex-col rounded-md py-1.5 text-left",
-          picked ? "bg-accent/10 ring-1 ring-inset ring-accent/35" : selected ? "bg-hover" : "hover:bg-hover/60",
+          "relative flex w-full flex-col rounded-md py-1 text-left",
+          picked ? "bg-accent/10 ring-1 ring-inset ring-accent/35" : selected ? "bg-hover" : "group-hover/row:bg-hover/60",
           // Extensions load their own px-2 utility later; it would overwrite a child's pl-6.
-          depth > 0 ? "pl-6 pr-2" : "px-2",
+          depth > 0 ? "pl-6" : "pl-2",
+          (selected || menu || children) && !renaming ? "pr-8" : "pr-2",
+          !renaming && "group-hover/row:pr-8 group-focus-within/row:pr-8",
         )}
       >
         <div className={cx("flex w-full items-center gap-2", children && "pr-7")}>
@@ -932,6 +1008,7 @@ const WorkspaceRow = memo(function WorkspaceRow({
               className={cx(
                 "min-w-0 flex-1 truncate",
                 selected || unread ? "text-fg" : "text-muted",
+                selected && !unread && "font-medium",
                 unread && "font-semibold",
                 workspace.state === "archived" && "text-faint",
               )}
@@ -946,7 +1023,7 @@ const WorkspaceRow = memo(function WorkspaceRow({
           <RowPrs workspaceId={workspace.id} />
           <RowBadge workspace={workspace} />
           {shortcut != null && (
-            <span className="hidden text-[10.5px] text-faint group-hover:inline">{kbd(`⌘${shortcut}`)}</span>
+            <span className="hidden shrink-0 text-[10.5px] text-faint group-hover/row:inline">{kbd(`⌘${shortcut}`)}</span>
           )}
         </div>
         <div className="ml-4 flex min-w-0 items-center gap-1.5 text-[11px] text-faint">
@@ -972,13 +1049,17 @@ const WorkspaceRow = memo(function WorkspaceRow({
             </span>
           )}
           {ticket && <span className="shrink-0 text-muted/80">{ticket}</span>}
-          <span className={cx("truncate", archivable && "group-hover:pr-6")}>{repos.join(" · ") || "no repos"}</span>
+          <span title={repos.length ? repos.join(" · ") : undefined} className="truncate">
+            {repos.join(" · ") || (workspace.state === "creating" ? "" : "no repos")}
+          </span>
         </div>
       </RowTag>
       {menu && (
         <ContextMenu
           x={menu.x}
           y={menu.y}
+          anchor={menu.anchor}
+          label={`Actions for ${workspaceName(workspace)}`}
           items={rowMenu(workspace, {
             picked,
             pickedCount,
@@ -1007,7 +1088,7 @@ const WorkspaceRow = memo(function WorkspaceRow({
           aria-label={childrenFolded ? "Show sub-workspaces" : "Hide sub-workspaces"}
           aria-expanded={!childrenFolded}
           data-testid="row-children-toggle"
-          className="absolute right-1 top-1.5 flex h-5 items-center gap-0.5 rounded px-0.5 text-[10.5px] tabular-nums text-faint hover:bg-hover hover:text-fg"
+          className="absolute right-8 top-1 flex h-5 items-center gap-0.5 rounded px-0.5 text-[10.5px] tabular-nums text-faint hover:bg-hover hover:text-fg"
         >
           {indicator?.needsInput && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-attention" aria-label="A sub-workspace needs input" />}
           {indicator?.working && (
@@ -1019,12 +1100,20 @@ const WorkspaceRow = memo(function WorkspaceRow({
           <ChevronRight size={12} className={cx("shrink-0 transition-transform", !childrenFolded && "rotate-90")} />
         </button>
       )}
-      {archivable && (
-        <span className="absolute right-1 bottom-0.5 hidden group-hover:block">
-          <IconButton title="Archive" onClick={onArchive} data-testid="row-archive">
-            <Archive size={12} />
-          </IconButton>
-        </span>
+      {!renaming && (
+        <IconButton
+          title={`Actions for ${workspaceName(workspace)}`}
+          aria-haspopup="menu"
+          aria-expanded={menu !== null}
+          className={cx(
+            "absolute right-1 top-1/2 -translate-y-1/2",
+            !selected && !menu && "opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100",
+            menu && "bg-hover text-fg",
+          )}
+          onClick={(event) => setMenu(menu?.anchor ? null : { x: 0, y: 0, anchor: event.currentTarget })}
+        >
+          <Ellipsis size={14} />
+        </IconButton>
       )}
     </div>
   );
@@ -1082,7 +1171,7 @@ function rowMenu(
     { label: "Auto-rename…", icon: <Sparkles size={13} />, disabled: !ready, hint: ready ? "Name from recent messages" : "Available once the workspace is ready", onSelect: actions.onAutoRename },
   ];
   if (actions.sections) {
-    items.push({ label: "Move to section", icon: <FolderInput size={13} />, submenu: sectionSubmenu(workspace, actions.sections, actions.onNewSection) });
+    items.unshift({ label: "Move to section", icon: <FolderInput size={13} />, submenu: sectionSubmenu(workspace, actions.sections, actions.onNewSection) });
   }
   // A moved workspace is read-only here: it comes back before anything else.
   const here = ready && !workspace.moved_to;
@@ -1139,14 +1228,21 @@ function rowMenu(
 /** The sections a workspace can be filed in, "No section", and a new one. */
 function sectionSubmenu(workspace: WorkspaceInfo, sections: SectionInfo[], onNewSection: () => void): MenuItem[] {
   const current = sections.some((s) => s.id === workspace.section_id) ? workspace.section_id : null;
-  const items: MenuItem[] = sections.map((section) => ({
-    label: section.name,
-    disabled: section.id === current,
-    hint: section.id === current ? "It is in this section" : undefined,
-    onSelect: () => void setWorkspaceSection(workspace.id, section.id),
-  }));
+  const items: MenuItem[] = sections.map((section) => {
+    const count = section.repos?.length ?? 0;
+    const Icon = count > 1 ? Layers : count === 1 ? GitBranch : Folder;
+    return {
+      label: section.name,
+      icon: <Icon size={13} />,
+      current: section.id === current,
+      disabled: section.id === current,
+      hint: section.id === current ? "It is in this section" : undefined,
+      onSelect: () => void setWorkspaceSection(workspace.id, section.id),
+    };
+  });
   items.push({
     label: "No section",
+    current: current == null,
     disabled: current == null,
     hint: current == null ? "It is in no section" : "Back to Workspaces",
     onSelect: () => void setWorkspaceSection(workspace.id, null),

@@ -39,6 +39,10 @@ branch?: string,
  */
 parent?: string, 
 /**
+ * Start in this sidebar section, using its repos if none are specified.
+ */
+section?: string, 
+/**
  * Starts a first chat with this prompt.
  */
 prompt?: string, 

@@ -432,13 +432,45 @@ export async function pinWorkspace(id: string, pinned: boolean) {
 // --- sections: user-named groups of the sidebar, kept by the daemon ---
 
 /** Creates a section, last of them; `workspace`, when given, is filed in it. */
-export async function createSection(name: string, workspace?: string): Promise<boolean> {
+export async function createSection(name: string, workspace?: string, repos: string[] = []): Promise<boolean> {
   try {
-    await client.call("section.create", { name, workspace });
+    await client.call("section.create", { name, workspace, repos });
     return true;
   } catch (error) {
     toast(`Could not create the section: ${errorMessage(error)}`, "error");
     return false;
+  }
+}
+
+export async function createInSection(section: SectionInfo) {
+  const { models, loadout } = get();
+  const choice = initialChoice(effectiveLoadout(loadout, models));
+  const { workspace, chat } = await client.call("workspace.create", {
+    section: section.id,
+    repos: [],
+    no_repos: false,
+    tickets: [],
+    chat_kind: "chat",
+    background: true,
+    explore: false,
+    agent: choice.agent,
+    model: choice.model ?? undefined,
+    effort: choice.effort ?? undefined,
+    fast: choice.fast || undefined,
+  });
+  // The registry may already have reported that setup completed or rolled back.
+  if (!get().workspaces[workspace.id]) {
+    const current = await client.call("workspace.get", { workspace: workspace.id });
+    if (!get().workspaces[workspace.id]) upsertWorkspace(current);
+  }
+  if (chat) {
+    upsertChats([chat]);
+    selectChat(workspace.id, chat.id);
+  }
+  selectWorkspace(workspace.id);
+  setTab(workspace.id, "chat");
+  if (get().sections.find((item) => item.id === section.id)?.folded) {
+    await foldSection(section.id, false);
   }
 }
 

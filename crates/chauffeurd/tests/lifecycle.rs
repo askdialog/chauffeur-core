@@ -2605,20 +2605,20 @@ async fn sections_file_workspaces_in_the_sidebar() {
     };
 
     // Created with a workspace filed in it; names are trimmed, unique in any case, not a heading.
-    let backend = sections::create(d, "  Back   end ", Some("one")).unwrap();
+    let backend = sections::create(d, "  Back   end ", Some("one"), &[]).unwrap();
     assert_eq!(backend.name, "Back end");
     assert!(!backend.folded);
     let one = d.workspaces.get("one").unwrap();
     assert_eq!(one.section_id.as_deref(), Some(backend.id.as_str()));
     assert_eq!(one.section.as_deref(), Some("Back end"));
-    assert!(sections::create(d, "back END", None).is_err());
-    assert!(sections::create(d, "Workspaces", None).is_err());
-    assert!(sections::create(d, "   ", None).is_err());
-    assert!(sections::create(d, "Front", Some("no-such-workspace")).is_err());
+    assert!(sections::create(d, "back END", None, &[]).is_err());
+    assert!(sections::create(d, "Workspaces", None, &[]).is_err());
+    assert!(sections::create(d, "   ", None, &[]).is_err());
+    assert!(sections::create(d, "Front", Some("no-such-workspace"), &[]).is_err());
     assert_eq!(names(), ["Back end"], "nothing left behind by a refusal");
 
     // A second one goes last; moved above the first.
-    sections::create(d, "Front", None).unwrap();
+    sections::create(d, "Front", None, &[]).unwrap();
     assert_eq!(names(), ["Back end", "Front"]);
     sections::move_to(d, "front", Some("Back end")).unwrap();
     assert_eq!(names(), ["Front", "Back end"]);

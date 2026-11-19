@@ -66,8 +66,13 @@ pub fn publish(d: &Daemon) -> Result<Vec<SectionInfo>> {
 }
 
 /// A new section, last of them; `workspace`, when given, is filed in it.
-pub fn create(d: &Daemon, name: &str, workspace: Option<&str>) -> Result<SectionInfo> {
-    insert(d, name, workspace, false)
+pub fn create(
+    d: &Daemon,
+    name: &str,
+    workspace: Option<&str>,
+    repos: &[String],
+) -> Result<SectionInfo> {
+    insert(d, name, workspace, false, repos)
 }
 
 /// A section the daemon files its own workspaces in (the daily reviews', the routines'), its id
@@ -86,24 +91,39 @@ pub(crate) fn owned(d: &Daemon, key: &str, name: &str, folded: bool) -> Result<S
         .find(|s| s.name.to_lowercase() == name.to_lowercase())
     {
         Some(section) => section.id.clone(),
-        None => insert(d, name, None, folded)?.id,
+        None => insert(d, name, None, folded, &[])?.id,
     };
     d.store.kv_set(key, &id)?;
     publish(d)?;
     Ok(id)
 }
 
-fn insert(d: &Daemon, name: &str, workspace: Option<&str>, folded: bool) -> Result<SectionInfo> {
+fn insert(
+    d: &Daemon,
+    name: &str,
+    workspace: Option<&str>,
+    folded: bool,
+    repos: &[String],
+) -> Result<SectionInfo> {
     let name = clean_name(d, name, None)?;
+    crate::workspaces::check_repo_refs(d.settings.get().forge, repos)?;
     // Checked first: a section is not left behind by a workspace that does not exist.
     let workspace = workspace.map(|w| d.workspaces.row(w)).transpose()?;
     let id = uuid::Uuid::now_v7().to_string();
-    d.store.insert_section(&id, &name, folded)?;
+    d.store.insert_section(&id, &name, folded, repos)?;
     publish(d)?;
     if let Some(workspace) = workspace {
         d.workspaces.set_section(&workspace.id, Some(&id))?;
     }
     resolve(d, &id)
+}
+
+pub fn set_repos(d: &Daemon, key: &str, repos: &[String]) -> Result<SectionInfo> {
+    let section = resolve(d, key)?;
+    crate::workspaces::check_repo_refs(d.settings.get().forge, repos)?;
+    d.store.set_section_repos(&section.id, repos)?;
+    publish(d)?;
+    resolve(d, &section.id)
 }
 
 pub fn rename(d: &Daemon, key: &str, name: &str) -> Result<SectionInfo> {

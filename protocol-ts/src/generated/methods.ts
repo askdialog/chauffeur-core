@@ -312,6 +312,7 @@ import type { SessionStopResult } from "./SessionStopResult";
 import type { SessionTaskParams } from "./SessionTaskParams";
 import type { SetEnvParams } from "./SetEnvParams";
 import type { SetSectionParams } from "./SetSectionParams";
+import type { SetSectionReposParams } from "./SetSectionReposParams";
 import type { SetTicketsParams } from "./SetTicketsParams";
 import type { SetTicketsResult } from "./SetTicketsResult";
 import type { SettingsUpdate } from "./SettingsUpdate";
@@ -384,7 +385,7 @@ import type { WorktreeCreateParams } from "./WorktreeCreateParams";
 import type { WorktreeCreateResult } from "./WorktreeCreateResult";
 import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 
-export const PROTOCOL_VERSION = 21;
+export const PROTOCOL_VERSION = 22;
 export const MIN_PROTOCOL_VERSION = 1;
 export const PEER_PROTOCOL_VERSION = 4;
 
@@ -498,6 +499,7 @@ export type ClientMethods = {
   "section.list": [EmptyParams, SectionsResult];
   "section.create": [CreateSectionParams, SectionInfo];
   "section.rename": [RenameSectionParams, SectionInfo];
+  "section.set_repos": [SetSectionReposParams, SectionInfo];
   "section.fold": [FoldSectionParams, SectionInfo];
   "section.move": [MoveSectionParams, SectionsResult];
   "section.delete": [SectionParams, SectionsResult];
@@ -904,6 +906,7 @@ export const METHOD_NAMES = [
   "section.list",
   "section.create",
   "section.rename",
+  "section.set_repos",
   "section.fold",
   "section.move",
   "section.delete",

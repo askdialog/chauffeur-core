@@ -266,7 +266,8 @@ CREATE TABLE IF NOT EXISTS sections (
     name TEXT NOT NULL,
     position INTEGER NOT NULL,
     folded INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    repos TEXT
 );
 "#;
 
@@ -710,6 +711,12 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
     if !has_section {
         conn.execute_batch("ALTER TABLE workspaces ADD COLUMN section_id TEXT")?;
     }
+    let has_section_repos = conn
+        .prepare("SELECT 1 FROM pragma_table_info('sections') WHERE name = 'repos'")?
+        .exists([])?;
+    if !has_section_repos {
+        conn.execute_batch("ALTER TABLE sections ADD COLUMN repos TEXT")?;
+    }
     let has_title = conn
         .prepare("SELECT 1 FROM pragma_table_info('workspaces') WHERE name = 'title'")?
         .exists([])?;
@@ -1024,7 +1031,8 @@ impl Store {
             }
             tx.execute(
                 "INSERT INTO workspaces (id, slug, path, branch, parent_id, state, tickets, created_at, archived_at, last_error, explore, title, auto_title, title_source, section_id, position)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                         (SELECT id FROM sections WHERE id = ?15),
                          (SELECT COALESCE(MAX(position), 0) + 1 FROM workspaces))",
                 params![
                     row.id,
@@ -1164,13 +1172,18 @@ impl Store {
         let review_section = self.kv_get("daily_review.section")?;
         self.with(|c| {
             c.prepare(
-                "SELECT id, name, folded FROM sections ORDER BY position ASC, created_at ASC",
+                "SELECT id, name, folded, repos FROM sections ORDER BY position ASC, created_at ASC",
             )?
             .query_map([], |row| {
                 Ok(SectionInfo {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     folded: row.get(2)?,
+                    repos: row.get::<_, Option<String>>(3)?
+                        .map(|json| serde_json::from_str(&json).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(error))
+                        }))
+                        .transpose()?,
                     reviews: (review_section.as_deref() == Some(row.get::<_, String>(0)?.as_str()))
                         .then_some(true),
                 })
@@ -1180,12 +1193,34 @@ impl Store {
     }
 
     /// A new section, last of them.
-    pub fn insert_section(&self, id: &str, name: &str, folded: bool) -> Result<()> {
+    pub fn insert_section(
+        &self,
+        id: &str,
+        name: &str,
+        folded: bool,
+        repos: &[String],
+    ) -> Result<()> {
+        let repos = (!repos.is_empty())
+            .then(|| serde_json::to_string(repos))
+            .transpose()?;
         self.with(|c| {
             c.execute(
-                "INSERT INTO sections (id, name, position, folded, created_at)
-                 VALUES (?1, ?2, (SELECT COALESCE(MAX(position), 0) + 1 FROM sections), ?3, ?4)",
-                params![id, name, folded, now()],
+                "INSERT INTO sections (id, name, position, folded, created_at, repos)
+                 VALUES (?1, ?2, (SELECT COALESCE(MAX(position), 0) + 1 FROM sections), ?3, ?4, ?5)",
+                params![id, name, folded, now(), repos],
+            )
+        })?;
+        Ok(())
+    }
+
+    pub fn set_section_repos(&self, id: &str, repos: &[String]) -> Result<()> {
+        let repos = (!repos.is_empty())
+            .then(|| serde_json::to_string(repos))
+            .transpose()?;
+        self.with(|c| {
+            c.execute(
+                "UPDATE sections SET repos = ?2 WHERE id = ?1",
+                params![id, repos],
             )
         })?;
         Ok(())

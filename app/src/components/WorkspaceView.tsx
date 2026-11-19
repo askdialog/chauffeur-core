@@ -643,7 +643,7 @@ function SetupProgress({ workspace, session }: { workspace: WorkspaceInfo; sessi
           )}
         </div>
         {creating && !open && (
-          <div className="mt-0.5 text-[11.5px] text-faint">The agent starts once it is ready; you can write already, messages wait.</div>
+          <div className="mt-0.5 text-[11.5px] text-faint">You can write while setup runs. Messages wait until the workspace is ready.</div>
         )}
         {open && (
           <div className="mt-2">

@@ -31,12 +31,16 @@ export function RepoPopover({
   onClose,
   selection,
   onToggle,
+  single = false,
+  allowCreate = true,
 }: {
   anchor: RefObject<HTMLElement | null>;
   onClose: () => void;
   /** Keys of the chosen repos (`name`, or `owner/name` outside the main organization). */
   selection: string[];
   onToggle: (repo: string) => void;
+  single?: boolean;
+  allowCreate?: boolean;
 }) {
   const { filter, setFilter, owner, setOwner, view, navigation, pages, status, pick, onKeyDown, showScopeHint, catalogCount } = useRepoPicker(selection, onToggle);
   // GitHub unless the installation is set to a GitLab, where repos are listed, not created.
@@ -49,7 +53,8 @@ export function RepoPopover({
   /** The name the "New repository" view opens with; null while the list shows. */
   const [creating, setCreating] = useState<string | null>(null);
   const suggestion = suggestedRepoName(filter);
-  const offerCreate = !gitlab && !!suggestion && !offered && !repos.some((repo) => repo.name.toLowerCase() === suggestion.toLowerCase());
+  const canCreate = allowCreate && !gitlab;
+  const offerCreate = canCreate && !!suggestion && !offered && !repos.some((repo) => repo.name.toLowerCase() === suggestion.toLowerCase());
 
   if (creating !== null) {
     return (
@@ -84,7 +89,7 @@ export function RepoPopover({
         <button type="button" title={`Refresh from ${forgeLabel}`} aria-label={`Refresh from ${forgeLabel}`} disabled={status.refreshDisabled} className="shrink-0 text-faint hover:text-fg disabled:opacity-40" onClick={pages.refresh}>
           <RefreshCw size={12} className={pages.loading ? "animate-spin" : ""} />
         </button>
-        {!gitlab && (
+        {canCreate && (
           <button type="button" title="New repository on GitHub" aria-label="New repository on GitHub" className="shrink-0 text-faint hover:text-fg" onClick={() => setCreating(suggestion)} data-testid="new-repo">
             <Plus size={13} />
           </button>
@@ -132,7 +137,7 @@ export function RepoPopover({
         </div>
       )}
 
-      <div ref={listRef} id="repo-options" className="min-h-0 flex-1 overflow-y-auto px-1 pt-0.5 pb-1" role="listbox" aria-multiselectable>
+      <div ref={listRef} id="repo-options" className="min-h-0 flex-1 overflow-y-auto px-1 pt-0.5 pb-1" role="listbox" aria-multiselectable={!single}>
         {status.showSkeleton && (
           <div role="group" aria-label="Loading">
             <SectionTitle title="Repos" />
@@ -158,7 +163,7 @@ export function RepoPopover({
               </span>
               <span className="ml-auto shrink-0"><Kbd>↵</Kbd></span>
             </Row>
-            <div className="pb-1.5 pl-[34px] pr-2 pt-1 text-[11.5px] text-faint">Not in your repos: cloned for this workspace.</div>
+            <div className="pb-1.5 pl-[34px] pr-2 pt-1 text-[11.5px] text-faint">Cloned on first use.</div>
           </>
         )}
         {status.showEmpty && (
