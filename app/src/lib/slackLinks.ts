@@ -76,8 +76,8 @@ export async function listenForSlackLinks(
  * waking from sleep fails a few polls before its network is back. */
 export const SLACK_OUTAGE_GRACE = 60_000;
 
-/** Retries lost acknowledgements without appending the same import twice. Reports an outage
- * only once it lasts, and a message that fails to load once per message. */
+/** Retries lost acknowledgements without appending the same import twice. Reports sustained
+ * outages while online, and a message that fails to load once per message. */
 export function slackDesktopReceiver(
   receive: (ack: string | null) => Promise<{ link: string | null }>,
   read: (link: string) => Promise<SlackContext>,
@@ -85,22 +85,26 @@ export function slackDesktopReceiver(
   focus: () => Promise<void>,
   report: (message: string, error: boolean) => void,
   now: () => number = Date.now,
+  isOnline: () => boolean = () => navigator.onLine !== false,
 ): () => Promise<void> {
   let ack: string | null = null;
   let failingSince: number | null = null;
   let outageReported = false;
   let failedLink: string | null = null;
   return async () => {
-    let link: string | null;
+    let link: string | null = null;
     try {
-      ({ link } = await receive(ack));
+      if (isOnline()) ({ link } = await receive(ack));
     } catch (error) {
-      failingSince ??= now();
-      if (!outageReported && now() - failingSince >= SLACK_OUTAGE_GRACE) {
-        report(`Could not receive Slack imports for a minute: ${errorMessage(error)}`, true);
-        outageReported = true;
+      // The network may have gone offline while the request was in flight.
+      if (isOnline()) {
+        failingSince ??= now();
+        if (!outageReported && now() - failingSince >= SLACK_OUTAGE_GRACE) {
+          report(`Could not receive Slack imports for a minute: ${errorMessage(error)}`, true);
+          outageReported = true;
+        }
+        return;
       }
-      return;
     }
     failingSince = null;
     outageReported = false;

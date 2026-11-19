@@ -100,6 +100,41 @@ test("an outage of the Slack imports service is reported only once it lasts a mi
   expect(reports).toEqual(["Could not receive Slack imports for a minute: Offline"]);
 });
 
+test("background imports stay silent offline and restart the outage timer on reconnect", async () => {
+  const { slackDesktopReceiver, SLACK_OUTAGE_GRACE } = await import("./slackLinks");
+  let clock = 0;
+  let online = true;
+  let attempts = 0;
+  const reports: string[] = [];
+  const prompts: string[] = [];
+  const token = "d".repeat(43);
+  const poll = slackDesktopReceiver(async () => {
+    attempts++;
+    if (attempts === 2) online = false;
+    if (attempts <= 4) throw new Error("Service unreachable");
+    return { link: `chauffeur://slack/${token}?scope=message` };
+  }, async () => ({ prompt: "Slack message", warning: null }), prompt => prompts.push(prompt),
+  async () => {}, message => reports.push(message), () => clock, () => online);
+
+  await poll();
+  clock += SLACK_OUTAGE_GRACE;
+  await poll(); // The network goes offline during the request.
+  clock += 2 * SLACK_OUTAGE_GRACE;
+  await poll();
+  expect(attempts).toBe(2);
+  expect(reports).toEqual([]);
+
+  online = true;
+  await poll();
+  expect(attempts).toBe(3);
+  expect(reports).toEqual([]);
+  clock += SLACK_OUTAGE_GRACE;
+  await poll();
+  expect(reports).toEqual(["Could not receive Slack imports for a minute: Service unreachable"]);
+  await poll();
+  expect(prompts).toEqual(["Slack message"]);
+});
+
 test("a Slack message that keeps failing to load is reported once", async () => {
   const { slackDesktopReceiver } = await import("./slackLinks");
   const reports: string[] = [];
