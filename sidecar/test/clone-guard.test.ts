@@ -111,6 +111,14 @@ describe("cloneCommandRefusal", () => {
     "find /code/web -name '*.log' -delete",
     "find /code/web -name x -exec rm {} ;",
     "(cd /code/web && git log) && cd /code/web && git commit -m x",
+    'echo "$(rm -rf /code/web/build)"',
+    'echo "`touch /code/web/a`"',
+    'X="$(cd /code/web && git commit -am x)"',
+    "git -C /code/web diff --output=/code/web/report.patch",
+    "git diff --output /code/web/report.patch",
+    "git format-patch -3 --output-directory=/code/web/patches",
+    "git -C /code/web config --unset user.email",
+    "git -C /code/web config --remove-section user",
   ];
   for (const command of refused) {
     test(`refuses: ${JSON.stringify(command)}`, () => {
@@ -154,6 +162,10 @@ describe("cloneCommandRefusal", () => {
     "find /code/web -name '*.ts'",
     "echo 'a; cd /code/web; b' && touch x",
     "cd /code/web && jq '.a >.b' package.json",
+    'echo "$(git -C /code/web rev-parse HEAD)"',
+    "git -C /code/web diff --output=/tmp/report.patch",
+    "echo '$(rm -rf /code/web/build)'",
+    "echo '\"$(rm -rf /code/web/build)\"'",
   ];
   for (const command of allowed) {
     test(`allows: ${JSON.stringify(command)}`, () => {

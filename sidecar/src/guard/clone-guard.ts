@@ -150,8 +150,48 @@ export function cloneCommandRefusal(command: string, cwd: string, clones: Guarde
       const clone = writtenClone(program, args, local, clones);
       if (clone) return commandDenial(clone);
     }
+    // A substitution inside double quotes runs too, where the parser keeps it as text.
+    for (const inner of quotedSubstitutions(text)) {
+      const refusal = cloneCommandRefusal(inner, local, clones);
+      if (refusal) return refusal;
+    }
   }
   return undefined;
+}
+
+/** The commands substituted inside double quotes, `"$( … )"` or `"` … `"`; single quotes substitute nothing. */
+function quotedSubstitutions(text: string): string[] {
+  const found: string[] = [];
+  let quote: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\\") {
+      i++;
+      continue;
+    }
+    if (quote === "'") {
+      if (c === "'") quote = undefined;
+      continue;
+    }
+    if (c === "'" && quote === undefined) quote = c;
+    else if (c === '"') quote = quote === '"' ? undefined : '"';
+    else if (quote === '"' && text.startsWith("$(", i)) {
+      let depth = 1;
+      let j = i + 2;
+      for (; j < text.length && depth > 0; j++) {
+        if (text[j] === "(") depth++;
+        else if (text[j] === ")") depth--;
+      }
+      found.push(text.slice(i + 2, depth === 0 ? j - 1 : j));
+      i = j - 1;
+    } else if (quote === '"' && c === "`") {
+      const end = text.indexOf("`", i + 1);
+      found.push(text.slice(i + 1, end === -1 ? undefined : end));
+      if (end === -1) break;
+      i = end;
+    }
+  }
+  return found;
 }
 
 function isCd(program: string): boolean {
@@ -238,10 +278,18 @@ function gitWrite(args: string[], dir: string, clones: GuardedClone[]): GuardedC
     if (given !== undefined && (name === "--work-tree" || name === "--git-dir")) where = at(dir, given);
     if (attached === undefined && GIT_VALUE_OPTIONS.has(name)) i++;
   }
-  const clone = cloneOf(where, clones);
-  if (!clone) return undefined;
   const sub = args[i];
   const rest = args.slice(i + 1);
+  // `--output` (diff, log, show) and `--output-directory` (format-patch) write wherever they name.
+  for (const [k, arg] of rest.entries()) {
+    const name = arg.split("=")[0];
+    if (name !== "--output" && name !== "--output-directory") continue;
+    const target = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : rest[k + 1];
+    const written = target === undefined ? undefined : cloneOf(at(where, target), clones);
+    if (written) return written;
+  }
+  const clone = cloneOf(where, clones);
+  if (!clone) return undefined;
   const words = rest.filter((arg) => !arg.startsWith("-"));
   if (sub === undefined || GIT_READS.has(sub)) return undefined;
   if ((sub === "branch" || sub === "tag") && (words.length === 0 || rest.some((arg) => LISTING.has(arg.split("=")[0] ?? arg)))) return undefined;
@@ -249,7 +297,8 @@ function gitWrite(args: string[], dir: string, clones: GuardedClone[]): GuardedC
   if (sub === "stash" && (words[0] === "list" || words[0] === "show")) return undefined;
   if (sub === "worktree" && words[0] === "list") return undefined;
   if (sub === "reflog" && words[0] !== "expire" && words[0] !== "delete") return undefined;
-  if (sub === "config" && (words.length === 1 || rest.some((arg) => arg === "--list" || arg === "-l" || arg.startsWith("--get")))) return undefined;
+  const configWrite = rest.some((arg) => /^--(?:unset|remove-section)/.test(arg));
+  if (sub === "config" && ((words.length === 1 && !configWrite) || rest.some((arg) => arg === "--list" || arg === "-l" || arg.startsWith("--get")))) return undefined;
   return clone;
 }
 
