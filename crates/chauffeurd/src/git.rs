@@ -133,18 +133,33 @@ impl Git {
         self.run(dir, args).await.is_ok()
     }
 
-    /// Fetches `branch` from origin into `origin/<branch>`. Names come from clients: after
+    /// Fetches `branch` from `remote` into `<remote>/<branch>`. Names come from clients: after
     /// `--end-of-options` git reads them as refs only, never as options (`--depth=1`,
     /// `--upload-pack=...`).
-    pub async fn fetch(&self, clone: &Path, branch: &str) -> anyhow::Result<()> {
+    pub async fn fetch(&self, clone: &Path, remote: &str, branch: &str) -> anyhow::Result<()> {
         self.run_within(
             clone,
-            &["fetch", "--quiet", "--end-of-options", "origin", branch],
+            &["fetch", "--quiet", "--end-of-options", remote, branch],
             &[],
             FETCH_TIMEOUT,
         )
         .await
         .map(|_| ())
+    }
+
+    /// The remote a repo's base branches are read from: the one `gh` takes the repo's pull
+    /// requests from (`remote.<name>.gh-resolved = base`, which `gh repo clone` sets on a fork's
+    /// parent, and `gh repo set-default` on the remote picked), else `origin`. Branches are still
+    /// pushed to the remote they track, the fork's `origin` for a fork.
+    pub async fn base_remote(&self, dir: &Path) -> String {
+        let listing = self
+            .run(
+                dir,
+                &["config", "--get-regexp", r"^remote\..*\.gh-resolved$"],
+            )
+            .await
+            .unwrap_or_default();
+        gh_base_remote(&listing).unwrap_or("origin").to_string()
     }
 
     pub async fn rev_parse(&self, dir: &Path, rev: &str) -> anyhow::Result<String> {
@@ -170,14 +185,50 @@ impl Git {
 
     /// The remote's default branch (`origin/HEAD`), if known locally.
     pub async fn remote_default_branch(&self, clone: &Path) -> Option<String> {
+        self.remote_head(clone, "origin").await
+    }
+
+    /// The default branch of `remote` as the clone last fetched it (`refs/remotes/<remote>/HEAD`).
+    async fn remote_head(&self, clone: &Path, remote: &str) -> Option<String> {
         let head = self
             .run(
                 clone,
-                &["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+                &[
+                    "symbolic-ref",
+                    "--quiet",
+                    &format!("refs/remotes/{remote}/HEAD"),
+                ],
             )
             .await
             .ok()?;
-        head.strip_prefix("refs/remotes/origin/").map(String::from)
+        head.strip_prefix(&format!("refs/remotes/{remote}/"))
+            .map(String::from)
+    }
+
+    /// The default branch of the clone's base remote ([`Git::base_remote`]) when it is not
+    /// `origin` (a fork's parent): as last fetched, else as the remote says. `None` for a clone
+    /// whose base is `origin`, or when neither knows.
+    pub async fn parent_default_branch(&self, clone: &Path) -> Option<String> {
+        let remote = self.base_remote(clone).await;
+        if remote == "origin" {
+            return None;
+        }
+        if let Some(branch) = self.remote_head(clone, &remote).await {
+            return Some(branch);
+        }
+        let listing = self
+            .run_within(
+                clone,
+                &["ls-remote", "--symref", "--end-of-options", &remote, "HEAD"],
+                &[],
+                FETCH_TIMEOUT,
+            )
+            .await
+            .ok()?;
+        listing.lines().find_map(|line| {
+            let (head, name) = line.strip_prefix("ref: refs/heads/")?.split_once('\t')?;
+            (name == "HEAD").then(|| head.to_string())
+        })
     }
 
     /// Creates a worktree at `path`: on a new `branch` cut from `start`, or on the existing
@@ -494,6 +545,16 @@ pub fn validate_branch_name(branch: &str) -> crate::Result<()> {
     Ok(())
 }
 
+/// The remote `git config --get-regexp` lines name `gh-resolved = base`, when one is a plain
+/// remote name (never an option).
+fn gh_base_remote(listing: &str) -> Option<&str> {
+    listing.lines().find_map(|line| {
+        let (key, value) = line.split_once(' ')?;
+        let name = key.strip_prefix("remote.")?.strip_suffix(".gh-resolved")?;
+        (value.trim() == "base" && !name.is_empty() && !name.starts_with('-')).then_some(name)
+    })
+}
+
 fn tempfile_path(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::now_v7()))
 }
@@ -562,6 +623,35 @@ async fn output(command: &mut Command) -> std::io::Result<std::process::Output> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_base_remote_is_the_one_gh_resolved_as_base() {
+        let fork = "remote.upstream.gh-resolved base\n";
+        assert_eq!(gh_base_remote(fork), Some("upstream"));
+        assert_eq!(
+            gh_base_remote("remote.my.fork.gh-resolved base"),
+            Some("my.fork")
+        );
+        // An old gh's resolved `owner/name`, or no remote resolved: none.
+        assert_eq!(gh_base_remote("remote.origin.gh-resolved acme/web"), None);
+        assert_eq!(gh_base_remote(""), None);
+        assert_eq!(gh_base_remote("remote.-x.gh-resolved base"), None);
+    }
+
+    #[tokio::test]
+    async fn a_clone_without_a_resolved_remote_reads_its_base_from_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = Git::new(ShellEnv::new());
+        git.run(dir.path(), &["init", "-q"]).await.unwrap();
+        assert_eq!(git.base_remote(dir.path()).await, "origin");
+        git.run(
+            dir.path(),
+            &["config", "remote.upstream.gh-resolved", "base"],
+        )
+        .await
+        .unwrap();
+        assert_eq!(git.base_remote(dir.path()).await, "upstream");
+    }
 
     #[tokio::test]
     async fn a_git_command_that_never_ends_is_stopped() {

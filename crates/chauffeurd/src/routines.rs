@@ -908,7 +908,7 @@ fn busy_run(d: &Daemon, row: &Row) -> Result<Option<String>> {
     Ok(None)
 }
 
-/// Puts each clean worktree back on the freshly fetched `origin/<base>`; says which were left.
+/// Puts each clean worktree back on its freshly fetched base branch; says which were left.
 async fn refresh_worktrees(d: &Daemon, workspace_id: &str) -> Result<Vec<String>> {
     let git = crate::git::Git::new(d.shell_env.clone());
     let mut left = Vec::new();
@@ -922,12 +922,13 @@ async fn refresh_worktrees(d: &Daemon, workspace_id: &str) -> Result<Vec<String>
             .await
             .map(|out| !out.trim().is_empty());
         let unpushed = git.unpushed_commits(path).await;
-        let base = format!("origin/{}", tree.base_branch);
+        let remote = git.base_remote(path).await;
+        let base = format!("{remote}/{}", tree.base_branch);
         match (dirty, unpushed) {
             (Ok(false), Ok(0)) => {
                 let head = git.rev_parse(path, "HEAD").await.ok();
                 let refreshed = async {
-                    git.fetch(Path::new(&tree.clone_path), &tree.base_branch)
+                    git.fetch(Path::new(&tree.clone_path), &remote, &tree.base_branch)
                         .await?;
                     // A chat may have written during the fetch: only what is still as it was
                     // is reset.

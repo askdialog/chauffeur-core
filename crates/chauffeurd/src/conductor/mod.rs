@@ -20,6 +20,7 @@ use chauffeur_protocol::conductor::{
 use chauffeur_protocol::model::{TicketRef, WorkspaceState};
 
 use crate::git::Git;
+use crate::github::github_repo;
 use crate::paths::NOTES_DIR;
 use crate::repos::repo_folder;
 use crate::settings::expand_home;
@@ -171,20 +172,6 @@ fn select<'a>(
         }
     }
     Ok(picked)
-}
-
-/// `owner/name` of a GitHub remote URL (`git@github.com:o/n.git`, `https://github.com/o/n`,
-/// `ssh://git@github.com/o/n`).
-fn github_repo(url: &str) -> Option<(String, String)> {
-    let url = url.trim().trim_end_matches('/');
-    let url = url.strip_suffix(".git").unwrap_or(url);
-    let (_, path) = url.split_once("github.com")?;
-    let mut parts = path.trim_start_matches([':', '/']).split('/');
-    let (owner, name) = (parts.next()?, parts.next()?);
-    if owner.is_empty() || name.is_empty() || parts.next().is_some() {
-        return None;
-    }
-    Some((owner.to_string(), name.to_string()))
 }
 
 /// Chauffeur's name of a GitHub repo: its short name in the main organization, else `owner/name`.

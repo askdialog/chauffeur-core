@@ -548,13 +548,7 @@ impl RepoRegistry {
         };
         let default_branch = match override_.and_then(|o| o.default_branch.clone()) {
             Some(branch) => branch,
-            None => match cached.and_then(|c| c.default_branch) {
-                Some(branch) => branch,
-                None => git
-                    .remote_default_branch(&clone_path)
-                    .await
-                    .unwrap_or_else(|| "main".into()),
-            },
+            None => default_branch(git, &clone_path, cached.and_then(|c| c.default_branch)).await,
         };
         Ok(ResolvedRepo {
             name: name.to_string(),
@@ -589,13 +583,8 @@ impl RepoRegistry {
                 target
             }
         };
-        let default_branch = match cached.and_then(|c| c.default_branch) {
-            Some(branch) => branch,
-            None => git
-                .remote_default_branch(&clone_path)
-                .await
-                .unwrap_or_else(|| "main".into()),
-        };
+        let default_branch =
+            default_branch(git, &clone_path, cached.and_then(|c| c.default_branch)).await;
         Ok(ResolvedRepo {
             name: name.to_string(),
             full_name: full_name.clone(),
@@ -617,6 +606,22 @@ impl RepoRegistry {
             }
         }
         Ok(())
+    }
+}
+
+/// A clone's default branch, when the settings name none: its fork's parent's (the remote its base
+/// is read from), else the one GitHub listed (`listed`, the clone's own repo's), else `origin`'s,
+/// else `main`.
+async fn default_branch(git: &Git, clone: &Path, listed: Option<String>) -> String {
+    if let Some(branch) = git.parent_default_branch(clone).await {
+        return branch;
+    }
+    match listed {
+        Some(branch) => branch,
+        None => git
+            .remote_default_branch(clone)
+            .await
+            .unwrap_or_else(|| "main".into()),
     }
 }
 

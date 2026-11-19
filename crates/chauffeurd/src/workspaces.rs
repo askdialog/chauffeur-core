@@ -1703,8 +1703,9 @@ impl WorkspaceManager {
                 let lock = d.repos.lock_for(&repo.clone_path);
                 let _guard = lock.lock().await;
                 self.progress(&row.id, format!("fetching {}", repo.name));
+                let remote = git.base_remote(&repo.clone_path).await;
                 if git
-                    .fetch(&repo.clone_path, &repo.default_branch)
+                    .fetch(&repo.clone_path, &remote, &repo.default_branch)
                     .await
                     .is_ok()
                 {
@@ -1796,18 +1797,28 @@ impl WorkspaceManager {
         };
         let lock = d.repos.lock_for(&repo.clone_path);
         let _guard = lock.lock().await;
+        let base_remote = git.base_remote(&repo.clone_path).await;
         if !self.fetched_lately(&repo.clone_path) {
-            self.fetch_base(&row.id, &repo.clone_path, &repo.name, &repo.default_branch)
-                .await;
+            self.fetch_base(
+                &row.id,
+                &repo.clone_path,
+                &repo.name,
+                &base_remote,
+                &repo.default_branch,
+            )
+            .await;
         }
         if row.explore {
-            return self.add_explore_worktree(row, &repo, path).await;
+            return self
+                .add_explore_worktree(row, &repo, &base_remote, path)
+                .await;
         }
         let start = match start {
             Some(start) => start,
-            // An existing remote branch (resuming a PR): start the local branch from it.
+            // An existing remote branch (resuming a PR): start the local branch from it, on
+            // origin, where branches are pushed (a fork's own).
             None if !git.branch_exists(&repo.clone_path, branch).await
-                && git.fetch(&repo.clone_path, branch).await.is_ok()
+                && git.fetch(&repo.clone_path, "origin", branch).await.is_ok()
                 && git
                     .rev_parse(&repo.clone_path, &format!("origin/{branch}"))
                     .await
@@ -1816,7 +1827,7 @@ impl WorkspaceManager {
                 format!("origin/{branch}")
             }
             None => {
-                let remote = format!("origin/{}", repo.default_branch);
+                let remote = format!("{base_remote}/{}", repo.default_branch);
                 if git.rev_parse(&repo.clone_path, &remote).await.is_ok() {
                     remote
                 } else {
@@ -1892,6 +1903,7 @@ impl WorkspaceManager {
         &self,
         row: &WorkspaceRow,
         repo: &ResolvedRepo,
+        base_remote: &str,
         path: &Path,
     ) -> Result<WorktreeRow> {
         let d = self.d();
@@ -1900,7 +1912,7 @@ impl WorkspaceManager {
             format!("checking out {} at {}", repo.name, repo.default_branch),
         );
         let base_commit = self
-            .checkout_base_detached(&repo.clone_path, path, &repo.default_branch)
+            .checkout_base_detached(&repo.clone_path, path, base_remote, &repo.default_branch)
             .await
             .map_err(|e| Error::Internal(e.context(format!("checkout of {}", repo.name))))?;
         let worktree = WorktreeRow {
@@ -1929,9 +1941,16 @@ impl WorkspaceManager {
     }
 
     /// Fetches a clone's base `branch`; a failure is said, the local state used.
-    async fn fetch_base(&self, workspace: &str, clone: &Path, repo: &str, branch: &str) {
+    async fn fetch_base(
+        &self,
+        workspace: &str,
+        clone: &Path,
+        repo: &str,
+        remote: &str,
+        branch: &str,
+    ) {
         self.progress(workspace, format!("fetching {repo}"));
-        match self.git().fetch(clone, branch).await {
+        match self.git().fetch(clone, remote, branch).await {
             Ok(_) => self.mark_fetched(clone),
             Err(error) => self.warn(
                 workspace,
@@ -1946,10 +1965,11 @@ impl WorkspaceManager {
         &self,
         clone: &Path,
         path: &Path,
+        remote: &str,
         base: &str,
     ) -> anyhow::Result<Option<String>> {
         let git = self.git();
-        let remote = format!("origin/{base}");
+        let remote = format!("{remote}/{base}");
         let start = match git.rev_parse(clone, &remote).await {
             Ok(_) => remote,
             Err(_) => base.to_string(),
@@ -3128,8 +3148,15 @@ impl WorkspaceManager {
                 let clone = Path::new(&worktree.clone_path);
                 let lock = d.repos.lock_for(clone);
                 let _guard = lock.lock().await;
-                self.fetch_base(&row.id, clone, &worktree.repo, &worktree.base_branch)
-                    .await;
+                let base_remote = git.base_remote(clone).await;
+                self.fetch_base(
+                    &row.id,
+                    clone,
+                    &worktree.repo,
+                    &base_remote,
+                    &worktree.base_branch,
+                )
+                .await;
                 let checkout = async {
                     let path = Path::new(&worktree.path);
                     if !worktree.removed {
@@ -3140,6 +3167,7 @@ impl WorkspaceManager {
                     self.checkout_base_detached(
                         clone,
                         Path::new(&worktree.path),
+                        &base_remote,
                         &worktree.base_branch,
                     )
                     .await

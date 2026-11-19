@@ -5836,6 +5836,187 @@ async fn pr_number(d: &Arc<Daemon>, workspace: &str, repo: &str) -> Option<u64> 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_fork_s_workspace_starts_from_the_parent_and_shows_its_pr_from_the_fork() {
+    use serde_json::{Value, json};
+    let f = fixture(47780);
+    let d = &f.daemon;
+    // No default branch in the settings: the clone's own decides.
+    d.settings
+        .update(|doc| {
+            doc["repos"]["repo-a"]
+                .as_table_mut()
+                .expect("repo-a has a table")
+                .remove("default_branch");
+        })
+        .unwrap();
+    let clone = f.root.join("clones/repo-a");
+    let fork = f.root.join("origin/repo-a.git");
+    let path = |p: &Path| p.to_str().unwrap().to_string();
+    // The parent the fork came from: only `main`, one commit ahead of the fork's.
+    let parent = f.root.join("origin/parent-a.git");
+    git(
+        &f.root,
+        &["clone", "-q", "--bare", &path(&fork), &path(&parent)],
+    );
+    let work = f.root.join("parent-work");
+    git(&f.root, &["clone", "-q", &path(&parent), &path(&work)]);
+    std::fs::write(work.join("merged.txt"), "merged upstream").unwrap();
+    git(&work, &["add", "-A"]);
+    git(&work, &["commit", "-q", "-m", "merged upstream"]);
+    git(&work, &["push", "-q", "origin", "main"]);
+    let parent_tip = git(&work, &["rev-parse", "HEAD"]);
+    // The fork's default branch is `dev`, which the parent has not got.
+    git(&clone, &["push", "-q", "origin", "main:dev"]);
+    git(&fork, &["symbolic-ref", "HEAD", "refs/heads/dev"]);
+    git(&clone, &["fetch", "-q", "origin"]);
+    git(&clone, &["remote", "set-head", "origin", "dev"]);
+    // The clone as `gh repo clone` leaves a fork's: origin the fork, named as on GitHub (reached
+    // here through `insteadOf`), upstream the parent, which gh reads the PRs from.
+    let fork_url = "https://github.com/tester/repo-a.git";
+    git(
+        &clone,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", path(&fork)),
+            fork_url,
+        ],
+    );
+    git(&clone, &["remote", "set-url", "origin", fork_url]);
+    git(&clone, &["remote", "add", "upstream", &path(&parent)]);
+    git(&clone, &["config", "remote.upstream.gh-resolved", "base"]);
+
+    let answer = f.root.join("gh-answer.json");
+    let bin = f.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    fake_tool(
+        &bin,
+        "gh",
+        &format!(
+            r#"case "$1 $2" in
+  "pr list") if [ -f {answer} ]; then cat {answer}; else echo '[]'; fi ;;
+  *) exit 1 ;;
+esac"#,
+            answer = answer.display()
+        ),
+    );
+    let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    let with_bin = format!("{}:{}", bin.display(), vars["PATH"]);
+    vars.insert("PATH".into(), with_bin);
+    d.shell_env.set_vars(vars);
+
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("forked".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let a = PathBuf::from(&ws.path).join("repo-a");
+    // Cut from the parent's default branch, not from the fork's `dev` nor its lagging `main`.
+    assert_eq!(git(&a, &["rev-parse", "HEAD"]), parent_tip);
+    std::fs::write(a.join("change.txt"), "change").unwrap();
+    git(&a, &["add", "-A"]);
+    git(&a, &["commit", "-q", "-m", "change"]);
+    // Tracking the parent's main, pushed to the fork by `remote.pushDefault`.
+    git(&a, &["push", "-q", "origin", "HEAD"]);
+    git(&a, &["branch", "-q", "--set-upstream-to=upstream/main"]);
+    git(&clone, &["config", "remote.pushDefault", "origin"]);
+    let tip = git(&a, &["rev-parse", "HEAD"]);
+
+    let pr = |number: u64, cross: bool, owner: &str, name: &str| {
+        json!({
+            "number": number,
+            "baseRefName": "main",
+            "url": format!("https://example.com/pull/{number}"),
+            "state": "OPEN",
+            "title": "A change",
+            "isDraft": false,
+            "statusCheckRollup": [],
+            "reviewDecision": "",
+            "mergeable": "MERGEABLE",
+            "headRefName": "tester/forked",
+            "headRefOid": tip,
+            "isCrossRepository": cross,
+            "headRepository": {"name": name},
+            "headRepositoryOwner": {"login": owner},
+        })
+    };
+    let answer_with = |prs: Vec<Value>| std::fs::write(&answer, Value::from(prs).to_string());
+    let status = || async {
+        chauffeurd::prs::status(d, &ws.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|pr| pr.repo == "repo-a")
+            .unwrap()
+    };
+    // The parent's own PR from a branch of the same name comes first: not the branch's. The one
+    // from the fork it is pushed to is; ahead counts from the parent's main.
+    answer_with(vec![
+        pr(70, false, "acme", "repo-a"),
+        pr(67, true, "tester", "repo-a"),
+    ])
+    .unwrap();
+    let shown = status().await;
+    assert_eq!(
+        (shown.number, shown.base_branch.as_str(), shown.ahead),
+        (Some(67), "main", 1)
+    );
+    // Pushed there by its own `pushRemote`: the same.
+    git(&clone, &["config", "--unset", "remote.pushDefault"]);
+    let push_remote = "branch.tester/forked.pushRemote";
+    git(&clone, &["config", push_remote, "origin"]);
+    assert_eq!(status().await.number, Some(67));
+    // Pushed where it tracks, the parent: the parent's PR is the branch's, the fork's is not.
+    git(&clone, &["config", "--unset", push_remote]);
+    assert_eq!(status().await.number, Some(70));
+    git(&clone, &["config", push_remote, "origin"]);
+    // One from another fork whose branch has that name is someone else's.
+    answer_with(vec![pr(67, true, "someone", "repo-a")]).unwrap();
+    assert_eq!(status().await.number, None);
+
+    let exploration = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("fork-exploration".into()),
+            repos: vec!["repo-a".into()],
+            explore: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let checkout = PathBuf::from(&exploration.path).join("repo-a");
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]), parent_tip);
+    d.workspaces
+        .archive(&exploration.slug, false)
+        .await
+        .unwrap();
+    eventually("the fork exploration to be archived", || {
+        d.workspaces.get(&exploration.id).unwrap().state == WorkspaceState::Archived
+    })
+    .await;
+    git(
+        &work,
+        &["commit", "-q", "--allow-empty", "-m", "new parent tip"],
+    );
+    git(&work, &["push", "-q", "origin", "main"]);
+    let restored = d.workspaces.restore(&exploration.slug).await.unwrap();
+    assert_eq!(
+        restored.state,
+        WorkspaceState::Ready,
+        "{:?}",
+        restored.last_error
+    );
+    assert_eq!(
+        git(&checkout, &["rev-parse", "HEAD"]),
+        git(&work, &["rev-parse", "HEAD"]),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_pr_is_found_under_the_name_a_branch_was_pushed_under_only_when_it_is_its_own() {
     use serde_json::{Value, json};
     let f = fixture(47600);

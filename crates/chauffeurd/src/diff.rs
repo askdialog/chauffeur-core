@@ -20,7 +20,7 @@ pub async fn repo_diff(
     stat_only: bool,
 ) -> anyhow::Result<RepoDiff> {
     let dir = Path::new(&worktree.path);
-    let remote_base = format!("origin/{}", worktree.base_branch);
+    let remote_base = format!("{}/{}", git.base_remote(dir).await, worktree.base_branch);
     let base = if git.rev_parse(dir, &remote_base).await.is_ok() {
         remote_base
     } else {

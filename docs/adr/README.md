@@ -180,5 +180,6 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [A Mistral Vibe conversation coming back replaces the copy it left](vibe-sessions-replaced-on-return.md) | 2026-11-18 | accepted |
 | [Load the selected Codex model before the first turn](codex-first-turn-model-catalog.md) | 2026-11-19 | accepted |
 | [Pilot GitHub's merge queue on Core](core-merge-queue-pilot.md) | 2026-11-19 | accepted |
+| [A fork's clone reads its base and its PRs from the parent](fork-clones.md) | 2026-11-19 | proposed, awaiting Justin |
 | [Invitation-only mobile access](mobile-beta-access.md) | 2026-11-19 | accepted |
 | [Create workspaces from a repository or group in the sidebar](sidebar-repository-shortcuts.md) | 2026-11-19 | accepted |
