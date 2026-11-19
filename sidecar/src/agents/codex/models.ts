@@ -36,16 +36,19 @@ export function codexModels(models: Model[]): AgentModel[] {
 
 /** Starts an app-server just to page through `model/list`, then ends it. */
 export async function listCodexModels(deps: CodexSessionDeps, log: Logger): Promise<AgentModel[]> {
-  return probeCodex(deps, log, homedir(), "list its models", async (server) => {
-    const models: Model[] = [];
-    let cursor: string | null = null;
-    do {
-      const page: { data: Model[]; nextCursor: string | null } = await server.request("model/list", { cursor, includeHidden: false });
-      models.push(...page.data);
-      cursor = page.nextCursor;
-    } while (cursor);
-    return codexModels(models);
-  });
+  return probeCodex(deps, log, homedir(), "list its models", async (server) => codexModels(await readCodexModels(server, false)));
+}
+
+/** Reads the catalog of this app-server, which also makes Codex load it in this process. */
+export async function readCodexModels(server: AppServer, includeHidden: boolean): Promise<Model[]> {
+  const models: Model[] = [];
+  let cursor: string | null = null;
+  do {
+    const page: { data: Model[]; nextCursor: string | null } = await server.request("model/list", { cursor, includeHidden });
+    models.push(...page.data);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return models;
 }
 
 /** Starts an app-server in `cwd`, initializes it, runs `ask` on it, then ends it. */

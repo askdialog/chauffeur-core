@@ -41,7 +41,7 @@ import { PendingRequests, type Outcome } from "../pending.ts";
 import { askMcpElicitation } from "./elicitation.ts";
 import { CodexAlwaysAllowed, commandRules, fileRules } from "./always.ts";
 import type { AppServer, SpawnAppServer } from "./app-server.ts";
-import { FAST_SERVICE_TIER } from "./models.ts";
+import { FAST_SERVICE_TIER, readCodexModels } from "./models.ts";
 import { CODEX_TOOLS, CodexEventMapper, shellScript } from "./events.ts";
 import type { HookGuard } from "./hook.ts";
 import { readThreadHistory } from "./history.ts";
@@ -70,6 +70,7 @@ import type {
   CommandExecutionApprovalDecision,
   FileChangeApprovalDecision,
   McpServerStatus,
+  Model,
   PermissionsRequestApprovalResponse,
   ServerNotification,
   ServerRequest,
@@ -89,6 +90,8 @@ export interface CodexSessionDeps {
   hookCommand: (guard: HookGuard | undefined) => string | undefined;
   /** How long `start` waits for the app-server to initialize and open the thread. */
   initTimeoutMs?: number;
+  /** Bounds how long the first message can wait for the app-server's catalog. */
+  modelCatalogTimeoutMs?: number;
   /** Bounds shutdown confirmation; timeout does not release the retained session. */
   stopTimeoutMs?: number;
   newRequestId?: () => string;
@@ -107,6 +110,7 @@ type TurnEnded = Extract<ChatEvent, { type: "turn_ended" }>;
 
 /** Points of context a chat must gain after a compaction before Jev compacts it again. */
 const RECOMPACT_GROWTH = 10;
+const MODEL_CATALOG_WAIT_MS = 2_000;
 
 function isCompactCommand(message: Message): boolean {
   return message.text.trim() === "/compact" && message.attachments.length === 0;
@@ -134,6 +138,9 @@ export class CodexSession implements AgentSession {
   /** Codex's skills by name → their SKILL.md, for messages starting with `/name`. */
   private skills = new Map<string, string>();
   private failStart: ((error: unknown) => void) | undefined;
+  private modelCatalog: Promise<Model[] | null> | undefined;
+  private modelCatalogWait: AbortController | undefined;
+  private firstTurn = true;
   /** The running turn, once Codex gave its id. */
   private activeTurnId: string | null = null;
   /** A `turn/start` is in flight. */
@@ -275,7 +282,8 @@ export class CodexSession implements AgentSession {
     } else if (this.turnStarting) {
       this.queue.push(message);
     } else {
-      void this.startTurn([message]);
+      this.queue.push(message);
+      this.flushQueue();
     }
   }
 
@@ -318,6 +326,8 @@ export class CodexSession implements AgentSession {
       } catch (error) {
         throw new RpcError(ErrorCode.INTERNAL, `interrupt failed: ${errorMessage(error)}`);
       }
+    } else if (this.modelCatalogWait) {
+      this.modelCatalogWait.abort();
     } else if (this.turnStarting || this.compaction?.nativeEnded) {
       // Interrupted once Codex says which turn it started.
       this.interruptPending = true;
@@ -364,6 +374,7 @@ export class CodexSession implements AgentSession {
     this.failStart?.(new Error("the session was stopped while starting"));
     this.cancelRequests("interrupt");
     this.compaction?.abort.abort();
+    this.modelCatalogWait?.abort();
     if (running && this.busy) this.endTurnLocally("interrupted", null);
     this.queue.length = 0;
     this.mcp.stop();
@@ -458,6 +469,8 @@ export class CodexSession implements AgentSession {
       this.host.log.warn(`codex ${version} differs from the protocol types (generated from ${CODEX_APP_SERVER_VERSION})`);
     }
     server.notify("initialized");
+    // The picker reads a different process. Warm this one while the hook and thread open.
+    if (this.params.model && !this.mapper.local) this.modelCatalog = this.loadModelCatalog(server);
     const trust = hook ? await this.trustHook(server, hook) : undefined;
     await this.addRepoSkills(server);
     // A local model's Codex runs apart from the user's config (the daemon gives it a CODEX_HOME of
@@ -550,13 +563,32 @@ export class CodexSession implements AgentSession {
     // Announced now, as Claude does when it hands a message over: by the time `session.send`
     // (or `session.start` with a prompt) answers, the chat is working.
     this.beginTurn();
+    const pendingModel = this.pendingModel;
+    const model = pendingModel ?? this.params.model;
+    if (this.firstTurn && model && !localModelName(model)) {
+      const wait = new AbortController();
+      this.modelCatalogWait = wait;
+      try {
+        await this.confirmModel(server, model, wait.signal);
+      } catch {
+        if (this.state === "running") {
+          this.endTurnLocally(wait.signal.aborted ? "interrupted" : "error", wait.signal.aborted
+            ? null
+            : `Codex could not confirm ${model} in its model catalog. Resend your message to retry, or select another model before resending.`);
+        }
+        return;
+      } finally {
+        this.modelCatalogWait = undefined;
+      }
+      if (this.state !== "running") return;
+    }
     const params: TurnStartParams = {
       threadId: this.threadId,
       input: messages.flatMap((message) => this.inputsOf(message)),
       // Reasoning summaries become `thinking` events.
       summary: "auto",
       ...(this.effort ? { effort: this.effort } : {}),
-      ...(this.pendingModel !== undefined ? { model: localModelName(this.pendingModel) ?? (this.pendingModel || null) } : {}),
+      ...(pendingModel !== undefined ? { model: localModelName(pendingModel) ?? (pendingModel || null) } : {}),
       // null clears the thread's tier: standard speed.
       ...(this.pendingFast !== undefined ? { serviceTier: this.pendingFast ? FAST_SERVICE_TIER : null } : {}),
       ...(this.modeChanged
@@ -571,10 +603,12 @@ export class CodexSession implements AgentSession {
     };
     try {
       const { turn } = await server.request("turn/start", params);
+      this.firstTurn = false;
+      this.modelCatalog = undefined;
       this.delivered(messages);
-      if (this.pendingModel) this.mapper.model = this.pendingModel;
+      if (pendingModel) this.mapper.model = pendingModel;
       if (this.pendingFast !== undefined) this.fast = this.pendingFast;
-      this.pendingModel = undefined;
+      if (this.pendingModel === pendingModel) this.pendingModel = undefined;
       this.pendingFast = undefined;
       this.modeChanged = false;
       if (!this.activeTurnId && !this.completedTurns.has(turn.id)) this.activeTurnId = turn.id;
@@ -594,6 +628,27 @@ export class CodexSession implements AgentSession {
       for (const message of this.queue.splice(0, steered < 0 ? this.queue.length : steered)) void this.steer(message, this.activeTurnId);
     } else {
       this.flushQueue();
+    }
+  }
+
+  private loadModelCatalog(server: AppServer): Promise<Model[] | null> {
+    return readCodexModels(server, true).catch((error: unknown) => {
+      this.host.log.debug(`reading the Codex session's model catalog: ${errorMessage(error)}`);
+      return null;
+    });
+  }
+
+  private async confirmModel(server: AppServer, model: string, signal: AbortSignal): Promise<void> {
+    const catalog = this.modelCatalog ??= this.loadModelCatalog(server);
+    const deadline = AbortSignal.timeout(this.deps.modelCatalogTimeoutMs ?? MODEL_CATALOG_WAIT_MS);
+    try {
+      const models = await untilAborted(catalog, AbortSignal.any([signal, deadline]));
+      if (models?.some((entry) => entry.model === model || entry.id === model)) return;
+      throw new Error("model missing from catalog");
+    } catch (error) {
+      // A retry must be able to look again if Codex never answered the first request.
+      if (!signal.aborted) this.modelCatalog = undefined;
+      throw error;
     }
   }
 

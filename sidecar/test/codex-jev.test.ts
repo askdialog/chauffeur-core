@@ -175,6 +175,7 @@ async function started(params: Partial<SessionStartParams>, answers: Record<stri
   const session = new CodexSession({ ...BASE, ...params }, host, {
     spawn: (options) => {
       server = new FakeAppServer(options);
+      server.models = [{ model: "gpt-6.1-sol" }];
       server.rolloutPath = path;
       let threads = 0;
       server.handlers["thread/start"] = (p) => ({ thread: { id: ++threads === 1 ? THREAD_ID : `thread-${threads}` }, model: (p as { model?: string }).model ?? "gpt-6.1-sol" });

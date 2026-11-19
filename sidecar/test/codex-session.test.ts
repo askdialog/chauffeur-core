@@ -26,7 +26,11 @@ const BASE: SessionStartParams = {
   env: { CHAUFFEUR_WORKSPACE_ID: "ws-1" },
 };
 
-async function started(params: Partial<SessionStartParams> = {}, options: { hook?: string | undefined; prepare?: (server: FakeAppServer) => void } = {}) {
+async function started(params: Partial<SessionStartParams> = {}, options: {
+  hook?: string | undefined;
+  prepare?: (server: FakeAppServer) => void;
+  modelCatalogTimeoutMs?: number;
+} = {}) {
   const host = new FakeHost();
   let server: FakeAppServer | undefined;
   let ids = 0;
@@ -44,6 +48,7 @@ async function started(params: Partial<SessionStartParams> = {}, options: { hook
       return "hook" in options ? options.hook : HOOK;
     },
     initTimeoutMs: 500,
+    ...(options.modelCatalogTimeoutMs === undefined ? {} : { modelCatalogTimeoutMs: options.modelCatalogTimeoutMs }),
     newRequestId: () => `req-${++ids}`,
   });
   const result = await session.start();
@@ -82,7 +87,7 @@ describe("starting", () => {
     expect(server.options.cwd).toBe("/w");
     expect(server.options.env).toMatchObject({ PATH: "/usr/bin", HOME: "/home/me", CHAUFFEUR_WORKSPACE_ID: "ws-1" });
     expect(server.options.args).toEqual(["-c", `hooks.PreToolUse=[{matcher="Bash", hooks=[{type="command", command=${JSON.stringify(HOOK)}}]}]`]);
-    expect(server.requests.map((r) => r.method)).toEqual(["initialize", "hooks/list", "thread/start", "skills/list", "mcpServerStatus/list"]);
+    expect(server.requests.map((r) => r.method)).toEqual(["initialize", "model/list", "hooks/list", "thread/start", "skills/list", "mcpServerStatus/list"]);
     expect(server.notified).toEqual(["initialized"]);
     const [init] = server.sent("initialize");
     expect(init.clientInfo.name).toBe("chauffeur");
@@ -422,6 +427,66 @@ describe("turns and messages", () => {
     expect(server.sent("turn/start")).toEqual([
       { threadId: THREAD_ID, input: [{ type: "text", text: "Fix the bug", text_elements: [] }], summary: "auto", effort: "high" },
     ]);
+    expect(server.sent("model/list")).toEqual([]);
+  });
+
+  test("the thread opens while the catalog loads and its first turn waits for its selected model", async () => {
+    const catalog = Promise.withResolvers<{ data: Array<{ model: string }>; nextCursor: null }>();
+    const { server, session } = await started({ model: "gpt-6.2-sol", prompt: "go" }, {
+      prepare: (s) => { s.handlers["model/list"] = () => catalog.promise; },
+    });
+    expect(server.sent("thread/start")).toHaveLength(1);
+    expect(server.sent("turn/start")).toEqual([]);
+    catalog.resolve({ data: [{ model: "gpt-6.2-sol" }], nextCursor: null });
+    await flush();
+    expect(server.sent("turn/start")).toHaveLength(1);
+    server.push(codex.turnStarted("turn-1"), codex.turnCompleted("turn-1"));
+    session.send("again");
+    expect(server.sent("turn/start")).toHaveLength(2);
+    expect(server.sent("model/list")).toEqual([{ cursor: null, includeHidden: true }]);
+  });
+
+  test("a first message can be resent after the catalog times out without sending it twice", async () => {
+    const { host, server, session } = await started({ model: "gpt-6.2-sol" }, {
+      modelCatalogTimeoutMs: 10,
+      prepare: (s) => { s.handlers["model/list"] = () => new Promise(() => {}); },
+    });
+    session.send("go", [], "first");
+    await Bun.sleep(25);
+    expect(server.sent("turn/start")).toEqual([]);
+    expect(host.events.at(-1)).toMatchObject({ type: "turn_ended", outcome: "error", error: expect.stringContaining("gpt-6.2-sol") });
+
+    server.handlers["model/list"] = () => ({ data: [{ model: "gpt-6.2-sol" }], nextCursor: null });
+    session.send("go", [], "retry");
+    await flush();
+    expect(server.sent("model/list")).toHaveLength(2);
+    expect(server.sent("turn/start")).toHaveLength(1);
+    expect(host.events.filter((event) => event.type === "user_message_delivered")).toEqual([
+      { type: "user_message_delivered", message_id: "retry" },
+    ]);
+  });
+
+  test("a missing model can be retried with a different model and a fresh catalog", async () => {
+    const { host, server, session } = await started({ model: "gpt-6.2-sol", prompt: "go" });
+    await flush();
+    expect(host.events.at(-1)).toMatchObject({ type: "turn_ended", outcome: "error" });
+    expect(server.sent("turn/start")).toEqual([]);
+    server.models = [{ model: "gpt-6-luna" }];
+    await session.configure({ model: "gpt-6-luna" });
+    session.send("go");
+    await flush();
+    expect(server.sent("model/list")).toHaveLength(2);
+    expect(server.sent("turn/start")).toEqual([expect.objectContaining({ model: "gpt-6-luna" })]);
+  });
+
+  test("interrupting while the catalog loads never sends the first prompt", async () => {
+    const { host, server, session } = await started({ model: "gpt-6.2-sol", prompt: "go" }, {
+      prepare: (s) => { s.handlers["model/list"] = () => new Promise(() => {}); },
+    });
+    await session.interrupt();
+    await flush();
+    expect(host.events.at(-1)).toMatchObject({ type: "turn_ended", outcome: "interrupted" });
+    expect(server.sent("turn/start")).toEqual([]);
   });
 
   test("the chat is working as soon as a message is handed over, before Codex confirms the turn", async () => {
@@ -886,7 +951,7 @@ describe("configure and stop", () => {
   });
 
   test("model, effort and permission changes ride the next turn/start", async () => {
-    const { session, server, host } = await started();
+    const { session, server, host } = await started({}, { prepare: (s) => { s.models = [{ model: "gpt-6-sol" }]; } });
     await session.configure({ model: "gpt-6-sol", effort: "xhigh", permissionMode: "bypass_permissions" });
     session.send("go");
     await flush();

@@ -178,3 +178,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Mistral Vibe is a third agent, driven through ACP, on the user's Mistral plan](mistral-vibe-third-agent.md) | 2026-11-18 | accepted |
 | [Pilot GitHub's merge queue on Core](core-merge-queue-pilot.md) | 2026-11-19 | accepted |
 | [Create workspaces from a repository or group in the sidebar](sidebar-repository-shortcuts.md) | 2026-11-19 | accepted |
+| [Load the selected Codex model before the first turn](codex-first-turn-model-catalog.md) | 2026-11-19 | accepted |
