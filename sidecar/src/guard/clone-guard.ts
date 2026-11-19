@@ -134,19 +134,21 @@ const OPERATORS = ["&&", "||", ";", "\n", "|", "&"];
 /** The denial for a shell command that writes into a clone, or undefined. */
 export function cloneCommandRefusal(command: string, cwd: string, clones: GuardedClone[]): string | undefined {
   let dir = cwd;
+  let previous = cwd;
   for (const { text, then } of topLevel(command)) {
     const commands = simpleCommands(text);
     // A `cd` alone moves the commands after it on the line; one in a group, a substitution or a
     // pipe stays there.
     const only = commands.length === 1 ? commands[0] : undefined;
     if (only && isCd(only.program) && /^\s*(?:\{\s*)?(?:cd|pushd)\b/.test(text) && then !== "|") {
-      dir = cdTarget(dir, only.args);
+      [previous, dir] = [dir, cdTarget(dir, previous, only.args)];
       continue;
     }
     let local = dir;
+    let localPrevious = previous;
     for (const { program, args } of commands) {
       if (isCd(program)) {
-        local = cdTarget(local, args);
+        [localPrevious, local] = [local, cdTarget(local, localPrevious, args)];
         continue;
       }
       const clone = writtenClone(program, args, local, clones);
@@ -200,8 +202,10 @@ function isCd(program: string): boolean {
   return program === "cd" || program === "pushd";
 }
 
-function cdTarget(dir: string, args: string[]): string {
-  const target = args.find((arg) => !arg.startsWith("-"));
+/** Where `cd` goes: its folder, the previous one for `cd -`, home with none. */
+function cdTarget(dir: string, previous: string, args: string[]): string {
+  const target = args.find((arg) => arg === "-" || !arg.startsWith("-"));
+  if (target === "-") return previous;
   return target === undefined ? homedir() : at(dir, target);
 }
 
@@ -300,6 +304,9 @@ function gitWrite(args: string[], dir: string, clones: GuardedClone[]): GuardedC
   if (sub === "clone") return cloneOf(at(where, words.at(-1) ?? "."), clones);
   // Both `--work-tree` and `--git-dir` given, the folder it runs from no longer counts.
   const places = workTree !== undefined && gitDir !== undefined ? [workTree, gitDir] : [where, workTree, gitDir];
+  // `git config --file <path>` reads or writes that file, wherever git runs.
+  const file = sub === "config" ? optionValue(rest, "-f", "--file") : undefined;
+  if (file !== undefined) places.splice(0, places.length, at(where, file));
   const clone = places.map((place) => place && cloneOf(place, clones)).find((found) => found !== undefined);
   if (!clone) return undefined;
   if (sub === undefined || GIT_READS.has(sub)) return undefined;
@@ -309,7 +316,8 @@ function gitWrite(args: string[], dir: string, clones: GuardedClone[]): GuardedC
   if (sub === "worktree" && words[0] === "list") return undefined;
   if (sub === "reflog" && words[0] !== "expire" && words[0] !== "delete") return undefined;
   const configWrite = rest.some((arg) => /^--(?:unset|remove-section)/.test(arg));
-  if (sub === "config" && ((words.length === 1 && !configWrite) || rest.some((arg) => arg === "--list" || arg === "-l" || arg.startsWith("--get")))) return undefined;
+  const keys = words.filter((word) => word !== file);
+  if (sub === "config" && ((keys.length === 1 && !configWrite) || rest.some((arg) => arg === "--list" || arg === "-l" || arg.startsWith("--get")))) return undefined;
   return clone;
 }
 

@@ -130,6 +130,10 @@ describe("cloneCommandRefusal", () => {
     "{ cd /code/web; } && touch x",
     "{ cd /code/web; ls; }; touch x",
     "git --git-dir=/ws/feat/web/.git --work-tree=/code/web checkout .",
+    "cd /code/web && cd /tmp && cd - && touch x",
+    "cd /code/web; (cd /tmp && cd - && touch x)",
+    "git config --file /code/web/.git/config user.email x",
+    "cd /code/web && git config -f .git/config --unset user.email",
   ];
   for (const command of refused) {
     test(`refuses: ${JSON.stringify(command)}`, () => {
@@ -183,6 +187,9 @@ describe("cloneCommandRefusal", () => {
     "git clone https://example.com/x.git /tmp/x",
     "cd /code/web && find . -name '*.ts' -exec grep -l x {} ;",
     "( cd /code/web; ls ) && { cd web; touch x; }",
+    "cd /code/web && cd - && touch x",
+    "git config --file /code/web/.git/config user.email",
+    "cd /code/web && git config --file /tmp/c user.email x",
   ];
   for (const command of allowed) {
     test(`allows: ${JSON.stringify(command)}`, () => {
