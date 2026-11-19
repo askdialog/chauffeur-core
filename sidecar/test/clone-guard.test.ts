@@ -134,6 +134,10 @@ describe("cloneCommandRefusal", () => {
     "cd /code/web; (cd /tmp && cd - && touch x)",
     "git config --file /code/web/.git/config user.email x",
     "cd /code/web && git config -f .git/config --unset user.email",
+    "> /code/web/f echo hi",
+    ">/code/web/f echo hi",
+    "2>>/code/web/err.log make",
+    "2>&1 git -C /code/web commit -m x",
   ];
   for (const command of refused) {
     test(`refuses: ${JSON.stringify(command)}`, () => {
