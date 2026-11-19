@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { cloneCommandRefusal, cloneWriteRefusal } from "../src/guard/clone-guard.ts";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { cloneCommandRefusal, cloneWriteRefusal, withRealPaths } from "../src/guard/clone-guard.ts";
 import type { SourceClone } from "../src/protocol.ts";
 
 const CLONES: SourceClone[] = [
@@ -48,6 +51,22 @@ describe("cloneWriteRefusal", () => {
     const nested: SourceClone[] = [{ clone: "/code/web", worktree: "/code/web/.wt/feat" }];
     expect(cloneWriteRefusal("Write", { file_path: "/code/web/.wt/feat/a.ts" }, CWD, nested)).toBeUndefined();
     expect(cloneWriteRefusal("Write", { file_path: "/code/web/a.ts" }, CWD, nested)).toBeDefined();
+  });
+  test("the worktree's own git folder in the clone's .git stays writable, the rest of .git does not", () => {
+    const root = mkdtempSync(join(tmpdir(), "clone-gitdir-"));
+    try {
+      const clone = join(root, "code", "web");
+      const worktree = join(root, "ws", "web");
+      const gitdir = join(clone, ".git", "worktrees", "web");
+      mkdirSync(gitdir, { recursive: true });
+      mkdirSync(worktree, { recursive: true });
+      writeFileSync(join(worktree, ".git"), `gitdir: ${gitdir}\n`);
+      const clones = withRealPaths([{ clone, worktree }]);
+      expect(cloneWriteRefusal("Write", { file_path: join(gitdir, "info", "exclude") }, root, clones)).toBeUndefined();
+      expect(cloneWriteRefusal("Write", { file_path: join(clone, ".git", "config") }, root, clones)).toBeDefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -133,6 +152,8 @@ describe("cloneCommandRefusal", () => {
     "git -C /code/web config user.email",
     "git -C /code/web diff-tree -r HEAD",
     "find /code/web -name '*.ts'",
+    "echo 'a; cd /code/web; b' && touch x",
+    "cd /code/web && jq '.a >.b' package.json",
   ];
   for (const command of allowed) {
     test(`allows: ${JSON.stringify(command)}`, () => {
