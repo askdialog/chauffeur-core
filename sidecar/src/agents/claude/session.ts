@@ -10,6 +10,7 @@ import type {
   PermissionMode as SdkPermissionMode,
   Query,
   SDKControlGetContextUsageResponse,
+  SDKControlInitializeResponse,
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -89,6 +90,12 @@ const AUTO_FALLBACK = 'Claude asks before acting instead, as in "Ask for permiss
 /** A design chat without auto mode still writes its screens without asking. */
 const DESIGN_AUTO_FALLBACK = "Claude writes the screens without asking, and asks before other tools (MCP servers, reading outside the repos and the notes)";
 
+/** Whether the initialize answer lists `model` without auto mode (none said: it has it). */
+function lacksAutoMode(init: SDKControlInitializeResponse, model: string | undefined): boolean {
+  const info = init.models.find((candidate) => candidate.value === model);
+  return info !== undefined && info.supportsAutoMode !== true;
+}
+
 /** Claude Code's permission modes as Chauffeur names them (`dontAsk` has no counterpart). */
 const OUR_PERMISSION_MODES = new Map<SdkPermissionMode, PermissionMode>(
   Object.entries(PERMISSION_MODES).map(([ours, theirs]) => [theirs, ours as PermissionMode]),
@@ -140,8 +147,10 @@ export class ClaudeSession implements AgentSession {
   private requestedMode: SdkPermissionMode;
   /** The permission mode Claude Code runs in, as last reported to the daemon. */
   private effectiveMode: PermissionMode | undefined;
-  /** Whether Claude Code was seen running in another mode than auto (said once). */
-  private autoModeChecked = false;
+  /** Whether the chat was told that auto mode is unavailable (once a session). */
+  private autoFellBack = false;
+  /** Whether the session's first turn ended: auto mode turned off by the plan or settings shows during it. */
+  private firstTurnOver = false;
   private readonly mcp: McpTracker;
   /** The environment Claude Code was started with: an MCP server's `${VAR}` is checked in it. */
   private agentEnv: Record<string, string | undefined> = {};
@@ -230,8 +239,9 @@ export class ClaudeSession implements AgentSession {
     const timedOut = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error(`no answer after ${timeoutMs / 1000}s`)), timeoutMs);
     });
+    let init: SDKControlInitializeResponse;
     try {
-      await Promise.race([query.initializationResult(), failed, timedOut]);
+      init = await Promise.race([query.initializationResult(), failed, timedOut]);
     } catch (error) {
       this.state = "ended";
       this.shutdown();
@@ -243,6 +253,7 @@ export class ClaudeSession implements AgentSession {
     if (this.state !== "starting") throw new RpcError(ErrorCode.UNAVAILABLE, "the session was stopped while starting");
     this.state = "running";
     this.markReady();
+    if (this.requestedMode === "auto" && lacksAutoMode(init, this.params.model)) await this.fallBackFromAuto();
     this.mcp.start();
     return { agent_session_id: this.params.resume_session_id ?? null, ...(this.process.pid === undefined ? {} : { native_pid: this.process.pid }) };
   }
@@ -426,12 +437,14 @@ export class ClaudeSession implements AgentSession {
   }
 
   /**
-   * A session started in auto mode where it is unavailable runs in `default` (Claude Code
-   * downgrades it without an error, at the first turn): says so. A design chat is switched to
-   * `acceptEdits` then, so that it still writes its screens without asking.
+   * A session asking for auto mode where it is unavailable runs in `default` (Claude Code
+   * downgrades it without an error): says so, once. A design chat is switched to `acceptEdits`
+   * then, so that it still writes its screens without asking.
    */
-  private async checkAutoMode(): Promise<void> {
-    if (this.requestedMode !== "auto") return;
+  private async fallBackFromAuto(): Promise<void> {
+    if (this.autoFellBack || this.requestedMode !== "auto" || this.state !== "running") return;
+    this.autoFellBack = true;
+    this.reportMode("default");
     const model = this.params.model ? ` with ${this.params.model}` : "";
     const why = `${AUTO_UNAVAILABLE}${model} (its model, plan or settings turn it off)`;
     if (!this.params.design_dir) {
@@ -497,6 +510,7 @@ export class ClaudeSession implements AgentSession {
     if (this.state === "ended") return;
     this.noteAccount(message);
     if (message.type === "result") {
+      this.firstTurnOver = true;
       // Keep turn_started / turn_ended paired even for a turn the CLI started on its own.
       this.beginTurn();
       const interrupted = this.interruptRequested;
@@ -531,27 +545,13 @@ export class ClaudeSession implements AgentSession {
     }
     // A suggestion for a turn already followed by another (a queued message, a steer) is stale.
     if (message.type === "prompt_suggestion" && this.busy) return;
-    // Status messages carry the mode Claude Code runs in; a turn's init may only repeat the mode asked
-    // (the SDK's says auto, then its status says default where auto mode is unavailable), which does
-    // not undo a fallback already seen.
-    if (
-      message.type === "system" &&
-      (message.subtype === "status" ||
-        (message.subtype === "init" && message.permissionMode !== this.requestedMode))
-    ) {
-      this.reportMode(message.permissionMode);
-    }
-    // Where auto mode is unavailable, Claude Code reports another mode at its first turn (its init
-    // says auto, the status right after says default); the initialize handshake no longer says it.
-    if (
-      message.type === "system" &&
-      (message.subtype === "init" || message.subtype === "status") &&
-      typeof message.permissionMode === "string" &&
-      message.permissionMode !== "auto" &&
-      !this.autoModeChecked
-    ) {
-      this.autoModeChecked = true;
-      void this.checkAutoMode();
+    // Each turn's init, and status messages, carry the mode Claude Code runs in; once auto mode fell
+    // back, a turn's init only repeats the mode asked (the status right after says default).
+    if (message.type === "system" && (message.subtype === "init" || message.subtype === "status")) {
+      const mode = message.permissionMode;
+      if (!(message.subtype === "init" && this.autoFellBack && mode === this.requestedMode)) this.reportMode(mode);
+      // Auto mode that the plan or settings turn off: Claude Code runs the first turn in default.
+      if (mode === "default" && !this.firstTurnOver) void this.fallBackFromAuto();
     }
     if (message.type === "system" && message.subtype === "background_tasks_changed") {
       this.backgroundTasks = message.tasks.filter((task) => !task.ambient).length;

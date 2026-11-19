@@ -137,9 +137,8 @@ export class FakeQuery implements QueryLike {
   private settleInit!: (error?: Error) => void;
   private sentWaiters: Array<() => void> = [];
   applyFlagSettingsError: Error | undefined;
-  /** What the initialize handshake answers: fill it in, the handshake may already have settled. */
-  /** What `initializationResult()` answers: only fields the SDK declares. */
-  initResult: Partial<SDKControlInitializeResponse> = {};
+  /** What `initializationResult()` answers, only fields the SDK declares; set before it settles. */
+  initResult: Partial<SDKControlInitializeResponse> = { models: [] };
 
   constructor(prompt: AsyncIterable<SDKUserMessage>, options: Options, initialized = true) {
     this.options = options;
