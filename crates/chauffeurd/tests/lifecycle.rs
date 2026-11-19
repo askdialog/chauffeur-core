@@ -3185,6 +3185,14 @@ async fn a_reactivation_that_fails_leaves_the_exploration_to_reactivate_again_ke
     assert_eq!(blocked.state, WorkspaceState::CleanupFailed);
     std::fs::remove_file(&root).unwrap();
 
+    // repo-a moves on, so that what its chats saw differs from where it comes back.
+    git(&f.root, &["clone", "-q", "origin/repo-a.git", "pusher"]);
+    let pusher = f.root.join("pusher");
+    std::fs::write(pusher.join("later.txt"), "later\n").unwrap();
+    git(&pusher, &["add", "later.txt"]);
+    git(&pusher, &["commit", "-q", "-m", "later work"]);
+    git(&pusher, &["push", "-q", "origin", "HEAD:main"]);
+
     // One repo cannot be checked out: the other is back, and the message says what to do.
     let clone_b = f.root.join("clones/repo-b");
     let away = f.root.join("clones/repo-b-away");
@@ -3218,6 +3226,74 @@ async fn a_reactivation_that_fails_leaves_the_exploration_to_reactivate_again_ke
     for (id, commit) in saw {
         assert_eq!(kept["commits"][&id], serde_json::json!(commit), "{kept}");
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_checkout_a_failed_archive_left_is_brought_up_to_date_and_the_record_is_new() {
+    let f = fixture(47490);
+    let d = &f.daemon;
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("look".into()),
+            repos: vec!["repo-a".into()],
+            explore: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let checkout = PathBuf::from(&ws.path).join("repo-a");
+    git(&f.root, &["clone", "-q", "origin/repo-a.git", "pusher"]);
+    let pusher = f.root.join("pusher");
+    let push = |name: &str| {
+        std::fs::write(pusher.join(name), "x\n").unwrap();
+        git(&pusher, &["add", name]);
+        git(&pusher, &["commit", "-q", "-m", name]);
+        git(&pusher, &["push", "-q", "origin", "HEAD:main"]);
+        git(&pusher, &["rev-parse", "HEAD"]).trim().to_string()
+    };
+    let record = || -> serde_json::Value {
+        serde_json::from_str(
+            &d.store
+                .kv_get(&format!(
+                    "{}{}",
+                    chauffeurd::workspaces::REACTIVATION_KEY,
+                    ws.id
+                ))
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap()
+    };
+
+    // A first archive and reactivation, which succeed.
+    d.workspaces.archive(&ws.slug, false).await.unwrap();
+    eventually("the exploration to be archived", || {
+        d.workspaces.get(&ws.id).unwrap().state == WorkspaceState::Archived
+    })
+    .await;
+    let first = push("first.txt");
+    assert_eq!(
+        d.workspaces.restore(&ws.slug).await.unwrap().state,
+        WorkspaceState::Ready
+    );
+    let id = d.workspaces.get(&ws.id).unwrap().worktrees[0].id.clone();
+
+    // An archive that failed, its checkout left in place, at `first`.
+    d.store
+        .set_workspace_state(
+            &ws.id,
+            WorkspaceState::CleanupFailed,
+            Some("archive failed"),
+        )
+        .unwrap();
+    let second = push("second.txt");
+    let back = d.workspaces.restore(&ws.slug).await.unwrap();
+    assert_eq!(back.state, WorkspaceState::Ready, "{:?}", back.last_error);
+    assert_eq!(git(&checkout, &["rev-parse", "HEAD"]).trim(), second);
+    // What the chats saw this time: `first`, not what the first reactivation kept.
+    assert_eq!(record()["commits"][&id], serde_json::json!(first));
 }
 
 async fn new_chat(d: &Daemon, workspace: &str) -> chauffeur_protocol::model::ChatInfo {

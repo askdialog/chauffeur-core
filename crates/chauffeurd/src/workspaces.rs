@@ -3035,23 +3035,29 @@ impl WorkspaceManager {
         let d = self.d();
         self.set_state(&row.id, WorkspaceState::Creating, None)?;
         let reactivated: Result<Vec<String>> = async {
+            // Every checkout, those a failed archive left in place too.
             let checkouts: Vec<WorktreeRow> = d
                 .store
                 .worktrees_of(&row.id)?
                 .into_iter()
-                .filter(|w| w.removed && w.origin == WorktreeOrigin::Workspace)
+                .filter(|w| w.origin == WorktreeOrigin::Workspace)
                 .collect();
             self.bring_back_folder(&row)?;
-            // The commits the chats talked about, for their agents to be told what moved: kept
-            // when the reactivation starts, not by a try again after a failure.
+            // The commits the chats talked about, for their agents to be told what moved: kept when
+            // a reactivation starts, unless it tries again one that did not end.
             let key = format!("{REACTIVATION_KEY}{}", row.id);
-            if row.state == WorkspaceState::Archived || d.store.kv_get(&key)?.is_none() {
+            let record = || -> Result<Option<serde_json::Value>> {
+                Ok(d.store
+                    .kv_get(&key)?
+                    .and_then(|text| serde_json::from_str(&text).ok()))
+            };
+            if !record()?.is_some_and(|record| record["done"] == false) {
                 let commits: BTreeMap<&str, Option<&str>> = checkouts
                     .iter()
                     .map(|w| (w.id.as_str(), w.base_commit.as_deref()))
                     .collect();
-                let record = serde_json::json!({ "at": now(), "commits": commits });
-                d.store.kv_set(&key, &record.to_string())?;
+                let started = serde_json::json!({ "at": now(), "commits": commits, "done": false });
+                d.store.kv_set(&key, &started.to_string())?;
             }
             let git = self.git();
             let mut failed = Vec::new();
@@ -3062,6 +3068,10 @@ impl WorkspaceManager {
                 self.fetch_base(&row.id, clone, &worktree.repo, &worktree.base_branch)
                     .await;
                 let checkout = async {
+                    let path = Path::new(&worktree.path);
+                    if !worktree.removed {
+                        git.worktree_remove(clone, path).await?;
+                    }
                     // A checkout removed by hand before the archive is still registered.
                     git.run(clone, &["worktree", "prune"]).await?;
                     self.checkout_base_detached(
@@ -3095,6 +3105,10 @@ impl WorkspaceManager {
             self.regenerate_config(&row.id)?;
             if failed.is_empty() {
                 self.unarchive_chats(&row.id)?;
+                if let Some(mut done) = record()? {
+                    done["done"] = serde_json::json!(true);
+                    d.store.kv_set(&key, &done.to_string())?;
+                }
             }
             Ok(failed)
         }
