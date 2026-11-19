@@ -3627,7 +3627,7 @@ async fn a_chat_opened_while_a_workspace_or_an_exploration_is_restored_starts_on
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_chat_opened_while_a_restore_fails_is_closed_and_told_to_send_again() {
+async fn chats_opened_while_a_restore_fails_are_closed_and_told_to_send_again() {
     use chauffeur_protocol::model::ChatStatus;
     let f = fixture(47530);
     let d = &f.daemon;
@@ -3664,16 +3664,21 @@ async fn a_chat_opened_while_a_restore_fails_is_closed_and_told_to_send_again() 
         })
         .await;
         let new = chat_with(d, &ws.id, "first words").await;
+        // One opened empty, its first message queued.
+        let empty = new_chat(d, &ws.id).await;
+        d.chats.send(&empty.id, "queued words").await.unwrap();
         let failed = restoring.await.unwrap().unwrap();
         assert_eq!(failed.state, WorkspaceState::CleanupFailed);
-        assert_eq!(d.chats.resolve(&new.id).unwrap().status, ChatStatus::Closed);
-        assert!(
-            notices(d, &new.id)
-                .iter()
-                .any(|n| n.contains("send it again once it is back")),
-            "{:?}",
-            notices(d, &new.id)
-        );
+        for chat in [&new.id, &empty.id] {
+            assert_eq!(d.chats.resolve(chat).unwrap().status, ChatStatus::Closed);
+            assert!(
+                notices(d, chat)
+                    .iter()
+                    .any(|n| n.contains("send them again once it is back")),
+                "{:?}",
+                notices(d, chat)
+            );
+        }
 
         std::fs::rename(&away, &clone_b).unwrap();
         std::fs::remove_file(slow).unwrap();

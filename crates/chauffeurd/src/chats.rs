@@ -2587,21 +2587,35 @@ impl ChatManager {
     }
 
     /// A restore (or an exploration's reactivation) that failed: the chats opened meanwhile are
-    /// closed with the others, and told that their first message never reached the agent.
+    /// closed with the others, and those whose messages never reached their agent (a first message
+    /// held, messages queued) are told so.
     pub async fn restore_failed(&self, workspace_id: &str) {
-        let firsts = self
+        let d = self.d();
+        let held: HashSet<String> = self
             .first_messages
             .lock()
             .unwrap()
             .remove(workspace_id)
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .into_iter()
+            .map(|first| first.chat_id)
+            .collect();
+        // Opened meanwhile: starting, where the archive left the others closed.
+        let opened: Vec<ChatInfo> = d
+            .store
+            .chats_of(workspace_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|chat| chat.status == ChatStatus::Starting)
+            .collect();
         self.close_workspace(workspace_id).await;
-        for first in firsts {
-            if let Ok(chat) = self.current(&first.chat_id) {
+        for chat in opened {
+            let queued = !d.store.queue_of(&chat.id).unwrap_or_default().is_empty();
+            if held.contains(&chat.id) || queued {
                 self.notice(
                     &chat,
                     NoticeLevel::Warning,
-                    "The workspace could not be restored before the agent got this message: send it again once it is back".into(),
+                    "The workspace could not be restored before the agent got the messages sent here: send them again once it is back".into(),
                 );
             }
         }
