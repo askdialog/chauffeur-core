@@ -45,6 +45,8 @@ import type { ChatParams } from "./ChatParams";
 import type { ChatsResult } from "./ChatsResult";
 import type { ClaudeArtifactParams } from "./ClaudeArtifactParams";
 import type { ClaudeArtifactPreview } from "./ClaudeArtifactPreview";
+import type { ClaudeCodeImportParams } from "./ClaudeCodeImportParams";
+import type { ClaudeCodeImportResult } from "./ClaudeCodeImportResult";
 import type { CloseChatParams } from "./CloseChatParams";
 import type { CloseIdleResult } from "./CloseIdleResult";
 import type { CloudArchiveBinding } from "./CloudArchiveBinding";
@@ -477,6 +479,7 @@ export type ClientMethods = {
   "workspace.archive": [ArchiveParams, WorkspaceInfo];
   "workspace.restore": [WorkspaceParams, WorkspaceInfo];
   "conductor.import": [ConductorImportParams, ConductorImportResult];
+  "claudecode.import": [ClaudeCodeImportParams, ClaudeCodeImportResult];
   "routine.list": [EmptyParams, RoutinesResult];
   "routine.get": [RoutineParams, RoutineInfo];
   "routine.create": [RoutineCreateParams, RoutineInfo];
@@ -888,6 +891,7 @@ export const METHOD_NAMES = [
   "workspace.archive",
   "workspace.restore",
   "conductor.import",
+  "claudecode.import",
   "routine.list",
   "routine.get",
   "routine.create",

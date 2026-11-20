@@ -17,6 +17,7 @@ pub mod chat_sends;
 pub mod chat_shell;
 pub mod chats;
 pub mod claude_artifact;
+pub mod claudecode;
 pub mod cloud_backup_recovery;
 pub mod cloud_process;
 pub mod cloud_transfer;

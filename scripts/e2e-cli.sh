@@ -644,6 +644,27 @@ refuses "is not a model name" c ollama pull "bad name"
 # daemon (~/.chauffeur): the one the agent's own chats run on. This throwaway daemon passes for it
 # under a HOME of its own; an explicit CHAUFFEUR_HOME of another folder is still stopped.
 mkdir -p "$T/user" && ln -s "$T/home" "$T/user/.chauffeur"
+echo "== claude-code. the import's dry run places a session on its live branch, changing nothing"
+CC="$T/claude-code"
+mkdir -p "$CC/claude/projects/-e2e"
+git clone -q "$T/origin/alpha.git" "$CC/web"
+git -C "$CC/web" remote set-url origin https://github.com/e2e/web.git
+git -C "$CC/web" config "url.$T/origin/alpha.git.insteadOf" https://github.com/e2e/web.git
+git -C "$CC/web" switch -q -c feat/cc
+echo cc > "$CC/web/cc.txt" && git -C "$CC/web" add -A && git -C "$CC/web" commit -q -m cc
+git -C "$CC/web" switch -q main
+NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+{
+  echo '{"type":"ai-title","aiTitle":"E2E work"}'
+  echo "{\"type\":\"assistant\",\"cwd\":\"$CC/web\",\"gitBranch\":\"feat/cc\",\"entrypoint\":\"cli\",\"timestamp\":\"$NOW\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"$CC/web/cc.txt\"}}]}}"
+} > "$CC/claude/projects/-e2e/s1.jsonl"
+cc_files() { (cd "$CC" && find . -type f -print0 | sort -z | xargs -0 shasum | shasum); }
+cc_before=$(cc_files)
+c import claude-code --dry-run --claude-dir "$CC/claude" > "$T/cc-plan"
+has "E2E work  ($CC/web)  → feat/cc" < "$T/cc-plan"
+has -x "  branch   feat/cc   feat/cc, e2e/web, 1 chat(s)" < "$T/cc-plan"
+has -x "Dry run: nothing changed." < "$T/cc-plan"
+[ "$(cc_files)" = "$cc_before" ] || { echo "the dry run changed Claude Code's files or the clone"; exit 1; }
 echo "== conductor. the import plans without changing anything, copies workspaces, and runs once"
 mkdir -p "$T/conductor"
 scripts/conductor-fixture.sh "$T/conductor"

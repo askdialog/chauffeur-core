@@ -8,6 +8,7 @@
 //! - [`sidecar`]: JSON-RPC methods between the daemon and the agent sidecar.
 //! - [`peer`]: JSON-RPC methods a daemon calls on another daemon's `/peer` path.
 //! - [`worker`]: GCP workers a workspace can be transferred to.
+//! - [`claudecode`]: the import from Claude Code.
 //! - [`conductor`]: the import from Conductor.
 //! - [`routines`]: prompts the daemon runs by itself at set times.
 //! - [`rpc`]: the JSON-RPC 2.0 envelopes.
@@ -22,6 +23,7 @@ pub mod methods;
 
 pub mod access;
 pub mod activity;
+pub mod claudecode;
 pub mod client;
 pub mod cloud_archive;
 pub mod cloud_backup;

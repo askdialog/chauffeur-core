@@ -64,6 +64,11 @@ pub(crate) struct Locations {
 }
 
 impl Locations {
+    /// Claude Code's folder: `CLAUDE_CONFIG_DIR`, else `~/.claude`.
+    pub(crate) fn config(&self) -> &Path {
+        &self.config
+    }
+
     pub(crate) fn of(vars: &BTreeMap<String, String>) -> Option<Locations> {
         let set = |name: &str| vars.get(name).filter(|v| !v.is_empty()).map(PathBuf::from);
         let home = set("HOME").or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
