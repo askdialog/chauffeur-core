@@ -164,6 +164,11 @@ const READERS = new Set([
   ...["date", "sleep", "id", "whoami", "uname", "hostname", "printenv", "locale", "seq", "sed", "gsed", "awk"],
   ...["gawk", "mawk", "nawk", "fd", "fdfind", "set", "shopt", "exit", "return", "wait", "jobs"],
 ]);
+/**
+ * Readers that write, or run code, given some arguments (`onlyReads`): one with an argument only
+ * known as the line runs (`awk "$PROGRAM"`, `sort $OPTIONS`) is no known read.
+ */
+const WRITES_BY_ARGUMENT = new Set(["sed", "gsed", "awk", "gawk", "mawk", "nawk", "sort", "uniq", "yq", "rg", "fd", "fdfind", "tree", "xxd", "base64"]);
 /** Programs that run code given in their words or their input: a clone's path in that code is a write. */
 const INTERPRETERS = new Set([
   ...["python", "python3", "node", "ruby", "perl", "php", "bun", "deno", "tsx", "ts-node", "osascript", "Rscript", "lua"],
@@ -404,11 +409,11 @@ class Judge {
     else if (name === "xargs") this.xargs(args, state);
     else if (name === "find") this.find(args, state, fed);
     else if (name === "git") this.git(args, state);
-    else if (READERS.has(name) && onlyReads(name, texts)) {
+    else if (READERS.has(name) && onlyReads(name, texts) && (!WRITES_BY_ARGUMENT.has(name) || args.every((arg) => arg.known))) {
       this.reads(args, state);
     }
     else {
-      const targets = writeTargets(name, args);
+      const targets = WRITES_BY_ARGUMENT.has(name) && !args.every((arg) => arg.known) ? undefined : writeTargets(name, args);
       if (!targets) {
         this.opaque([program, ...args], state, fed, input);
         return;
