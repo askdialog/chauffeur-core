@@ -563,9 +563,40 @@ async fn open_prs(forge: Forge, env: &ShellEnv, clone: &Path) -> Option<Vec<Valu
     }
 }
 
+/// The head commits of a GitHub repo's merged PRs, by branch name: the `limit` most recent, in one
+/// `gh pr list`; `None` when gh fails.
+pub(crate) async fn merged_heads(
+    env: &ShellEnv,
+    clone: &Path,
+    limit: u32,
+) -> Option<std::collections::HashMap<String, Vec<String>>> {
+    let limit = limit.to_string();
+    let args = [
+        "pr",
+        "list",
+        "--state",
+        "merged",
+        "--limit",
+        &limit,
+        "--json",
+        "headRefName,headRefOid",
+    ];
+    let mut heads: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for pr in gh_json(env, clone, &args).await? {
+        if let (Some(name), Some(oid)) = (pr["headRefName"].as_str(), pr["headRefOid"].as_str()) {
+            heads
+                .entry(name.to_string())
+                .or_default()
+                .push(oid.to_string());
+        }
+    }
+    Some(heads)
+}
+
 /// The PRs from the branch `head`: `gh pr list`, or a GitLab's merge requests in the same shape;
 /// `None` when the forge's CLI fails.
-async fn pr_list(
+pub(crate) async fn pr_list(
     forge: Forge,
     env: &ShellEnv,
     clone: &Path,

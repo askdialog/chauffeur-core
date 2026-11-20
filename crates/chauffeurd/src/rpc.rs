@@ -300,6 +300,9 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::ConductorImport(params) => {
             to_value(crate::conductor::import(daemon, params).await?)
         }
+        ClientCall::ClaudeCodeImport(params) => {
+            to_value(crate::claudecode::import(daemon, params).await?)
+        }
         ClientCall::WorkspaceWait(params) => to_value(
             daemon
                 .workspaces

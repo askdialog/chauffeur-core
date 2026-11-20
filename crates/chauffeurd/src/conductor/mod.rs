@@ -175,7 +175,7 @@ fn select<'a>(
 }
 
 /// Chauffeur's name of a GitHub repo: its short name in the main organization, else `owner/name`.
-fn reference(d: &Daemon, owner: &str, name: &str) -> String {
+pub(crate) fn reference(d: &Daemon, owner: &str, name: &str) -> String {
     let org = d.settings.get().github_org.clone();
     if !org.is_empty() && org.eq_ignore_ascii_case(owner) {
         name.to_string()
@@ -193,7 +193,11 @@ fn same_folder(a: &Path, b: &Path) -> bool {
 
 /// The GitHub remote of a clone: Conductor's record of it, else its `origin` as configured (not
 /// as rewritten by `insteadOf`).
-async fn remote_of(git: &Git, clone: &Path, recorded: Option<&str>) -> Option<(String, String)> {
+pub(crate) async fn remote_of(
+    git: &Git,
+    clone: &Path,
+    recorded: Option<&str>,
+) -> Option<(String, String)> {
     if let Some(found) = recorded.and_then(github_repo) {
         return Some(found);
     }

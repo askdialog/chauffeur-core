@@ -1,8 +1,12 @@
 //! `chauffeur import conductor` (docs/adr/conductor-import.md): the daemon plans and imports; this
 //! prints the plan, lists the branches Conductor will release and asks before anything changes.
+//! `chauffeur import claude-code` (docs/adr/claude-code-import.md): the plan only, for now.
 use crate::client::Client;
 use crate::render::sanitize_terminal;
 use anyhow::bail;
+use chauffeur_protocol::claudecode::{
+    ClaudeCodeImportParams, ClaudeCodeImportResult, ClaudeCodeOutcome, ClaudeCodeWorkspaceKind,
+};
 use chauffeur_protocol::client::ClientCall;
 use chauffeur_protocol::conductor::{
     ConductorClone, ConductorImportParams, ConductorImportResult, ConductorOutcome,
@@ -32,16 +36,58 @@ pub enum Source {
         #[arg(long)]
         db: Option<String>,
     },
+    /// Bring the work of Claude Code's sessions into Chauffeur: a workspace per live branch, a
+    /// parent and its children for a session that worked on several, the rest in each repo's
+    /// history exploration. For now only `--dry-run` runs: it prints the plan.
+    #[command(name = "claude-code")]
+    ClaudeCode {
+        /// Print what would be imported and released, and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Sessions active in the last DAYS days (60 by default).
+        #[arg(long, value_name = "DAYS", conflicts_with = "all")]
+        since: Option<u32>,
+        /// Every session, whatever its age.
+        #[arg(long)]
+        all: bool,
+        /// Claude Code's folder, when it is not `CLAUDE_CONFIG_DIR` or `~/.claude`.
+        #[arg(long)]
+        claude_dir: Option<String>,
+    },
 }
 
 pub async fn run(source: Source, client: &mut Client, json: bool) -> anyhow::Result<()> {
-    let Source::Conductor {
-        workspaces,
-        dry_run,
-        include_archived,
-        yes,
-        db,
-    } = source;
+    let (workspaces, dry_run, include_archived, yes, db) = match source {
+        Source::Conductor {
+            workspaces,
+            dry_run,
+            include_archived,
+            yes,
+            db,
+        } => (workspaces, dry_run, include_archived, yes, db),
+        Source::ClaudeCode {
+            dry_run,
+            since,
+            all,
+            claude_dir,
+        } => {
+            let params = ClaudeCodeImportParams {
+                since_days: since,
+                all,
+                dry_run,
+                claude_dir,
+            };
+            let plan: ClaudeCodeImportResult =
+                client.call(ClientCall::ClaudeCodeImport(params)).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&plan)?);
+            } else {
+                println!("{}", sanitize_terminal(&render_claude_code(&plan)));
+                println!("\nDry run: nothing changed.");
+            }
+            return Ok(());
+        }
+    };
     let params = ConductorImportParams {
         db,
         workspaces,
@@ -251,6 +297,116 @@ fn outcomes(result: &ConductorImportResult) -> String {
         lines.push("Nothing to import.".into());
     }
     lines.join("\n")
+}
+
+fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
+    let window = match plan.since_days {
+        Some(days) => format!("active in the last {days} days"),
+        None => "all".into(),
+    };
+    let mut out = format!(
+        "Claude Code: {}\n\nSessions ({}, {window}):",
+        plan.claude_dir,
+        plan.sessions.len()
+    );
+    if plan.sessions.is_empty() {
+        out.push_str(" none");
+    }
+    for s in &plan.sessions {
+        let day = s.last_active.get(..10).unwrap_or(&s.last_active);
+        let state = match s.outcome {
+            ClaudeCodeOutcome::Import => {
+                format!("→ {}", s.lands_in.as_deref().unwrap_or("nowhere"))
+            }
+            ClaudeCodeOutcome::Running | ClaudeCodeOutcome::Skipped => {
+                format!(
+                    "{}: {}",
+                    if s.outcome == ClaudeCodeOutcome::Running {
+                        "refused"
+                    } else {
+                        "skipped"
+                    },
+                    s.reason.as_deref().unwrap_or_default()
+                )
+            }
+        };
+        out.push_str(&format!("\n  {day}  {}  ({})  {state}", s.title, s.folder));
+        let live: Vec<String> = s
+            .branches
+            .iter()
+            .filter(|b| b.live)
+            .map(|b| format!("{} {}", b.repo, b.branch))
+            .collect();
+        let others = s.branches.len() - live.len();
+        if !s.branches.is_empty() {
+            let mut line = if live.is_empty() {
+                "no live branch".to_string()
+            } else {
+                format!("live: {}", live.join(", "))
+            };
+            if others > 0 {
+                line.push_str(&format!(" (+{others} merged or deleted)"));
+            }
+            out.push_str(&format!("\n      {line}"));
+        }
+    }
+    out.push_str("\n\nWorkspaces:");
+    if plan.workspaces.is_empty() {
+        out.push_str(" none");
+    }
+    for w in &plan.workspaces {
+        let kind = match w.kind {
+            ClaudeCodeWorkspaceKind::Branch if w.parent.is_some() => "child",
+            ClaudeCodeWorkspaceKind::Branch => "branch",
+            ClaudeCodeWorkspaceKind::Parent => "parent",
+            ClaudeCodeWorkspaceKind::Changes => "changes",
+        };
+        let mut parts = vec![
+            w.branch.clone().unwrap_or_else(|| "a new branch".into()),
+            w.repos.join(" + "),
+            format!("{} chat(s)", w.sessions.len()),
+        ];
+        if let Some(parent) = &w.parent {
+            parts.push(format!("child of {parent}"));
+        }
+        if !w.changes_from.is_empty() {
+            parts.push(format!(
+                "carries the uncommitted changes on the default branch of {}",
+                w.changes_from.join(", ")
+            ));
+        }
+        out.push_str(&format!("\n  {kind:7}  {}   {}", w.name, parts.join(", ")));
+    }
+    out.push_str("\n\nHistory explorations:");
+    if plan.histories.is_empty() {
+        out.push_str(" none");
+    }
+    for h in &plan.histories {
+        out.push_str(&format!(
+            "\n  {} at {}   {} session(s), closed tabs resumable read-only",
+            h.repo,
+            h.base,
+            h.sessions.len()
+        ));
+    }
+    if !plan.releases.is_empty() {
+        out.push_str(
+            "\n\nBranches to release (HEAD detached on the same commit there, its changes copied):",
+        );
+        for r in &plan.releases {
+            out.push_str(&format!(
+                "\n  {} {}   checked out in {}",
+                r.repo, r.branch, r.folder
+            ));
+        }
+    }
+    if !plan.warnings.is_empty() {
+        out.push_str("\n\nWarnings:");
+        for warning in &plan.warnings {
+            out.push_str(&format!("\n  {warning}"));
+        }
+    }
+    out
 }
 
 #[cfg(test)]
