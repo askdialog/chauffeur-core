@@ -2991,7 +2991,7 @@ fn wait_text(result: &WaitResult) -> String {
 
 /// `alpha:jc/abc-1`: a PR named by its repo and head branch.
 /// Starts an agent's login, prints the page to open, and waits for the daemon to tell the agent
-/// is signed in (or the sidecar gave up on the login).
+/// finished the login (or the sidecar gave up on it).
 async fn login(client: &mut Client, agent: AgentKind, json: bool) -> anyhow::Result<()> {
     use chauffeur_protocol::events::{Event, RegistryEvent};
     use chauffeur_protocol::sidecar::AgentLoginResult;
@@ -3018,24 +3018,21 @@ async fn login(client: &mut Client, agent: AgentKind, json: bool) -> anyhow::Res
             match notification.envelope.event {
                 Event::Registry {
                     event:
-                        RegistryEvent::AccountChanged {
-                            agent: changed,
-                            account: AccountStatus::SignedIn,
-                            ..
-                        },
-                } if changed == agent => return Ok::<_, anyhow::Error>(()),
-                Event::Registry {
-                    event:
                         RegistryEvent::LoginEnded {
                             agent: ended,
                             worker: None,
-                            success: false,
+                            success,
                             error,
                         },
-                } if ended == agent => anyhow::bail!(
-                    "the login did not complete: {}",
-                    error.as_deref().unwrap_or("no reason given")
-                ),
+                } if ended == agent => {
+                    if success {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    anyhow::bail!(
+                        "the login did not complete: {}",
+                        error.as_deref().unwrap_or("no reason given")
+                    );
+                }
                 _ => {}
             }
         }
