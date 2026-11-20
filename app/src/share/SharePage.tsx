@@ -7,7 +7,7 @@ import type { CanvasResult, CommentAuthor, DesignComment, FromReviewer, Mention,
 import { ArrowLeft, AtSign, Copy, Download, Lock, LogOut, Mail, MessageSquarePlus, MessageSquareText, Play, Scan, UserRound, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { layoutCanvas, noScreens, pageSections, percent, presentOrder, ZOOM_STEPS } from "@/lib/canvas";
-import { counts as commentCounts, type Draft, threadsOf } from "@/lib/comments";
+import { counts as commentCounts, type Draft, type Thread, threadsOf } from "@/lib/comments";
 import { mentions as mentionsMe, threadParam, unreadThreads } from "@/lib/mentions";
 import { errorMessage } from "@/lib/rpc";
 import { flashFor, initials, liveLabel, noAccessText, refusalText, sharedWithYou, shareIdOf, signInTokenOf, socketUrl } from "@/lib/sharePage";
@@ -804,7 +804,7 @@ function OpenShare({
   const layout = useMemo(() => layoutCanvas(sections), [sections]);
   const steps = useMemo(() => presentOrder(sections), [sections]);
   const [selection, setSelection] = useState<string[]>([]);
-  const { zoom, area, setArea, moveView, fit, zoomTo, reveal } = useCanvasView(layout, pageIndex);
+  const { zoom, area, setArea, moveView, fit, zoomTo, reveal, revealComment, commentsPanel } = useCanvasView(layout, pageIndex, live.canvas, setPage);
   const [fullScreen, setFullScreen] = useState<number | null>(null);
   const [presenting, setPresenting] = useState<number | null>(null);
   const empty = noScreens(live.canvas);
@@ -891,26 +891,21 @@ function OpenShare({
     if (openThread) markSeenRef.current(openThread);
   }, [openThread, unreadSet]);
   /** Shows a thread: its screen's page, the screen selected, the thread at its pin. */
-  const showThread = useCallback(
-    (threadId: string) => {
-      const comment = live.comments.find((c) => c.id === threadId);
-      if (!comment) return;
-      const index = live.canvas.pages.findIndex((p) => p.sections.some((section) => section.screens.some((screen) => screen.file === comment.screen)));
-      if (index >= 0) setPage(index);
-      setSelection([comment.screen]);
-      setDraft(null);
-      setOpenThread(threadId);
-    },
-    [live.comments, live.canvas.pages],
-  );
+  const showThread = useCallback((thread: Thread) => {
+    if (revealComment(thread)) setPanel(false);
+    setSelection([thread.comment.screen]);
+    setDraft(null);
+    setOpenThread(thread.comment.id);
+  }, [revealComment]);
   // `?thread=<id>`: the link of a mention, or one copied from a thread, opens it.
   const linked = useRef(threadParam(location.search));
   useEffect(() => {
-    if (!linked.current || !live.comments.some((c) => c.id === linked.current)) return;
-    if (fileName) focusDocumentThread(linked.current);
-    else showThread(linked.current);
+    const thread = threads.find((t) => t.comment.id === linked.current);
+    if (!thread) return;
+    if (fileName) focusDocumentThread(thread.comment.id);
+    else showThread(thread);
     linked.current = null;
-  }, [live.comments, showThread, fileName, focusDocumentThread]);
+  }, [threads, showThread, fileName, focusDocumentThread]);
   const escape = () => {
     if (takeOverOpen) setTakeOverOpen(false);
     else if (reviewersOpen) setReviewersOpen(false);
@@ -1054,7 +1049,10 @@ function OpenShare({
             onClick={() => {
               const next = unread.find((t) => t !== openThread) ?? unread[0];
               if (fileName) focusDocumentThread(next);
-              else showThread(next);
+              else {
+                const thread = threads.find((t) => t.comment.id === next);
+                if (thread) showThread(thread);
+              }
             }}
             title="Open the next thread that mentions you"
             data-testid="share-mentions"
@@ -1267,6 +1265,7 @@ function OpenShare({
           )}
           {panel && (
             <CommentsPanel
+              ref={commentsPanel}
               me={me.email}
               unread={unreadSet}
               threads={threads}
@@ -1277,10 +1276,7 @@ function OpenShare({
               filter={filter}
               labelOf={labelOf}
               onFilter={setFilter}
-              onOpen={(thread) => {
-                setDraft(null);
-                setOpenThread(thread.comment.id);
-              }}
+              onOpen={showThread}
               onResolve={(threadId, resolved) => say({ type: "resolve", id: threadId, resolved })}
               onClose={() => setPanel(false)}
             />

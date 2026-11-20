@@ -296,7 +296,9 @@ export function CommentsPanel({
   onClose,
   me,
   unread,
+  ref,
 }: {
+  ref?: React.Ref<HTMLDivElement>;
   /** The reader, whose mentions are highlighted. */
   me?: string | null;
   /** The threads holding unread mentions of the reader. */
@@ -322,6 +324,7 @@ export function CommentsPanel({
   const screens = [...new Set(shown.map((t) => t.comment.screen))];
   return (
     <div
+      ref={ref}
       role="dialog"
       aria-label="Comments"
       data-popover

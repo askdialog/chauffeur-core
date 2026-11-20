@@ -24,7 +24,7 @@ import {
   wheelZoom,
   zoomAround,
 } from "@/lib/canvas";
-import { type Draft, type DrawnPin, popoverAnchor, type Thread } from "@/lib/comments";
+import { type Draft, type DrawnPin, POPOVER_GAP, popoverAnchor, type Thread } from "@/lib/comments";
 import type { Snapshot } from "@/lib/screenSnapshots";
 import { cx, IconButton } from "../ui";
 import { PublishedLink } from "./CanvasOverlays";
@@ -500,7 +500,7 @@ export function CanvasViewport({
                       />
                     ))}
                     {anchor && (
-                      <PinPopover left={left + anchor.x + 12} top={row + anchor.y - 8} onEscape={onEscape}>
+                      <PinPopover left={left + anchor.x + POPOVER_GAP} top={row + anchor.y - 8} onEscape={onEscape}>
                         {popover}
                       </PinPopover>
                     )}

@@ -4,7 +4,7 @@
 // message.
 
 import type { CommentAuthor, DesignComment, JsonValue, PinElement } from "@chauffeur/protocol";
-import type { ShownSection } from "./canvas";
+import { type CanvasLayout, rowTop, type ShownSection, type Size, type View } from "./canvas";
 import { screenPath } from "./designHandoff";
 
 /** A thread: its first comment, numbered in creation order across the design, and its replies. */
@@ -51,6 +51,28 @@ export function popoverAnchor(file: string, width: number, height: number, draft
   if (openThread?.comment.screen !== file) return null;
   const pin = openThread.comment.pin;
   return pin ? { x: (width * pin.x) / 100, y: (height * pin.y) / 100 } : { x: 10, y: 10 };
+}
+
+export const THREAD_WIDTH = 320;
+export const POPOVER_GAP = 12;
+const PIN_MARGIN = 16;
+export const THREAD_VIEW_MIN_WIDTH = PIN_MARGIN * 2 + POPOVER_GAP + THREAD_WIDTH;
+
+/** Brings the pin into view with room for the thread to its right. */
+export function commentView(layout: CanvasLayout, view: View, area: Size, thread: Thread): View {
+  for (const [index, section] of layout.sections.entries()) {
+    const screen = section.screens.find((placed) => placed.screen.file === thread.comment.screen);
+    if (!screen) continue;
+    const anchor = popoverAnchor(screen.screen.file, screen.width * view.scale, screen.height * view.scale, null, thread);
+    if (!anchor) return view;
+    const x = Math.min(area.width / 2, Math.max(PIN_MARGIN, area.width - THREAD_WIDTH - POPOVER_GAP - PIN_MARGIN));
+    return {
+      scale: view.scale,
+      x: x - view.scale * screen.x - anchor.x,
+      y: view.y + area.height / 2 - rowTop(layout, view, index) - anchor.y,
+    };
+  }
+  return view;
 }
 
 /** A thread's pin as the canvas draws it: open threads only; a whole-screen one sits in the corner. */
