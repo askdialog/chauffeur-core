@@ -779,12 +779,12 @@ function onlyReads(name: string, texts: string[]): boolean {
   switch (name) {
     case "sed":
     case "gsed":
-      // `-i` edits in place; a script's `w file` or `s/…/…/w file` writes that file, and its `e`
-      // command or `s/…/…/e` runs a command.
+      // `-i` edits in place; a script's `w file`, `W file` (after an address too: `1w`, `$w`,
+      // `/re/w`) or `s/…/…/w file` writes that file, and its `e` command or `s/…/…/e` runs a command.
       // `-f file`: a script the guard does not see.
       return (
         !texts.some((text) => /^-[a-zA-Z]*[if]/.test(text) || text.startsWith("--in-place") || text.startsWith("--file")) &&
-        !sedScripts(texts).some((script) => /(^|[;}\s/])w\s+\S/.test(script) || /(^|[;}\s\d$/])e(\s|$)/.test(script) || SED_E_FLAG.test(script))
+        !sedScripts(texts).some((script) => /(^|[;}\s\d$/])[wW]\s+\S/.test(script) || /(^|[;}\s\d$/])e(\s|$)/.test(script) || SED_E_FLAG.test(script))
       );
     case "awk":
     case "gawk":
