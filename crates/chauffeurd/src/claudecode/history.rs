@@ -205,7 +205,11 @@ async fn import_session(
             &record,
         )
         .await?;
-    Ok(imported.is_some())
+    match imported {
+        Some(_) => Ok(true),
+        None if d.store.kv_get(&record)?.is_some() => Ok(false),
+        None => Err(Error::Conflict(format!("{} is gone", workspace.slug))),
+    }
 }
 
 /// A private folder of the daemon's for the captures, removed with what it holds.
@@ -219,8 +223,8 @@ impl Scratch {
             .home
             .canonicalize()?
             .join(format!("claude-code-import-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir(&dir)?;
-        crate::paths::private_dir(&dir)?;
+        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
+            .create(&dir)?;
         Ok(Scratch(dir))
     }
 }
