@@ -14,8 +14,8 @@ use chauffeur_protocol::client::{
 };
 use chauffeur_protocol::events::{ProcessKind, RegistryEvent, WorkspaceEvent};
 use chauffeur_protocol::model::{
-    Activity, ChatInfo, ChatKind, ChatStatus, TicketRef, WorkspaceInfo, WorkspaceState,
-    WorktreeInfo, WorktreeOrigin,
+    Activity, ChatInfo, ChatKind, ChatStatus, SectionInfo, TicketRef, WorkspaceInfo,
+    WorkspaceState, WorktreeInfo, WorktreeOrigin,
 };
 use globset::{Glob, GlobSetBuilder};
 
@@ -489,6 +489,11 @@ impl WorkspaceManager {
             section
                 .map(|s| crate::sections::resolve(&d, s))
                 .transpose()?
+                .map(|s| {
+                    self.check_section_repos(&row, &s)?;
+                    Ok::<_, Error>(s)
+                })
+                .transpose()?
                 .map(|s| s.id)
         };
         if before.as_deref() == Some(row.id.as_str()) {
@@ -570,23 +575,21 @@ impl WorkspaceManager {
         let row = self.row(key)?;
         let section = section
             .map(|s| crate::sections::resolve(&d, s))
-            .transpose()?
-            .map(|s| s.id);
+            .transpose()?;
+        let section_id = section.as_ref().map(|s| s.id.as_str());
         let rows = d.store.list_workspaces()?;
         let top_level = sidebar_group(&rows, false, row.section_id.as_deref())
             .iter()
             .any(|(id, _)| *id == row.id);
         if top_level {
-            let group = sidebar_group(&rows, false, section.as_deref());
+            let group = sidebar_group(&rows, false, section_id);
             let first = group.iter().map(|(id, _)| id).find(|id| **id != row.id);
-            return self.move_to(
-                &row.id,
-                first.map(String::as_str),
-                false,
-                section.as_deref(),
-            );
+            return self.move_to(&row.id, first.map(String::as_str), false, section_id);
         }
-        d.store.set_workspace_section(&row.id, section.as_deref())?;
+        if let Some(section) = &section {
+            self.check_section_repos(&row, section)?;
+        }
+        d.store.set_workspace_section(&row.id, section_id)?;
         for child in rows
             .iter()
             .filter(|r| r.parent_id.as_deref() == Some(&row.id))
@@ -595,6 +598,43 @@ impl WorkspaceManager {
         }
         self.publish(&row.id);
         self.info(&self.row(&row.id)?)
+    }
+
+    pub(crate) fn check_section_repos(
+        &self,
+        row: &WorkspaceRow,
+        section: &SectionInfo,
+    ) -> Result<()> {
+        let Some(repos) = section.repos.as_ref().filter(|repos| !repos.is_empty()) else {
+            return Ok(());
+        };
+        if row.section_id.as_deref() == Some(&section.id) {
+            return Ok(());
+        }
+        if row.state == WorkspaceState::Creating {
+            return Err(Error::Conflict(format!(
+                "{} is still being created; move it to {} once its repos are ready",
+                row.slug, section.name
+            )));
+        }
+        let d = self.d();
+        let worktrees: Vec<_> = d
+            .store
+            .worktrees_of(&row.id)?
+            .into_iter()
+            .filter(|w| w.origin == WorktreeOrigin::Workspace && !w.removed)
+            .collect();
+        if repos.len() != worktrees.len()
+            || !repos.iter().all(|repo| {
+                worktrees.iter().any(|w| {
+                    w.repo.eq_ignore_ascii_case(repo_folder(repo))
+                        && d.repos.clone_matches(Path::new(&w.clone_path), repo)
+                })
+            })
+        {
+            return Err(crate::sections::repo_mismatch(section));
+        }
+        Ok(())
     }
 
     /// Shows a workspace as unread again, as when a chat of it finishes.
@@ -898,6 +938,41 @@ impl WorkspaceManager {
             })?;
             self.check_branch_free(&branch, &repo_names).await?;
         }
+        let section = if parent.is_some() || (section.is_some() && params.section.is_none()) {
+            section
+        } else {
+            let repo_set = |repos: &[String]| -> HashSet<String> {
+                repos
+                    .iter()
+                    .map(|repo| d.repos.section_repo_key(repo).to_ascii_lowercase())
+                    .collect()
+            };
+            let chosen = repo_set(&repo_names);
+            let matches = |s: &SectionInfo| {
+                s.repos.as_ref().is_some_and(|repos| {
+                    !repos.is_empty()
+                        && repos.len() == repo_names.len()
+                        && repo_set(repos) == chosen
+                })
+            };
+            if let Some(id) = section {
+                let section = crate::sections::resolve(&d, &id)?;
+                if section
+                    .repos
+                    .as_ref()
+                    .is_some_and(|repos| !repos.is_empty())
+                    && !matches(&section)
+                {
+                    return Err(crate::sections::repo_mismatch(&section));
+                }
+                Some(id)
+            } else {
+                crate::sections::list(&d)?
+                    .into_iter()
+                    .find(matches)
+                    .map(|section| section.id)
+            }
+        };
         let row = WorkspaceRow {
             id: uuid::Uuid::now_v7().to_string(),
             slug: slug.clone(),
@@ -917,7 +992,7 @@ impl WorkspaceManager {
             position: 0.0,
             title,
             title_source,
-            // A child goes into its parent's section; other workspaces use the requested section.
+            // Children follow their parent; top-level workspaces use the chosen or matching section.
             section_id: parent
                 .as_ref()
                 .and_then(|p| p.section_id.clone())

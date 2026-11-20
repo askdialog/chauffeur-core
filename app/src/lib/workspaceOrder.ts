@@ -146,6 +146,16 @@ export function topLevel(workspaces: Record<string, WorkspaceInfo>, sections: Se
 /** Where a workspace goes: above `before` (last when null), pinned or in `section` (null: none). */
 export type DropPlace = { before: string | null; pinned: boolean; section: string | null };
 
+/** Compare the visible repo names. The daemon checks the clones against the configured repos. */
+export function canEnterSection(workspace: WorkspaceInfo, section?: SectionInfo): boolean {
+  if (!section?.repos?.length || workspace.section_id === section.id) return true;
+  if (workspace.state === "creating") return false;
+  const repos = workspace.worktrees.filter((tree) => tree.origin === "workspace" && !tree.removed);
+  const names = new Set(repos.map((tree) => tree.repo.toLowerCase()));
+  return section.repos.length === repos.length
+    && section.repos.every((repo) => names.has(repo.slice(repo.lastIndexOf("/") + 1).toLowerCase()));
+}
+
 /**
  * Where a workspace dropped on `target`'s row goes: above it, or below it (above the next
  * top-level workspace of the same group, else last), in the target's group (pinned, a section or

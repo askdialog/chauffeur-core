@@ -438,6 +438,25 @@ impl RepoRegistry {
         }
     }
 
+    pub(crate) fn section_repo_key<'a>(&self, reference: &'a str) -> &'a str {
+        let settings = self.settings.get();
+        match parse_repo_ref(settings.forge, reference) {
+            Ok((Some(owner), name)) if is_main(&settings, owner) => name,
+            _ => reference,
+        }
+    }
+
+    pub(crate) fn clone_matches(&self, clone: &Path, reference: &str) -> bool {
+        let settings = self.settings.get();
+        let Ok((owner, name)) = parse_repo_ref(settings.forge, reference) else {
+            return false;
+        };
+        let owner = owner.unwrap_or_else(|| main_owner(&settings));
+        self.existing_clone(reference).as_deref() == Some(clone)
+            || (!owner.is_empty()
+                && origin_is(clone, forge_host(&settings), &format!("{owner}/{name}")))
+    }
+
     /// An existing local clone of `owner/name`, a repo outside the main organization: the one
     /// Chauffeur made (`~/chauffeur/repos/<owner>/<name>`), else a clone of that name under the
     /// clone roots whose `origin` is that repo (a folder name alone may be another owner's).

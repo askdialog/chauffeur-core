@@ -188,3 +188,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Routines made by hand, from the sidebar's "Routines" section](routines-by-hand.md) | 2026-11-19 | proposed |
 | [Create workspaces from a repository or group in the sidebar](sidebar-repository-shortcuts.md) | 2026-11-19 | accepted |
 | [Auto uses native Smart Approve in Vibe workspace chats](vibe-smart-approve.md) | 2026-11-19 | accepted |
+| [File workspaces by their exact repository set](exact-repository-section-matches.md) | 2026-11-20 | accepted |

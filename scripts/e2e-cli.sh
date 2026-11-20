@@ -150,6 +150,17 @@ c section new Shop --repo beta --repo alpha
 c --json new --section alpha --name from-alpha | python3 -c 'import sys,json; r=json.load(sys.stdin); w=r["workspace"]; assert w["section"] == "alpha" and [t["repo"] for t in w["worktrees"]] == ["alpha"] and r["chat"]["agent_session_id"] is None, r'
 c --json new --section beta --name from-beta | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r["workspace"]["section"] == "beta" and [t["repo"] for t in r["workspace"]["worktrees"]] == ["beta"], r'
 c --json new --section Shop --name from-shop | python3 -c 'import sys,json; r=json.load(sys.stdin); w=r["workspace"]; assert w["section"] == "Shop" and [t["repo"] for t in w["worktrees"]] == ["beta", "alpha"] and r["chat"]["agent_session_id"] is None, r'
+echo "== repo groups. exact repo sets are filed automatically and mismatched moves are refused"
+c --json new --repo alpha --repo beta --name auto-shop | python3 -c 'import sys,json; w=json.load(sys.stdin)["workspace"]; assert w["section"] == "Shop", w'
+refuses "Shop requires exactly these repos" c move from-alpha Shop
+refuses "alpha requires exactly these repos" c move auto-shop alpha
+refuses "Shop requires exactly these repos" c new --section Shop --repo alpha --name mismatched
+drag_request=$(c --json show from-shop | python3 -c 'import sys,json; w=json.load(sys.stdin); print(json.dumps(dict(workspace="from-alpha", before=w["id"], pinned=False, section=w["section_id"])))')
+refuses "Shop requires exactly these repos" bun scripts/app-call.ts workspace.move "$drag_request"
+c --json show from-alpha | python3 -c 'import sys,json; w=json.load(sys.stdin); assert w["section"] == "alpha", w'
+c move auto-shop --none
+c move auto-shop Shop | has "in section Shop$"
+c archive auto-shop --force
 c section repos Shop alpha
 c --json section ls | python3 -c 'import sys,json; r=json.load(sys.stdin); assert [(s["name"], s["repos"]) for s in r["sections"]] == [("alpha", ["alpha"]), ("beta", ["beta"]), ("Shop", ["alpha"])], r'
 c --json show from-shop | python3 -c 'import sys,json; w=json.load(sys.stdin); assert [t["repo"] for t in w["worktrees"]] == ["beta", "alpha"], w'

@@ -49,6 +49,7 @@ import { errorMessage } from "@/lib/rpc";
 import { routineOfWorkspace, routinesSection, scheduleText, stateText, suggestionsText } from "@/lib/routines";
 import {
   type DropPlace,
+  canEnterSection,
   dropPlace,
   foldedIndicator,
   reviewIndicator,
@@ -231,33 +232,43 @@ export function Sidebar() {
     setDragging(null);
     setDrop(null);
   };
-  const onDropped = () => {
-    const [moved, target] = [dragging, drop];
+  const workspaceDropPlace = (id: string, target: NonNullable<Drop>) => {
+    const workspace = workspaces[id];
+    if (!workspace) return null;
+    const place = target.kind === "row"
+      ? dropPlace(workspaces, target.id, target.below, sections)
+      : headingDropPlace(workspaces, target.id, sections);
+    return place && canEnterSection(workspace, sections.find((s) => s.id === place.section)) ? place : null;
+  };
+  const onDropped = (kind: NonNullable<Drop>["kind"], id: string) => {
+    const [moved, target] = [dragging, drop?.kind === kind && drop.id === id ? drop : null];
     endDrag();
     if (!moved || !target) return;
     if (moved.kind === "section") {
       if (target.kind !== "heading" || target.id === moved.id) return;
       const before = sectionDropBefore(sections, target.id, target.below);
       if (before !== moved.id) void moveSection(moved.id, before);
-    } else if (target.kind === "row") {
-      void moveWorkspace(moved.id, dropPlace(workspaces, target.id, target.below, sections));
     } else {
-      void moveWorkspace(moved.id, headingDropPlace(workspaces, target.id, sections));
+      void moveWorkspace(moved.id, workspaceDropPlace(moved.id, target));
     }
   };
   /** Drag handlers of a group's heading: a workspace lands on top of the group, a section above or below another one. */
   const headingDrop = (key: string, isSection: boolean) => ({
     onDragOver: (event: React.DragEvent<HTMLElement>) => {
       if (!dragging || (dragging.kind === "section" && !isSection)) return;
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
       const rect = event.currentTarget.getBoundingClientRect();
       const below = dragging.kind === "section" && event.clientY > rect.top + rect.height / 2;
+      if (dragging.kind === "workspace" && !workspaceDropPlace(dragging.id, { kind: "heading", id: key, below })) {
+        setDrop(null);
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
       if (drop?.kind !== "heading" || drop.id !== key || drop.below !== below) setDrop({ kind: "heading", id: key, below });
     },
     onDrop: (event: React.DragEvent<HTMLElement>) => {
       event.preventDefault();
-      onDropped();
+      onDropped("heading", key);
     },
   });
   const headingTarget = (key: string) => (drop?.kind === "heading" && drop.id === key ? drop : null);
@@ -276,15 +287,19 @@ export function Sidebar() {
       onDragEnd={endDrag}
       onDragOver={(event) => {
         if (dragging?.kind !== "workspace") return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
         const rect = event.currentTarget.getBoundingClientRect();
         const below = event.clientY > rect.top + rect.height / 2;
+        if (!workspaceDropPlace(dragging.id, { kind: "row", id: workspace.id, below })) {
+          setDrop(null);
+          return;
+        }
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
         if (drop?.kind !== "row" || drop.id !== workspace.id || drop.below !== below) setDrop({ kind: "row", id: workspace.id, below });
       }}
       onDrop={(event) => {
         event.preventDefault();
-        onDropped();
+        onDropped("row", workspace.id);
       }}
       data-workspace-row={workspace.id}
     >
@@ -1248,12 +1263,14 @@ function sectionSubmenu(workspace: WorkspaceInfo, sections: SectionInfo[], onNew
   const items: MenuItem[] = sections.map((section) => {
     const count = section.repos?.length ?? 0;
     const Icon = count > 1 ? Layers : count === 1 ? GitBranch : Folder;
+    const matches = canEnterSection(workspace, section);
     return {
       label: section.name,
       icon: <Icon size={13} />,
       current: section.id === current,
-      disabled: section.id === current,
-      hint: section.id === current ? "It is in this section" : undefined,
+      disabled: section.id === current || !matches,
+      hint: section.id === current ? "It is in this section" : matches ? undefined
+        : workspace.state === "creating" ? "Available once the repos are ready" : `Requires ${section.repos?.join(", ")}`,
       onSelect: () => void setWorkspaceSection(workspace.id, section.id),
     };
   });

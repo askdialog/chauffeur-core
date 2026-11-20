@@ -14,6 +14,14 @@ pub fn list(d: &Daemon) -> Result<Vec<SectionInfo>> {
     d.store.list_sections()
 }
 
+pub(crate) fn repo_mismatch(section: &SectionInfo) -> Error {
+    Error::BadRequest(format!(
+        "{} requires exactly these repos: {}; choose a matching workspace or use a manual section",
+        section.name,
+        section.repos.as_deref().unwrap_or_default().join(", ")
+    ))
+}
+
 /// A section by its id, else by its name (any case).
 pub fn resolve(d: &Daemon, key: &str) -> Result<SectionInfo> {
     let sections = list(d)?;
@@ -110,6 +118,18 @@ fn insert(
     // Checked first: a section is not left behind by a workspace that does not exist.
     let workspace = workspace.map(|w| d.workspaces.row(w)).transpose()?;
     let id = uuid::Uuid::now_v7().to_string();
+    if let Some(workspace) = &workspace {
+        d.workspaces.check_section_repos(
+            workspace,
+            &SectionInfo {
+                id: id.clone(),
+                name: name.clone(),
+                folded,
+                repos: Some(repos.to_vec()),
+                reviews: None,
+            },
+        )?;
+    }
     d.store.insert_section(&id, &name, folded, repos)?;
     publish(d)?;
     if let Some(workspace) = workspace {
