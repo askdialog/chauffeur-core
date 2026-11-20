@@ -368,6 +368,7 @@ describe("cloneCommandRefusal", () => {
       "sed 's/x/touch \\/code\\/web\\/y/e' /tmp/input",
       "sed 's|x|touch /code/web/y|e' /tmp/input",
       "tar -czf /code/web/a.tgz src",
+      'tar -xf /code/web/archive.tar -C "$DEST"',
       "tar -cf/code/web/a.tar src",
       "tar czf /code/web/a.tgz src",
       "python3 -c \"print(open('/code/web/a').read())\"",
@@ -532,13 +533,19 @@ describe("cloneCommandRefusal", () => {
     try {
       const clone = join(root, "web");
       mkdirSync(clone);
-      writeFileSync(join(clone, ".env"), "# keys\nexport API_URL=http://localhost:3000\nTOKEN='a b'\nNAME=\"x\"\n\n");
+      writeFileSync(join(clone, ".env"), "# keys\nexport API_URL=http://localhost:3000\nTOKEN='a b'\nNAME=\"x\"\nBUILD_DIR=/tmp/chf20-build\n\n");
       writeFileSync(join(clone, ".env.run"), "API_URL=x\ntouch made-by-env\n");
+      writeFileSync(join(clone, ".env.build"), `CARGO_TARGET_DIR="${clone}/target"\nOUT=${clone}/out\n`);
       const clones = [{ clone, worktree: join(root, "ws", "web") }];
       expect(cloneCommandRefusal(`source ${clone}/.env && npm run dev`, CWD, clones)).toBeUndefined();
       expect(cloneCommandRefusal(`set -a; . ${clone}/.env; set +a`, CWD, clones)).toBeUndefined();
-      expect(cloneCommandRefusal(`source ${clone}/.env.run`, CWD, clones)).toBeDefined();
-      expect(cloneCommandRefusal(`source ${clone}/missing.env`, CWD, clones)).toBeDefined();
+      expect(cloneCommandRefusal(`source ${clone}/.env.run`, CWD, clones)).toContain("the user's own clone");
+      expect(cloneCommandRefusal(`source ${clone}/missing.env`, CWD, clones)).toContain("the user's own clone");
+      // Its variables count: one pointing at a clone sends a program there.
+      expect(cloneCommandRefusal(`source ${clone}/.env.build && cargo build`, CWD, clones)).toBeDefined();
+      expect(cloneCommandRefusal(`source ${clone}/.env.build; touch "$OUT"`, CWD, clones)).toBeDefined();
+      expect(cloneCommandRefusal(`source ${clone}/.env; echo "$API_URL"`, CWD, clones)).toBeUndefined();
+      expect(cloneCommandRefusal(`source ${clone}/.env; rm -rf "$BUILD_DIR"`, CWD, clones)).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -550,6 +557,6 @@ describe("cloneCommandRefusal", () => {
   });
 
   test("a line nested past what the stack holds is refused, not let through", () => {
-    expect(refuses(`${"( ".repeat(100000)}ls${" )".repeat(100000)}`)).toContain("nested too deeply");
+    expect(refuses(`${"( ".repeat(100000)}ls${" )".repeat(100000)}`)).toContain("could not read this command line");
   });
 });

@@ -95,15 +95,16 @@ export function cloneCommandRefusal(command: string, cwd: string, clones: Guarde
   try {
     judge.list(readLine(command), { dir: cwd, previous: undefined, stack: [], vars: new Map() });
   } catch {
-    // Nested past what the stack holds: refused rather than let through unread.
-    return TOO_DEEP;
+    // Nested past what the stack holds, or a form it fails on: refused rather than let through unread.
+    return UNREAD;
   }
   const { changed, named, blind } = judge.verdict;
   const clone = changed ?? (blind ? named : undefined);
   return clone && commandDenial(clone);
 }
 
-const TOO_DEEP = "This command line is nested too deeply for the guard that keeps agents out of the user's clones to read it: split it into simpler commands.";
+const UNREAD =
+  "The guard that keeps agents out of the user's clones could not read this command line (nested too deeply, or a form it does not handle): split it into simpler commands.";
 
 /** A word as the line gives it. */
 interface Value {
@@ -430,8 +431,17 @@ class Judge {
   private source(args: Value[], state: State, fed: boolean): void {
     const file = args[0];
     const path = file && isExact(file) ? this.place(file.text, state.dir) : undefined;
-    if (path && assignmentsOnly(path)) this.reads(args.slice(0, 1), state);
-    else this.opaque([exact("source"), ...args], state, fed);
+    const assignments = path === undefined ? undefined : assignmentsIn(path);
+    if (!assignments) {
+      this.opaque([exact("source"), ...args], state, fed);
+      return;
+    }
+    this.reads(args.slice(0, 1), state);
+    // Its variables are the line's from here on; one naming a clone may point a program there.
+    for (const [name, value] of assignments) {
+      state.vars.set(name, value);
+      state.env ??= this.envClone(exact(`=${value}`));
+    }
   }
 
   /** `parallel` runs its command with words from its input or after `:::`. */
@@ -825,15 +835,22 @@ function onlyReads(name: string, texts: string[]): boolean {
   }
 }
 
-/** A file of `NAME=value` lines (and comments): sourcing it runs no command. */
-function assignmentsOnly(path: string): boolean {
+/** The assignments of a file of `NAME=value` lines (and comments), which runs no command; undefined for any other file. */
+function assignmentsIn(path: string): [string, string][] | undefined {
+  let text: string;
   try {
-    return readFileSync(path, "utf8")
-      .split("\n")
-      .every((line) => /^\s*(#.*)?$/.test(line) || /^\s*(export\s+)?[A-Za-z_][A-Za-z0-9_]*=("[^"`$]*"|'[^']*'|[^\s;&|`$()<>'"]*)\s*(#.*)?$/.test(line));
+    text = readFileSync(path, "utf8");
   } catch {
-    return false;
+    return undefined;
   }
+  const assignments: [string, string][] = [];
+  for (const line of text.split("\n")) {
+    if (/^\s*(#.*)?$/.test(line)) continue;
+    const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"`$]*)"|'([^']*)'|([^\s;&|`$()<>'"]*))\s*(#.*)?$/.exec(line);
+    if (!match?.[1]) return undefined;
+    assignments.push([match[1], match[2] ?? match[3] ?? match[4] ?? ""]);
+  }
+  return assignments;
 }
 
 /** `s/…/…/e`: a substitution whose flags hold `e`, any delimiter. */
@@ -888,7 +905,7 @@ function tarred(args: Value[]): { writes: Value[]; reads: Value[] } | undefined 
   const file = optionValue(args, ["-f", "--file"]) ?? clusterFile(args) ?? (!first.startsWith("-") && first.includes("f") ? args[1] : undefined);
   const into = optionValue(args, ["-C", "--directory"]);
   const reads = args.filter((arg) => arg !== file && arg !== into && !arg.text.startsWith("-") && arg !== args[0]);
-  if (/[xX]/.test(modes) || args.some((arg) => arg.text === "--extract" || arg.text === "--get")) return { writes: [into ?? exact(".")], reads: [] };
+  if (/[xX]/.test(modes) || args.some((arg) => arg.text === "--extract" || arg.text === "--get")) return { writes: [into ?? exact(".")], reads: file ? [file] : [] };
   if (/[t]/.test(modes) || args.some((arg) => arg.text === "--list")) return { writes: [], reads: file ? [file] : [] };
   if (/[cru]/.test(modes) || args.some((arg) => ["--create", "--append", "--update"].includes(arg.text))) {
     const archive = file && file.text !== "-" ? [file] : [];
