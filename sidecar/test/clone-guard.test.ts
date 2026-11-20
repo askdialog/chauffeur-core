@@ -356,6 +356,10 @@ describe("cloneCommandRefusal", () => {
       "git -C /code/web grep -O'sed -i s/a/b/' foo",
       "git -C /code/web format-patch -3",
       "sed 'e touch /code/web/x' /tmp/input",
+      "sed -f /tmp/script.sed /code/web/a",
+      "HOME=/code/web; touch \"$HOME/new-file\"",
+      "cd /code/web && eval \"$X\"",
+      "cd /code/web && bash -c \"$X\"",
       "sed -n '1e touch /code/web/x' /tmp/input",
       "sed 's/x/touch \\/code\\/web\\/y/e' /tmp/input",
       "sed 's|x|touch /code/web/y|e' /tmp/input",
@@ -454,8 +458,6 @@ describe("cloneCommandRefusal", () => {
       'BR=$(git -C /code/web branch --show-current); git -C web checkout -b "$BR-copy"',
       "git -C /code/web log --format=%H -1 | xargs git -C web cherry-pick",
       'gh pr comment 12 --body "see /code/web/src/a.ts"',
-      "source /code/web/.env && npm run dev",
-      "set -a; . /code/web/.env; set +a",
       "git -C /code/web archive HEAD | tar -x -C web",
       "git -C /code/web archive -o /tmp/web.tar HEAD",
       "git -C /code/web format-patch -3 -o /tmp/patches",
@@ -518,6 +520,23 @@ describe("cloneCommandRefusal", () => {
     expect(cloneCommandRefusal("touch ~/code-web/x", CWD, home)).toBeDefined();
     expect(cloneCommandRefusal("touch $HOME/code-web/x", CWD, home)).toBeDefined();
     expect(cloneCommandRefusal("touch ~/other/x", CWD, home)).toBeUndefined();
+  });
+
+  test("sourcing a file of assignments reads it; a file running commands is a program", () => {
+    const root = mkdtempSync(join(tmpdir(), "clone-source-"));
+    try {
+      const clone = join(root, "web");
+      mkdirSync(clone);
+      writeFileSync(join(clone, ".env"), "# keys\nexport API_URL=http://localhost:3000\nTOKEN='a b'\nNAME=\"x\"\n\n");
+      writeFileSync(join(clone, ".env.run"), "API_URL=x\ntouch made-by-env\n");
+      const clones = [{ clone, worktree: join(root, "ws", "web") }];
+      expect(cloneCommandRefusal(`source ${clone}/.env && npm run dev`, CWD, clones)).toBeUndefined();
+      expect(cloneCommandRefusal(`set -a; . ${clone}/.env; set +a`, CWD, clones)).toBeUndefined();
+      expect(cloneCommandRefusal(`source ${clone}/.env.run`, CWD, clones)).toBeDefined();
+      expect(cloneCommandRefusal(`source ${clone}/missing.env`, CWD, clones)).toBeDefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test.if(process.platform === "darwin")("on macOS, a clone's path in another case is the clone", () => {

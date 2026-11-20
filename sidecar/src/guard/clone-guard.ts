@@ -354,7 +354,7 @@ class Judge {
   }
 
   private variable(name: string, state: State): string | undefined {
-    if (name === "HOME") return homedir();
+    if (name === "HOME") return state.vars.has("HOME") ? state.vars.get("HOME") : homedir();
     if (name === "PWD") return state.dir;
     if (name === "OLDPWD") return state.previous;
     return this.looped.has(name) ? undefined : state.vars.get(name);
@@ -426,10 +426,11 @@ class Judge {
     }
   }
 
-  /** `source file`: a `.env` file sets variables; any other file runs commands unseen. */
+  /** `source file`: a file of assignments only (a `.env`) sets variables; any other runs commands. */
   private source(args: Value[], state: State, fed: boolean): void {
     const file = args[0];
-    if (file && isExact(file) && /(^|\/)\.env(\.[\w.-]+)?$|\.env$/.test(file.text)) this.reads([file], state);
+    const path = file && isExact(file) ? this.place(file.text, state.dir) : undefined;
+    if (path && assignmentsOnly(path)) this.reads(args.slice(0, 1), state);
     else this.opaque([exact("source"), ...args], state, fed);
   }
 
@@ -446,7 +447,8 @@ class Judge {
   /** `eval` and `trap`: their words are a command line. */
   private script(words: Value[], state: State): void {
     if (words.every(isExact)) this.list(readLine(words.map((word) => word.text).join(" ")), state);
-    else this.verdict.blind = true;
+    // A script only known as the line runs: a program unseen, where it runs.
+    else this.opaque(words, state, true);
   }
 
   private changeDir(name: string, args: Value[], state: State): void {
@@ -779,8 +781,9 @@ function onlyReads(name: string, texts: string[]): boolean {
     case "gsed":
       // `-i` edits in place; a script's `w file` or `s/…/…/w file` writes that file, and its `e`
       // command or `s/…/…/e` runs a command.
+      // `-f file`: a script the guard does not see.
       return (
-        !texts.some((text) => /^-[a-zA-Z]*i/.test(text) || text.startsWith("--in-place")) &&
+        !texts.some((text) => /^-[a-zA-Z]*[if]/.test(text) || text.startsWith("--in-place") || text.startsWith("--file")) &&
         !sedScripts(texts).some((script) => /(^|[;}\s/])w\s+\S/.test(script) || /(^|[;}\s\d$/])e(\s|$)/.test(script) || SED_E_FLAG.test(script))
       );
     case "awk":
@@ -819,6 +822,17 @@ function onlyReads(name: string, texts: string[]): boolean {
       return !texts.some((text) => ["-x", "-X", "--exec", "--exec-batch"].includes(text));
     default:
       return true;
+  }
+}
+
+/** A file of `NAME=value` lines (and comments): sourcing it runs no command. */
+function assignmentsOnly(path: string): boolean {
+  try {
+    return readFileSync(path, "utf8")
+      .split("\n")
+      .every((line) => /^\s*(#.*)?$/.test(line) || /^\s*(export\s+)?[A-Za-z_][A-Za-z0-9_]*=("[^"`$]*"|'[^']*'|[^\s;&|`$()<>'"]*)\s*(#.*)?$/.test(line));
+  } catch {
+    return false;
   }
 }
 
