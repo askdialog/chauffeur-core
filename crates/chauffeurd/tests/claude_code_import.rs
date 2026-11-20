@@ -229,6 +229,8 @@ fn fixture() -> Fixture {
     );
     git(&web2, &["switch", "-q", "-c", "feat/two"]);
     commit(&web2, "two.txt", "two\n");
+    // The second clone has feat/chauffeur too, the branch a Chauffeur workspace made from web holds.
+    git(&web2, &["branch", "feat/chauffeur"]);
     // api's origin/HEAD names a branch its remote no longer has (renamed since).
     git(
         &api,
@@ -456,6 +458,16 @@ fn fixture() -> Fixture {
             line(&ext, "feat/ext", &ago(16), &edit(&ext.join("x.ts"))),
         ],
     );
+    session(
+        "in-chauffeur-2",
+        "Already in Chauffeur, from another clone",
+        vec![line(
+            &web2,
+            "feat/chauffeur",
+            &ago(17),
+            &edit(&web2.join("README.md")),
+        )],
+    );
     let sessions = claude.join("sessions");
     std::fs::create_dir_all(&sessions).unwrap();
     let pid = std::process::id();
@@ -552,7 +564,8 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
             "tagged",
             "second-clone",
             "in-chauffeur",
-            "external"
+            "external",
+            "in-chauffeur-2"
         ]
     );
     assert_eq!(plan.since_days, Some(60));
@@ -631,13 +644,17 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
         session("in-chauffeur").branches,
         [branch("web", "feat/chauffeur", false)]
     );
-    assert!(
-        plan.warnings
-            .iter()
-            .any(|w| w == "feat/chauffeur is in a Chauffeur workspace already: left out."),
-        "{:?}",
-        plan.warnings
+    // From the other clone of web too, and said once.
+    assert_eq!(
+        session("in-chauffeur-2").branches,
+        [branch("web", "feat/chauffeur", false)]
     );
+    let said = plan
+        .warnings
+        .iter()
+        .filter(|w| *w == "feat/chauffeur is in a Chauffeur workspace already: left out.")
+        .count();
+    assert_eq!(said, 1, "{:?}", plan.warnings);
     assert!(
         plan.warnings
             .iter()
@@ -726,7 +743,10 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
         ),
         ("web", "main")
     );
-    assert_eq!(plan.histories[0].sessions, ["in-chauffeur", "history"]);
+    assert_eq!(
+        plan.histories[0].sessions,
+        ["in-chauffeur-2", "in-chauffeur", "history"]
+    );
 
     // A live branch checked out in one of the user's worktrees, or another clone of the repo,
     // is released there.

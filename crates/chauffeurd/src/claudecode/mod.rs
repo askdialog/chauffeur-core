@@ -201,6 +201,8 @@ pub async fn import(
         }
     }
     warnings.extend(repos.warnings);
+    let mut said = BTreeSet::new();
+    warnings.retain(|w| said.insert(w.clone()));
     Ok(ClaudeCodeImportResult {
         dry_run: params.dry_run,
         since_days,
@@ -533,6 +535,25 @@ impl<'a> Repos<'a> {
 
     async fn read_live(&mut self, clone: &Path, branch: &str) -> bool {
         let workspaces = self.workspaces.clone();
+        // In a Chauffeur workspace already, made from this clone or another of the repo.
+        let siblings = self
+            .names
+            .get(clone)
+            .and_then(|repo| self.clones.get(repo))
+            .cloned()
+            .unwrap_or_else(|| vec![clone.to_path_buf()]);
+        for sibling in siblings {
+            let held =
+                self.refs(&sibling).await.worktrees.iter().any(|e| {
+                    e.branch.as_deref() == Some(branch) && e.path.starts_with(&workspaces)
+                });
+            if held {
+                self.warnings.push(format!(
+                    "{branch} is in a Chauffeur workspace already: left out."
+                ));
+                return false;
+            }
+        }
         let refs = self.refs(clone).await;
         if branch == refs.base {
             return false;
@@ -548,12 +569,6 @@ impl<'a> Repos<'a> {
             .collect();
         let merged = refs.merged.contains(branch);
         let base = refs.base.clone();
-        if holders.iter().any(|h| h.starts_with(&workspaces)) {
-            self.warnings.push(format!(
-                "{branch} is in a Chauffeur workspace already: left out."
-            ));
-            return false;
-        }
         // Uncommitted changes in a checkout make it live, merged or not.
         for holder in holders {
             if self.has_changes(&holder).await {
