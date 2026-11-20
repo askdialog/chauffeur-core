@@ -47,6 +47,10 @@ daily_review = { enabled = false }
 search = { semantic = false }
 [office]
 url = ""
+# Keep the missing-configuration checks independent of the distribution's defaults.
+google_client_id = ""
+google_client_secret = ""
+dev_email = ""
 # Explicit, so a distribution's own share service is never reached.
 [design_share]
 url = "" # e2e share url
@@ -320,7 +324,7 @@ refuses "Usage: chauffeur export <CHAT> <FILES>..." c export "$DESIGN"
 # Comments (story 51): on a screen of the canvas, in comments.json, listed by screen; a reply follows its thread.
 c comments "$DESIGN" | has "no comments yet"
 # Sharing (story 51): off without a share service (Core names none); with one, the state of an
-# unshared design, and without the Office's sign-in a share is refused.
+# unshared design, and without Google OAuth settings a share is refused.
 c share "$DESIGN" | has "sharing is off"
 sed -i.bak 's|^url = "" # e2e share url$|url = "https://share.example.com"|' "$CHAUFFEUR_HOME/settings.toml"
 sleep 1.5
