@@ -1277,13 +1277,14 @@ events = [json.loads(line)["event"]["event"] for line in sys.stdin if line.strip
 calls = {e["tool_use_id"] for e in events if e["type"] == "tool_call" and sys.argv[1] in str(e["input"])}
 results = [e["output"] for e in events if e["type"] == "tool_result" and e["tool_use_id"] in calls]
 print(results[-1] if results else "no result of a command naming " + sys.argv[1])' "$1"; }
-  c send explore-codex "Run exactly this shell command: curl -sI --max-time 10 https://api.github.com/zen | head -1 . Then reply with the single word done." >/dev/null
+  c send explore-codex "Run exactly this shell command, then reply with the single word done: curl -sI --max-time 10 https://api.github.com/zen | head -1" >/dev/null
   c wait explore-codex --timeout 240 | tail -2
-  has "HTTP/2 200" <<< "$(exec_result api.github.com)"
+  # The proxy answers the client itself: the status line is HTTP/1.1 200, even over HTTP/2 upstream.
+  has " 200 " <<< "$(exec_result api.github.com)"
   # Every other domain is refused: the proxy answers, nothing leaves the sandbox.
-  c send explore-codex "Run exactly this shell command: curl -sI --max-time 10 https://example.com | head -1 . Then reply with the single word done." >/dev/null
+  c send explore-codex "Run exactly this shell command, then reply with the single word done: curl -sI --max-time 10 https://example.com | head -1" >/dev/null
   c wait explore-codex --timeout 240 | tail -2
-  if has "HTTP/2 200" <<< "$(exec_result example.com)"; then echo "example.com answered though the proxy allows GitHub only"; exit 1; fi
+  if has " 200 " <<< "$(exec_result example.com)"; then echo "example.com answered though the proxy allows GitHub only"; exit 1; fi
   c archive explore-codex
   test "$(git -C "$T/clones/alpha" worktree list | wc -l | tr -d ' ')" = 1
 
