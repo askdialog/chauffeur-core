@@ -113,7 +113,11 @@ async fn claude_code(
         println!("{}", serde_json::to_string_pretty(&plan)?);
     } else {
         println!("{}", sanitize_terminal(&render_claude_code(&plan)));
-        println!("\nDry run: nothing changed.");
+        if plan.dry_run {
+            println!("\nDry run: nothing changed.");
+        } else {
+            println!("\nThe import itself comes in a later version: nothing changed.");
+        }
     }
     Ok(())
 }
