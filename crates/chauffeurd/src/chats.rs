@@ -3438,7 +3438,10 @@ impl ChatManager {
         d.events
             .registry(RegistryEvent::ChatUpserted { chat: chat.clone() });
         d.workspaces.publish(&workspace.id);
-        self.keep_one_open(&workspace.id, &admission).await?;
+        // Imported already: a chat it could not open beside is said, not a failed import.
+        if let Err(error) = self.keep_one_open(&workspace.id, &admission).await {
+            tracing::warn!(%error, workspace = workspace.slug, "no chat left open after an import");
+        }
         Ok(Some(chat))
     }
 

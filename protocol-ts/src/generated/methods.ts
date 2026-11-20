@@ -94,6 +94,7 @@ import type { ConductorImportResult } from "./ConductorImportResult";
 import type { ConfigureChatParams } from "./ConfigureChatParams";
 import type { ContextCaptureParams } from "./ContextCaptureParams";
 import type { ContextCaptureResult } from "./ContextCaptureResult";
+import type { ContextCopyParams } from "./ContextCopyParams";
 import type { ContextRestoreParams } from "./ContextRestoreParams";
 import type { ContextRestoreResult } from "./ContextRestoreResult";
 import type { ContextUsageParams } from "./ContextUsageParams";
@@ -786,6 +787,7 @@ export type SidecarMethods = {
   "agent.fork": [AgentForkParams, AgentForkResult];
   "context.capture": [ContextCaptureParams, ContextCaptureResult];
   "context.restore": [ContextRestoreParams, ContextRestoreResult];
+  "context.copy": [ContextCopyParams, ContextRestoreResult];
   "package.seal": [PackageCryptParams, PackageCryptResult];
   "package.open": [PackageCryptParams, PackageCryptResult];
   "sidecar.ping": [PingParams, PingResult];

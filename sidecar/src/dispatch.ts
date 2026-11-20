@@ -21,6 +21,7 @@ import {
 import { RpcError } from "./rpc/peer.ts";
 import { restoreContexts } from "./agents/context-restore.ts";
 import { captureContext } from "./agents/context-capture.ts";
+import { copyClaudeSession } from "./agents/claude/session-copy.ts";
 import { openPackage, sealPackage } from "./package-crypto.ts";
 import type { SessionManager } from "./sessions.ts";
 import { SIDECAR_VERSION } from "./version.ts";
@@ -174,6 +175,13 @@ export function createDispatcher(
           path: string(entry, "path"), sha256: string(entry, "sha256"), bytes: entry.bytes };
       }) });
     },
+    "context.copy": (params) => {
+      const p = object(params);
+      return copyClaudeSession({
+        session_id: string(p, "session_id"), source_home: string(p, "source_home"), project_key: string(p, "project_key"),
+        claude_home: string(p, "claude_home"), cwd: string(p, "cwd"),
+      });
+    },
     "package.seal": (params) => sealPackage(packageCryptParams(params)),
     "package.open": (params) => openPackage(packageCryptParams(params)),
     "context.capture": (params) => {
@@ -181,11 +189,9 @@ export function createDispatcher(
       const chat = string(p, "chat_id");
       const live = p.live === true;
       if (!live && sessions.has(chat)) throw new RpcError(ErrorCode.CONFLICT, `chat ${chat} has a running session; stop it before capturing its conversation`);
-      const projectKey = optionalString(p, "project_key");
       return captureContext({
         chat_id: chat, agent: agentKind(p.agent), session_id: string(p, "session_id"),
         cwd: string(p, "cwd"), env: stringMap(p.env ?? {}), output: string(p, "output"), live,
-        ...(projectKey !== undefined ? { project_key: projectKey } : {}),
       }, environment);
     },
     "sidecar.ping": (): PingResult => ({ sidecar_version: SIDECAR_VERSION, agents: sessions.versions() }),

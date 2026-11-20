@@ -142,6 +142,7 @@ export type { ContextCaptureResult } from "./ContextCaptureResult";
 export type { ContextCategory } from "./ContextCategory";
 export type { ContextCategoryKind } from "./ContextCategoryKind";
 export type { ContextCompaction } from "./ContextCompaction";
+export type { ContextCopyParams } from "./ContextCopyParams";
 export type { ContextDetail } from "./ContextDetail";
 export type { ContextDetails } from "./ContextDetails";
 export type { ContextItem } from "./ContextItem";

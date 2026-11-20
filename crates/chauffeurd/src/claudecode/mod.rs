@@ -117,17 +117,32 @@ pub async fn import(
     let mut plans = Vec::new();
     let mut placed = Vec::new();
     let mut found = HashMap::new();
+    // The transcripts Claude keeps for Chauffeur's workspaces: its chats', and the sessions an
+    // import copied there, which still name the folder they first ran in.
+    let workspaces: Vec<String> = [
+        d.paths.workspaces_dir.clone(),
+        real(&d.paths.workspaces_dir),
+    ]
+    .iter()
+    .map(|dir| format!("{}-", project_key(dir)))
+    .collect();
+    let mut seen = BTreeSet::new();
     for session in read {
         let Some(folder) = session.folder.clone() else {
             continue;
         };
         // Chauffeur's own chats are Claude Code sessions too, run through the Agent SDK (as other
-        // apps' are): only sessions of Claude Code itself, in a terminal or an editor, come.
+        // apps' are): only sessions of Claude Code itself, in a terminal or an editor, come; the
+        // most recent of a session kept in several folders.
         if real(&folder).starts_with(real(&d.paths.workspaces_dir))
+            || workspaces
+                .iter()
+                .any(|key| session.project.starts_with(key))
             || session
                 .entrypoint
                 .as_deref()
                 .is_some_and(|e| e.starts_with("sdk"))
+            || !seen.insert(session.id.clone())
         {
             continue;
         }
@@ -141,6 +156,12 @@ pub async fn import(
             reason: None,
             lands_in: None,
         };
+        if let Some(chat) = history::imported(d, &session.id)? {
+            plan.outcome = ClaudeCodeOutcome::AlreadyImported;
+            plan.lands_in = history::workspace_of(d, &chat)?;
+            plans.push(plan);
+            continue;
+        }
         if running.contains(&session.id) {
             plan.outcome = ClaudeCodeOutcome::Running;
             plan.reason =
@@ -166,12 +187,6 @@ pub async fn import(
             continue;
         };
         plan.branches = repos.branches(&session).await;
-        if let Some(chat) = history::imported(d, &session.id)? {
-            plan.outcome = ClaudeCodeOutcome::AlreadyImported;
-            plan.lands_in = history::workspace_of(d, &chat)?;
-            plans.push(plan);
-            continue;
-        }
         placed.push(place::Session {
             id: session.id.clone(),
             title: session.title.clone(),
@@ -283,6 +298,15 @@ fn real(path: &Path) -> PathBuf {
         }
     }
     path.to_path_buf()
+}
+
+/// The name Claude gives the folder it keeps `dir`'s sessions in: every character but an ASCII
+/// letter or digit as `-`.
+fn project_key(dir: &Path) -> String {
+    dir.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// A folder name worktrees are kept under (`.wt`, `.worktrees`, `.claude/worktrees`): a path

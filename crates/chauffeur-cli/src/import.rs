@@ -486,7 +486,7 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
     }];
     if failed > 0 {
         lines.push(format!(
-            "{failed} could not be imported (see above): run the import again to retry them."
+            "{failed} could not be imported (see above); the others were. Once that is fixed, run the import again: it takes them."
         ));
     }
     if later > 0 {

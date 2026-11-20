@@ -26,6 +26,7 @@ export type {
   AgentSubagentMessagesParams,
   AgentSubagentMessagesResult,
   AgentSessionMessagesParams,
+  ContextCopyParams,
   AgentSessionMessagesResult,
   TranscriptEvent,
   AgentForkParams,

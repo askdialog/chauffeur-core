@@ -69,9 +69,7 @@ export async function captureContext(
       bundle = await captureVibeContext(await existing(nativeHome("vibe", env)), params.session_id, params.live === true);
     } else if (params.agent === "claude") {
       const projects = join(await existing(nativeHome("claude", env)), "projects");
-      // An imported session names its project folder: the folder it ran in may be gone.
-      const key = params.project_key ?? await claudeProjectKey(params.cwd);
-      bundle = await captureClaudeContext(projects, key, params.session_id, params.live === true);
+      bundle = await captureClaudeContext(projects, await claudeProjectKey(params.cwd), params.session_id, params.live === true);
     } else {
       const home = await existing(nativeHome("codex", env));
       bundle = await captureCodexContext(home, await findCodexRollout(home, params.session_id), params.session_id, params.live === true);

@@ -913,6 +913,13 @@ fn importing() -> Fixture {
         )
     });
     f.daemon.chats.sidecar.use_binary(history_sidecar());
+    // The agents' Claude folder is the one read, as by default: the copies are read again.
+    let mut vars = f.daemon.shell_env.vars();
+    vars.insert(
+        "CLAUDE_CONFIG_DIR".into(),
+        f.claude.to_string_lossy().into_owned(),
+    );
+    f.daemon.shell_env.set_vars(vars);
     f
 }
 
@@ -973,6 +980,7 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
     ));
     std::fs::write(&transcript, &text).unwrap();
     past_session(&f, "unreadable", &ago(9));
+    past_session(&f, "lost", &ago(9));
     let planned = import(&f, true).await;
     assert_eq!(planned.histories[0].workspace, None);
 
@@ -1007,7 +1015,7 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
         unreadable
             .reason
             .as_deref()
-            .is_some_and(|r| r.contains("incomplete")),
+            .is_some_and(|r| r.contains("could not be copied")),
         "{unreadable:?}"
     );
     // Sessions on live branches wait for a later version.
@@ -1057,8 +1065,48 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
         ("Clean up the old branches".to_string(), at.clone())
     );
 
-    // Again: none twice; the one that failed is tried again.
+    // A copy that cannot be read back is no import.
+    let lost = plan.sessions.iter().find(|s| s.id == "lost").unwrap();
+    assert_eq!(lost.outcome, ClaudeCodeOutcome::Failed);
+    assert!(
+        lost.reason
+            .as_deref()
+            .is_some_and(|r| r.contains("read back")),
+        "{lost:?}"
+    );
+
+    // A fork of an imported chat, kept for the exploration, still names the folder the session
+    // first ran in: it is Chauffeur's.
+    let copies = f.claude.join("projects").join(
+        Path::new(&ws.path)
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .replace(|c: char| !c.is_ascii_alphanumeric(), "-"),
+    );
+    assert!(copies.join("history.jsonl").is_file());
+    std::fs::copy(
+        copies.join("history.jsonl"),
+        copies.join("fork-of-history.jsonl"),
+    )
+    .unwrap();
+
+    // Resumed in Claude Code since, its original runs: still imported, nothing more.
+    let parent = std::os::unix::process::parent_id();
+    std::fs::write(
+        f.claude.join(format!("sessions/{parent}.json")),
+        format!(r#"{{"pid":{parent},"sessionId":"history"}}"#),
+    )
+    .unwrap();
+
+    // Again: none twice, each listed once; those that failed are tried again.
     let again = import(&f, false).await;
+    let mut ids: Vec<_> = again.sessions.iter().map(|s| s.id.as_str()).collect();
+    ids.sort_unstable();
+    let count = ids.len();
+    ids.dedup();
+    assert_eq!(ids.len(), count, "{ids:?}");
+    assert!(!ids.contains(&"fork-of-history"), "{ids:?}");
     for id in ["history", "in-chauffeur", "in-chauffeur-2"] {
         assert_eq!(
             outcome(&again, id),
@@ -1070,16 +1118,28 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
         );
     }
     assert_eq!(outcome(&again, "unreadable").0, ClaudeCodeOutcome::Failed);
+    assert_eq!(outcome(&again, "lost").0, ClaudeCodeOutcome::Failed);
     assert_eq!(d.store.chats_of(&ws.id).unwrap().len(), chats.len());
 
     // A session since: added to the same exploration, its project folder holding the others.
+    // Kept in two project folders (resumed from another folder): one session.
     past_session(&f, "later", &ago(8));
+    let other = f.claude.join("projects/-other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::copy(
+        f.claude.join("projects/-code/later.jsonl"),
+        other.join("later.jsonl"),
+    )
+    .unwrap();
     let planned = import(&f, true).await;
     assert_eq!(
         planned.histories[0].workspace.as_deref(),
         Some("web-history")
     );
-    assert_eq!(planned.histories[0].sessions, ["unreadable", "later"]);
+    assert_eq!(
+        planned.histories[0].sessions,
+        ["lost", "unreadable", "later"]
+    );
     let added = import(&f, false).await;
     assert_eq!(
         outcome(&added, "later"),

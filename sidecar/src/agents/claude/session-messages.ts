@@ -53,22 +53,32 @@ export function sessionEvents(messages: SessionMessage[]): TranscriptEvent[] {
   return events;
 }
 
+/** What Claude Code adds to a prompt on its own (an editor's selection, a reminder): not shown. */
+const ADDED = /<(system-reminder|ide_selection|ide_opened_file|ide_diagnostics|local-command-caveat)>[\s\S]*?<\/\1>/g;
+
+/** A message Claude Code writes on the user's side by itself: a command's output, a notice. */
+const OWN = /^<(local-command-stdout|local-command-stderr|bash-stdout|bash-stderr|task-notification)>/;
+
 /**
- * What the user typed, from a user message: its text, a slash command as typed, or "" for a
- * message of Claude Code's own (a command's output, a reminder, an interruption); null for a
- * message carrying tool results, which the mapping reads.
+ * What the user typed, from a user message: its text without what Claude Code added, a slash
+ * command or a shell line (`!cmd`) as typed, an image alone said so; "" for a message of Claude
+ * Code's own (a command's output, a notice, an interruption); null for a message carrying tool
+ * results, which the mapping reads.
  */
 function promptOf(message: unknown): string | null {
   const content = typeof message === "object" && message !== null ? (message as { content?: unknown }).content : undefined;
-  if (Array.isArray(content) && content.some((block) => typeof block === "object" && block !== null && (block as { type?: unknown }).type === "tool_result")) {
-    return null;
-  }
-  const text = messageText(message).trim();
-  const command = /<command-name>([^<]*)<\/command-name>/.exec(text)?.[1];
+  const blocks = Array.isArray(content) ? content.filter((block) => typeof block === "object" && block !== null) as Array<{ type?: unknown }> : [];
+  if (blocks.some((block) => block.type === "tool_result")) return null;
+  const raw = messageText(message).trim();
+  if (OWN.test(raw) || /^\[Request interrupted by user/.test(raw)) return "";
+  const command = /<command-name>([^<]*)<\/command-name>/.exec(raw)?.[1];
   if (command !== undefined) {
-    const args = /<command-args>([^<]*)<\/command-args>/.exec(text)?.[1]?.trim();
+    const args = /<command-args>([^<]*)<\/command-args>/.exec(raw)?.[1]?.trim();
     return [command.trim(), args].filter(Boolean).join(" ");
   }
-  if (text.startsWith("<") || /^\[Request interrupted by user/.test(text)) return "";
-  return text;
+  const shell = /^<bash-input>([\s\S]*)<\/bash-input>$/.exec(raw)?.[1];
+  if (shell !== undefined) return `!${shell.trim()}`;
+  const text = raw.replace(ADDED, "").trim();
+  if (text) return text;
+  return blocks.some((block) => block.type === "image") ? "(an image)" : "";
 }

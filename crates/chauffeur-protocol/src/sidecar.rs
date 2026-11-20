@@ -112,6 +112,12 @@ methods! {
         /// Restores selected native bundles into a new, daemon-selected private home, never running them.
         #[serde(rename = "context.restore")]
         ContextRestore(ContextRestoreParams) -> ContextRestoreResult,
+        /// Copies a Claude Code session (its transcript and its folder: subagents, tool outputs…)
+        /// from a project folder of one Claude home into the project folder of `cwd` in another,
+        /// streamed whatever its size, never replacing a different file: an import from Claude
+        /// Code. Returns what it added.
+        #[serde(rename = "context.copy")]
+        ContextCopy(ContextCopyParams) -> ContextRestoreResult,
         /// Endpoint-only encryption/decryption of a package; keys never enter argv or artifacts.
         #[serde(rename = "package.seal")]
         PackageSeal(PackageCryptParams) -> PackageCryptResult,
@@ -312,6 +318,20 @@ pub struct AgentSubagentMessagesResult {
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, Default)]
 #[ts(export)]
+pub struct ContextCopyParams {
+    pub session_id: String,
+    /// The Claude folder the session is kept in (Claude Code's).
+    pub source_home: String,
+    /// Its project folder there, by name.
+    pub project_key: String,
+    /// The Claude folder it is copied into (the agents').
+    pub claude_home: String,
+    /// The folder the copy is kept for, as the file system names it.
+    pub cwd: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default)]
+#[ts(export)]
 pub struct AgentSessionMessagesParams {
     pub agent: AgentKind,
     pub session_id: String,
@@ -370,11 +390,6 @@ pub struct ContextCaptureParams {
     pub env: BTreeMap<String, String>,
     /// An absolute path, not yet existing, in an existing folder.
     pub output: String,
-    /// Claude's project folder holding the session, by name, read instead of the one `cwd`
-    /// gives: a session imported from Claude Code, whose folder may be gone since.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub project_key: Option<String>,
     /// A backup of a running chat: its session may be live, and each transcript is taken up to
     /// its last complete line.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

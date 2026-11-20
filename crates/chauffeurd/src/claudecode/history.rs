@@ -1,9 +1,9 @@
 //! The sessions that left no live branch, imported: each a closed tab of its repo's history
-//! exploration, its Claude Code session copied there under the same id (the sidecar's context
-//! capture and restore, as cloud transfers do), its conversation read back from the copy.
+//! exploration, its Claude Code session copied there under the same id (the sidecar's
+//! `context.copy`, streamed whatever its size), its conversation read back from the copy.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -13,8 +13,7 @@ use chauffeur_protocol::claudecode::{
 use chauffeur_protocol::client::CreateWorkspaceParams;
 use chauffeur_protocol::model::{AgentKind, WorkspaceState};
 use chauffeur_protocol::sidecar::{
-    AgentSessionMessagesParams, AgentSessionMessagesResult, ContextCaptureParams,
-    ContextCaptureResult, ContextRestoreEntry, SidecarCall,
+    AgentSessionMessagesParams, AgentSessionMessagesResult, ContextCopyParams, SidecarCall,
 };
 
 use super::sessions::Session;
@@ -63,7 +62,6 @@ pub(super) async fn import(
     sessions: &HashMap<String, Session>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
-    let scratch = Scratch::new(d)?;
     let index: BTreeMap<String, usize> = plans
         .iter()
         .enumerate()
@@ -96,7 +94,7 @@ pub(super) async fn import(
             };
             let plan = &mut plans[i];
             plan.lands_in = Some(workspace.slug.clone());
-            match import_session(d, claude, &workspace, session, &scratch.0).await {
+            match import_session(d, claude, &workspace, session).await {
                 Ok(true) => plan.outcome = ClaudeCodeOutcome::Imported,
                 Ok(false) => plan.outcome = ClaudeCodeOutcome::AlreadyImported,
                 Err(error) => {
@@ -137,65 +135,47 @@ async fn import_session(
     claude: &Path,
     workspace: &WorkspaceRow,
     session: &Session,
-    scratch: &Path,
 ) -> Result<bool> {
     let record = format!("{IMPORTED}{}", session.id);
     if d.store.kv_get(&record)?.is_some() {
         return Ok(false);
     }
-    let output = scratch.join(format!("{}.json", session.id));
+    // Claude keeps a folder's sessions under its name as the file system gives it.
+    let cwd = Path::new(&workspace.path)
+        .canonicalize()
+        .with_context(|| format!("{} is missing", workspace.path))?
+        .to_string_lossy()
+        .into_owned();
+    let homes = crate::cloud_workspace_restore::native_homes(d, Vec::new())
+        .context("no Claude folder for the exploration's agents")?;
     let sidecar = &d.chats.sidecar;
-    let captured = sidecar
-        .call(SidecarCall::ContextCapture(ContextCaptureParams {
-            chat_id: format!("claude-code-import-{}", session.id),
-            agent: AgentKind::Claude,
+    sidecar
+        .call(SidecarCall::ContextCopy(ContextCopyParams {
             session_id: session.id.clone(),
-            cwd: session
-                .folder
-                .as_deref()
-                .unwrap_or(claude)
-                .to_string_lossy()
-                .into_owned(),
-            env: BTreeMap::from([(
-                "CLAUDE_CONFIG_DIR".to_owned(),
-                claude.to_string_lossy().into_owned(),
-            )]),
-            output: output.to_string_lossy().into_owned(),
-            project_key: Some(session.project.clone()),
-            live: false,
+            source_home: claude.to_string_lossy().into_owned(),
+            project_key: session.project.clone(),
+            claude_home: homes.claude_home,
+            cwd: cwd.clone(),
         }))
         .await?;
-    let (sha256, bytes) = match serde_json::from_value(captured)
-        .context("unexpected answer from the sidecar to a capture")?
-    {
-        ContextCaptureResult::Captured { sha256, bytes } => (sha256, bytes),
-        ContextCaptureResult::Blocked { reason } => return Err(Error::BadRequest(reason)),
-    };
-    let homes = crate::cloud_workspace_restore::native_homes(
-        d,
-        vec![ContextRestoreEntry {
-            agent: AgentKind::Claude,
-            session_id: session.id.clone(),
-            cwd: workspace.path.clone(),
-            path: output.to_string_lossy().into_owned(),
-            sha256,
-            bytes,
-        }],
-    )
-    .context("no Claude folder for the exploration's agents")?;
-    sidecar.call(SidecarCall::ContextRestore(homes)).await?;
     let conversation: AgentSessionMessagesResult = serde_json::from_value(
         sidecar
             .call(SidecarCall::AgentSessionMessages(
                 AgentSessionMessagesParams {
                     agent: AgentKind::Claude,
                     session_id: session.id.clone(),
-                    cwd: workspace.path.clone(),
+                    cwd,
                 },
             ))
             .await?,
     )
     .context("unexpected answer from the sidecar to a conversation's reading")?;
+    if !conversation.found {
+        return Err(Error::Internal(anyhow::anyhow!(
+            "its copy could not be read back from {}",
+            workspace.slug
+        )));
+    }
     let events: Vec<_> = conversation
         .events
         .into_iter()
@@ -216,30 +196,5 @@ async fn import_session(
         Some(_) => Ok(true),
         None if d.store.kv_get(&record)?.is_some() => Ok(false),
         None => Err(Error::not_found(format!("workspace {}", workspace.slug))),
-    }
-}
-
-/// A private folder of the daemon's for the captures, removed with what it holds.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(d: &Daemon) -> Result<Scratch> {
-        // The sidecar writes only into a folder named as the file system names it.
-        let dir = d
-            .paths
-            .home
-            .canonicalize()
-            .context("Chauffeur's folder is unreadable")?
-            .join(format!("claude-code-import-{}", uuid::Uuid::now_v7()));
-        std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
-            .create(&dir)
-            .with_context(|| format!("could not make {}", dir.display()))?;
-        Ok(Scratch(dir))
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
