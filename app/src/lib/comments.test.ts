@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CanvasScreen, DesignComment } from "@chauffeur/protocol";
-import type { ShownSection } from "./canvas";
-import { canChange, counts, isStale, keepMessage, mergeFound, parseCaptureReply, pinsOf, placeOf, popoverAnchor, selectorsToCheck, threadsOf, withCapture } from "./comments";
+import { layoutCanvas, rowTop, type ShownSection } from "./canvas";
+import { canChange, commentView, counts, isStale, keepMessage, mergeFound, parseCaptureReply, pinsOf, placeOf, POPOVER_GAP, popoverAnchor, selectorsToCheck, THREAD_WIDTH, threadsOf, withCapture } from "./comments";
 
 const me = { name: "Alice", email: "alice@example.com" };
 const bob = { name: "Bob", email: "bob@example.com" };
@@ -22,6 +22,33 @@ const comments: DesignComment[] = [
   comment("t3", { pin: { x: 10, y: 10 }, sent: { at: 2 } }),
   comment("t4", { pin: { x: 20, y: 20, element: { selector: "h1", text: "Title" } } }),
 ];
+
+test("an offscreen comment pin is brought into view at the current zoom with room for its thread", () => {
+  const screen = { file: "a/hover.html", width: 1200, height: 2000 };
+  const other = { ...screen, file: "other.html" };
+  const layout = layoutCanvas([
+    { title: "First", unsorted: false, screens: [other] },
+    { title: "Second", unsorted: false, screens: [other, screen] },
+  ]);
+  const thread = threadsOf(comments)[0];
+  const area = { width: 450, height: 600 };
+  const view = commentView(layout, { scale: 0.75, x: -200, y: 60 }, area, thread);
+  const placed = layout.sections[1].screens[1];
+  const x = view.x + view.scale * (placed.x + screen.width * 0.48);
+  const y = rowTop(layout, view, 1) + view.scale * screen.height * 0.83;
+  expect(view.scale).toBe(0.75);
+  expect(x).toBeGreaterThan(0);
+  expect(x + POPOVER_GAP + THREAD_WIDTH).toBeLessThan(area.width);
+  expect(y).toBeCloseTo(area.height / 2);
+});
+
+test("a whole-screen comment jumps to the screen's corner", () => {
+  const screen = { file: "b/gone.html", width: 1500, height: 2000 };
+  const layout = layoutCanvas([{ title: "Screen", unsorted: false, screens: [screen] }]);
+  const view = commentView(layout, { scale: 2, x: -1000, y: -1000 }, { width: 900, height: 600 }, threadsOf(comments)[1]);
+  expect(view.x + 10).toBe(450);
+  expect(rowTop(layout, view, 0) + 10).toBe(300);
+});
 
 describe("threadsOf and counts", () => {
   test("threads are the first comments, numbered in order, with their replies", () => {

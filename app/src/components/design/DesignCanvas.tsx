@@ -15,7 +15,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { canvasRevision, changedScreens, layoutCanvas, modifiedTimes, noScreens, pageSections, percent, presentOrder, type ShownSection, ZOOM_STEPS } from "@/lib/canvas";
 import type { ChatView } from "@/lib/chat";
 import { chatLabel } from "@/lib/chatTabs";
-import { counts as commentCounts, type Draft, keepMessage, threadsOf } from "@/lib/comments";
+import { counts as commentCounts, type Draft, keepMessage, type Thread, threadsOf } from "@/lib/comments";
 import { type ExportRequest, exportedMessage, sectionExport, selectionExport } from "@/lib/designExport";
 import { chatsToSendTo, handoffMessage, pageScreens, publishedScreens, screensToSend, sourceChatOf } from "@/lib/designHandoff";
 import { picturesScreens } from "@/lib/native";
@@ -156,7 +156,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
   useEffect(() => setCanvasPage(chat.id, pageScreens(sections)), [chat.id, sections]);
   const published = useMemo(() => publishedScreens(view.items, result?.dir ?? null), [view.items, result?.dir]);
 
-  const { zoom, area, setArea, moveView, fit, zoomTo, reveal } = useCanvasView(layout, pageIndex);
+  const { zoom, area, setArea, moveView, fit, zoomTo, reveal, revealComment, commentsPanel } = useCanvasView(layout, pageIndex, result, setPage);
   const snapshots = useScreenSnapshots(layout, zoom, area, picturesScreens);
   const [fullScreen, setFullScreen] = useState<number | null>(null);
   const [presenting, setPresenting] = useState<number | null>(null);
@@ -336,6 +336,12 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
     else select([]);
   };
   const shownThread = openThread ? (threads.find((t) => t.comment.id === openThread) ?? null) : null;
+  const showThread = useCallback((thread: Thread) => {
+    if (revealComment(thread)) setPanel(false);
+    select([thread.comment.screen]);
+    setDraft(null);
+    setOpenThread(thread.comment.id);
+  }, [revealComment, select]);
   // The user's unread mentions on this share: badged in the panel, read once their thread opens.
   const allMentions = useApp((s) => s.mentions);
   const unreadHere = useMemo(
@@ -350,11 +356,12 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
   // A mention clicked in the sidebar's list: its thread opens once its comments are read.
   const threadTarget = useApp((s) => s.threadTarget);
   useEffect(() => {
-    if (threadTarget?.chat !== chat.id || !threads.some((t) => t.comment.id === threadTarget.thread)) return;
-    setDraft(null);
-    setOpenThread(threadTarget.thread);
+    if (threadTarget?.chat !== chat.id || !result) return;
+    const thread = threads.find((t) => t.comment.id === threadTarget.thread);
+    if (!thread) return;
+    showThread(thread);
     openThreadDone();
-  }, [threadTarget, chat.id, threads]);
+  }, [threadTarget, chat.id, result, threads, showThread]);
   // Esc closes what is open wherever the focus is (a bubble's text box takes its own Esc first).
   const escapeRef = useRef(escape);
   escapeRef.current = escape;
@@ -648,6 +655,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
           )}
         {panel && (
             <CommentsPanel
+              ref={commentsPanel}
               me={identity?.email}
               unread={unreadThreadIds}
               threads={threads}
@@ -660,10 +668,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
               onFilter={setFilter}
               onSend={() => void sendComments()}
               onSendThread={(threadId) => void sendThread(threadId)}
-              onOpen={(thread) => {
-                setDraft(null);
-                setOpenThread(thread.comment.id);
-              }}
+              onOpen={showThread}
               onResolve={resolve}
               onClose={() => setPanel(false)}
             />
