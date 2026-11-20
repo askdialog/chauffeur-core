@@ -482,18 +482,21 @@ export class CodexSession implements AgentSession {
     const { approvalPolicy, sandbox, approvalsReviewer } = modeSettings(this.mode, this.params.read_only, !!design);
     // A thread that may not leave its sandbox is not told to ask.
     const instructions = [this.params.append_system_prompt, this.params.read_only || design ? undefined : SANDBOX_NOTE].filter(Boolean).join("\n\n");
-    // With the daemon's socket, the thread begins in the sandbox that starts Codex's network proxy,
-    // and its first turn sets the mode's own (see daemonSocketConfig). A design chat's first turn
-    // sets its sandbox too, which a thread can only be given by name.
-    if (socket || design) this.modeChanged = true;
+    // With the daemon's socket, or an exploration's network (GitHub alone), the thread begins in
+    // the sandbox that starts Codex's network proxy, and its first turn sets the mode's own (see
+    // daemonSocketConfig and explorationNetworkConfig). A design chat's first turn sets its
+    // sandbox too, which a thread can only be given by name.
+    const exploration = this.params.read_only && !design;
+    const network = !!socket || exploration;
+    if (network || design) this.modeChanged = true;
     const common = {
       cwd: this.params.cwd,
       approvalPolicy,
       approvalsReviewer,
-      sandbox: socket ? "workspace-write" : sandbox,
+      sandbox: network ? "workspace-write" : sandbox,
       config: {
         ...threadOverrides(repoConfig, {
-          ...threadConfig(design ? [] : this.params.additional_directories, trust, this.params.read_only, socket),
+          ...threadConfig(design ? [] : this.params.additional_directories, trust, exploration, socket, this.params.gitlab_host),
           ...(design ? designThreadConfig(design) : {}),
         }),
         // Codex has no metadata for a local model: it would assume a hosted model's window.

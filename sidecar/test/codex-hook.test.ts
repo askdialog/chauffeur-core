@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { resolveCodexExecutable } from "../src/agents/codex/executable.ts";
 import { hookCommandLine, preToolUseAnswer } from "../src/agents/codex/hook.ts";
-import { appServerArgs, daemonSocket, SANDBOX_NOTE, sandboxNetworkOpen, sandboxPolicy, threadConfig } from "../src/agents/codex/options.ts";
+import { appServerArgs, daemonSocket, explorationNetworkConfig, SANDBOX_NOTE, sandboxNetworkOpen, sandboxPolicy, threadConfig } from "../src/agents/codex/options.ts";
 import { ErrorCode } from "../src/protocol.ts";
 
 const payload = (command: unknown) =>
@@ -97,6 +97,24 @@ describe("Codex settings", () => {
     });
     expect(threadConfig([], undefined, false)).toEqual({});
     expect(SANDBOX_NOTE).toContain("a `chauffeur` command that says a sandbox blocked");
+  });
+
+  test("an exploration reads GitHub through the proxy, the same list as Claude's sandbox", () => {
+    expect(explorationNetworkConfig()).toEqual({
+      "features.network_proxy": {
+        enabled: true,
+        domains: { "github.com": "allow", "*.github.com": "allow", "*.githubusercontent.com": "allow" },
+      },
+      "sandbox_workspace_write.network_access": true,
+    });
+    // The GitLab's host joins the list on an installation set to GitLab.
+    expect(explorationNetworkConfig("gitlab.example.com")).toMatchObject({
+      "features.network_proxy": { domains: { "gitlab.example.com": "allow", "github.com": "allow" } },
+    });
+    // No socket: an exploration has no `chauffeur` CLI.
+    expect(Object.keys(explorationNetworkConfig()["features.network_proxy"] as object)).not.toContain("unix_sockets");
+    // The exploration's thread config carries it, and no writable root.
+    expect(threadConfig(["/w/alpha"], undefined, true, undefined, "gitlab.example.com")).toEqual(explorationNetworkConfig("gitlab.example.com"));
   });
 
   test("tells a config that already opens the sandbox's network", () => {
