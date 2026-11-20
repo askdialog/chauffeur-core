@@ -224,7 +224,7 @@ describe("reduceChat", () => {
     ]);
     const open = openRequests(view);
     expect(open.map((r) => r.requestId)).toEqual(["s1"]);
-    expect(open[0]).toMatchObject({ kind: "session", session: "aws-staging", label: "AWS SSO (staging)", remoteLogin: true, state: "open" });
+    expect(open[0]).toMatchObject({ kind: "session", session: "aws-staging", label: "AWS SSO (staging)", remoteLogin: true, browserConsent: false, state: "open" });
 
     view = reduceChat(view, p({ type: "request_resolved", request_id: "s1", outcome: "answered" }));
     expect(openRequests(view)).toHaveLength(0);

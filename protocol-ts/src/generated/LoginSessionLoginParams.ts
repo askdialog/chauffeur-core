@@ -4,4 +4,8 @@ export type LoginSessionLoginParams = { workspace: string, name: string,
 /**
  * Runs the session's `login_remote`, for an approval from another device than the Mac.
  */
-remote: boolean, };
+remote: boolean, 
+/**
+ * Auto-open only while this exact browser-consent request is pending.
+ */
+automatic_request?: string, };

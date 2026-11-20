@@ -89,7 +89,7 @@ session: string, label: string,
 /**
  * It declares a `login_remote`: the phone can log in to it.
  */
-remote_login: boolean, } | { "type": "request_resolved", request_id: string, outcome: string, 
+remote_login: boolean, browser_consent?: boolean, } | { "type": "request_resolved", request_id: string, outcome: string, 
 /**
  * Allowed with Always allow: the rules the chat now keeps allowing (Claude:
  * `mcp__linear__save_issue`, `Bash(npm test:*)`; Codex, what its session approval

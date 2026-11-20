@@ -443,6 +443,9 @@ pub enum ChatEvent {
         /// It declares a `login_remote`: the phone can log in to it.
         #[serde(default)]
         remote_login: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        browser_consent: Option<bool>,
     },
     /// A permission request or a question was answered. `outcome`: `allowed`, `denied`,
     /// `answered` or `cancelled` (by an interrupt).

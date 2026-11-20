@@ -121,6 +121,7 @@ export type SessionRequestItem = Base & {
   label: string;
   /** It declares a `login_remote`: the phone can log in to it. */
   remoteLogin: boolean;
+  browserConsent: boolean;
   state: RequestState;
   outcome: string | null;
 };
@@ -581,6 +582,7 @@ function apply(current: ChatView, event: ChatEvent, envelope: EventEnvelope): Ch
         session: event.session,
         label: event.label,
         remoteLogin: event.remote_login,
+        browserConsent: event.browser_consent === true,
         state: "open",
         outcome: null,
       });

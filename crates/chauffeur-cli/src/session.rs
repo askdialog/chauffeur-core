@@ -137,6 +137,7 @@ pub async fn run(client: &mut Client, action: Action, json: bool) -> anyhow::Res
                     workspace,
                     name,
                     remote,
+                    automatic_request: None,
                 }))
                 .await?;
             print_or(json, &result, || {

@@ -2265,6 +2265,10 @@ pub struct LoginSessionLoginParams {
     /// Runs the session's `login_remote`, for an approval from another device than the Mac.
     #[serde(default)]
     pub remote: bool,
+    /// Auto-open only while this exact browser-consent request is pending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub automatic_request: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]

@@ -390,7 +390,7 @@ import type { WorktreeCreateResult } from "./WorktreeCreateResult";
 import type { WorktreeObservedParams } from "./WorktreeObservedParams";
 import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 
-export const PROTOCOL_VERSION = 23;
+export const PROTOCOL_VERSION = 24;
 export const MIN_PROTOCOL_VERSION = 1;
 export const PEER_PROTOCOL_VERSION = 4;
 

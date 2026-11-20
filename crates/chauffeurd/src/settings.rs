@@ -447,6 +447,8 @@ pub struct SessionDecl {
     /// Renews it for an approval from another device (the phone): prints the link, and the code
     /// its page asks for. Optional: without it, the session is renewed from the Mac only.
     pub login_remote: Option<String>,
+    /// The local login waits for explicit consent in the browser.
+    pub browser_consent: Option<bool>,
 }
 
 /// A session every key of which was declared.
@@ -456,6 +458,7 @@ pub struct SessionSpec {
     pub check: String,
     pub login: String,
     pub login_remote: Option<String>,
+    pub browser_consent: bool,
 }
 
 impl SessionDecl {
@@ -466,6 +469,9 @@ impl SessionDecl {
         }
         if over.check.is_some() {
             self.check.clone_from(&over.check);
+        }
+        if over.browser_consent.is_some() || over.login.is_some() {
+            self.browser_consent = over.browser_consent;
         }
         if over.login.is_some() {
             self.login.clone_from(&over.login);
@@ -488,6 +494,7 @@ impl SessionDecl {
             check: present(&self.check)?,
             login: present(&self.login)?,
             login_remote: present(&self.login_remote),
+            browser_consent: self.browser_consent.unwrap_or(false),
         })
     }
 }
@@ -1310,7 +1317,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             worktree.path().join(".chauffeur/settings.toml"),
-            "[sessions.aws]\nlabel = \"AWS\"\ncheck = \"aws check\"\nlogin = \"aws login\"\n\
+            "[sessions.aws]\nlabel = \"AWS\"\ncheck = \"aws check\"\nbrowser_consent = true\nlogin = \"aws login\"\n\
              [sessions.half]\nlabel = \"Half\"\n",
         )
         .unwrap();
@@ -1329,6 +1336,7 @@ mod tests {
                 check: "aws check".into(),
                 login: "aws login --no-browser".into(),
                 login_remote: Some("aws login --device".into()),
+                browser_consent: false,
             })
         );
         assert_eq!(settings.sessions["half"].spec(), None);

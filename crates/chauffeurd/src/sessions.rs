@@ -50,6 +50,7 @@ pub struct Sessions {
 /// declines, or nobody answers within `REQUEST_TIMEOUT`.
 struct Request {
     id: String,
+    auto_started: std::sync::atomic::AtomicBool,
     declined: tokio::sync::Notify,
     outcome: tokio::sync::watch::Sender<Option<Outcome>>,
 }
@@ -114,6 +115,7 @@ impl Sessions {
         workspace: &str,
         name: &str,
         remote: bool,
+        automatic_request: Option<&str>,
     ) -> Result<LoginSessionLogin> {
         let (row, declared) = declared(d, workspace)?;
         let session = find(&row, declared, name)?;
@@ -128,6 +130,24 @@ impl Sessions {
             }
         };
         let key = (row.id.clone(), session.name.clone());
+        if let Some(id) = automatic_request {
+            let requests = self.requests.lock().unwrap();
+            let pending = requests.get(&key).filter(|request| request.id == id);
+            if remote
+                || !session.spec.browser_consent
+                || !pending.is_some_and(|request| {
+                    !request
+                        .auto_started
+                        .swap(true, std::sync::atomic::Ordering::Relaxed)
+                })
+            {
+                return Ok(LoginSessionLogin {
+                    session: self.info(&row.id, &session),
+                    url: None,
+                    output: String::new(),
+                });
+            }
+        }
         if !self.logging_in.lock().unwrap().insert(key.clone()) {
             return Err(Error::Conflict(format!(
                 "a login of {} is already running",
@@ -243,6 +263,7 @@ impl Sessions {
         let (outcome, receiver) = tokio::sync::watch::channel(None);
         let request = Arc::new(Request {
             id: format!("session-{}", uuid::Uuid::new_v4()),
+            auto_started: Default::default(),
             declined: tokio::sync::Notify::new(),
             outcome,
         });
@@ -254,6 +275,7 @@ impl Sessions {
                 request_id: request.id.clone(),
                 session: session.name.clone(),
                 label: session.spec.label.clone(),
+                browser_consent: session.spec.browser_consent.then_some(true),
                 remote_login: session.spec.login_remote.is_some(),
             },
         );
