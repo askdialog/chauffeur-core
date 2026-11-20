@@ -866,7 +866,10 @@ function sedScripts(texts: string[]): string[] {
   const scripts: string[] = [];
   for (let i = 0; i < texts.length; i++) {
     const text = texts[i] ?? "";
-    if (text === "-e" || text === "--expression") scripts.push(texts[++i] ?? "");
+    // `-e script`, `-e'script'`, `-ne script`: `e` in a cluster of short options takes the rest, or the next word.
+    const cluster = /^-[nrEsuz]*e(.*)$/s.exec(text);
+    if (cluster) scripts.push(cluster[1] || (texts[++i] ?? ""));
+    else if (text === "--expression") scripts.push(texts[++i] ?? "");
     else if (text.startsWith("--expression=")) scripts.push(text.slice("--expression=".length));
     else if (text === "-f" || text === "--file" || text === "-l") i++;
     else if (!text.startsWith("-") && scripts.length === 0) return [text];
