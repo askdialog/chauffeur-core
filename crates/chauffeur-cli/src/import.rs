@@ -87,6 +87,10 @@ pub async fn run(source: Source, client: &mut Client, json: bool) -> anyhow::Res
                 },
                 None => (None, None),
             };
+            // The daemon runs elsewhere: a relative folder is the one from here.
+            let claude_dir = claude_dir
+                .map(|dir| std::path::absolute(&dir).map(|p| p.to_string_lossy().into_owned()))
+                .transpose()?;
             let params = ClaudeCodeImportParams {
                 since_days,
                 since_date,

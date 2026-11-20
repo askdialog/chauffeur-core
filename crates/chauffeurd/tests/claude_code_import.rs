@@ -125,6 +125,7 @@ fn fixture() -> Fixture {
         git(&clone, &["switch", "-q", "main"]);
     }
     let web = root.join("clones/web");
+    let api = root.join("clones/api");
     let branch_at = |name: &str, file: &str| {
         git(&web, &["switch", "-q", "-c", name, "main"]);
         let tip = commit(&web, file, "x\n");
@@ -148,7 +149,6 @@ fn fixture() -> Fixture {
         &["worktree", "add", "-q", held.to_str().unwrap(), "feat/held"],
     );
     std::fs::write(held.join("README.md"), "held, uncommitted\n").unwrap();
-    std::fs::write(web.join("README.md"), "web, uncommitted on main\n").unwrap();
     std::fs::create_dir_all(web.join("src")).unwrap();
     std::fs::create_dir_all(root.join("notes")).unwrap();
     // A clone whose origin is no GitHub repo, and a folder of Chauffeur's own workspaces.
@@ -165,6 +165,81 @@ fn fixture() -> Fixture {
     );
     let inside = root.join("workspaces/chauffeur-ws");
     std::fs::create_dir_all(&inside).unwrap();
+    // A PR from feat/released merged into a release branch, not into main.
+    let released = branch_at("feat/released", "released.txt");
+    // Worktrees inside the clone: .wt/y deleted by hand (git still lists it), .wt/z removed.
+    branch_at("feat/y", "y.txt");
+    branch_at("feat/z", "z.txt");
+    for name in ["y", "z"] {
+        let at = web.join(".wt").join(name);
+        git(
+            &web,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                at.to_str().unwrap(),
+                &format!("feat/{name}"),
+            ],
+        );
+    }
+    std::fs::remove_dir_all(web.join(".wt/y")).unwrap();
+    git(
+        &web,
+        &["worktree", "remove", web.join(".wt/z").to_str().unwrap()],
+    );
+    // A branch named like a tag.
+    branch_at("v1", "v1.txt");
+    git(&web, &["tag", "v1", "main"]);
+    // A branch already in one of Chauffeur's workspaces, its worktree holding changes there.
+    branch_at("feat/chauffeur", "chauffeur.txt");
+    let chauffeur_wt = root.join("workspaces/ws-web/web");
+    git(
+        &web,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            chauffeur_wt.to_str().unwrap(),
+            "feat/chauffeur",
+        ],
+    );
+    std::fs::write(chauffeur_wt.join("README.md"), "changed in Chauffeur\n").unwrap();
+    // A second clone of web, on its own live branch.
+    let web2 = root.join("clones/web-2");
+    git(
+        &root,
+        &[
+            "clone",
+            "-q",
+            web_origin.to_str().unwrap(),
+            web2.to_str().unwrap(),
+        ],
+    );
+    git(
+        &web2,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/fixture/web.git",
+        ],
+    );
+    git(&web2, &["switch", "-q", "-c", "feat/two"]);
+    commit(&web2, "two.txt", "two\n");
+    // api's origin/HEAD names a branch its remote no longer has (renamed since).
+    git(
+        &api,
+        &[
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/master",
+        ],
+    );
+    // The clones, named through a symlinked folder.
+    std::os::unix::fs::symlink(root.join("clones"), root.join("alias")).unwrap();
+    // web's own changes on main, made once the branches above are cut (they would carry them).
+    std::fs::write(web.join("README.md"), "web, uncommitted on main\n").unwrap();
 
     // A gh that knows one merged PR, from feat/squashed at its tip.
     let bin = root.join("bin");
@@ -172,7 +247,7 @@ fn fixture() -> Fixture {
     let gh = bin.join("gh");
     std::fs::write(
         &gh,
-        format!("#!/bin/sh\ncase \"$PWD\" in */api) exit 1 ;; esac\ncase \"$*\" in\n  *--state\\ merged*) echo '[{{\"headRefName\":\"feat/squashed\",\"headRefOid\":\"{squashed}\"}}]' ;;\n  *) exit 1 ;;\nesac\n"),
+        format!("#!/bin/sh\ncase \"$PWD\" in */api) exit 1 ;; esac\ncase \"$*\" in\n  *--state\\ merged*) echo '[{{\"headRefName\":\"feat/squashed\",\"headRefOid\":\"{squashed}\",\"baseRefName\":\"main\"}},{{\"headRefName\":\"feat/released\",\"headRefOid\":\"{released}\",\"baseRefName\":\"release\"}}]' ;;\n  *) exit 1 ;;\nesac\n"),
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
@@ -181,7 +256,6 @@ fn fixture() -> Fixture {
     let claude = root.join("claude");
     let projects = claude.join("projects").join("-code");
     std::fs::create_dir_all(&projects).unwrap();
-    let api = root.join("clones/api");
     let session = |id: &str, title: &str, lines: Vec<String>| {
         let mut text = format!("{{\"type\":\"ai-title\",\"aiTitle\":\"{title}\"}}\n");
         for l in lines {
@@ -203,21 +277,19 @@ fn fixture() -> Fixture {
     session(
         "simple-api",
         "Live work on api",
-        vec![line(
-            &api,
-            "feat/live",
-            &ago(4),
-            &edit(&api.join("live.txt")),
-        )],
+        vec![
+            line(&api, "feat/live", &ago(4), &edit(&api.join("live.txt"))),
+            line(&api, "main", &ago(4), &edit(&api.join("README.md"))),
+        ],
     );
     session(
         "away",
         "Away work",
         vec![line(
-            &web,
+            &root.join("alias/web"),
             "feat/away",
             &ago(7),
-            &edit(&web.join("away/x.ts")),
+            &edit(&root.join("alias/web/away/x.ts")),
         )],
     );
     session(
@@ -264,6 +336,16 @@ fn fixture() -> Fixture {
             ),
             line(&web, "main", &ago(10), &edit(&web.join("README.md"))),
             line(&web, "main", &ago(10), &bash("git switch -c feat/gone")),
+            // A folder that is not there: no repo, not its parent's.
+            line(
+                &web,
+                "main",
+                &ago(10),
+                &bash(&format!(
+                    "git -C {}/gone switch -c feat/nowhere",
+                    api.display()
+                )),
+            ),
             line(
                 &web,
                 "main",
@@ -299,6 +381,42 @@ fn fixture() -> Fixture {
         "old",
         "Long ago",
         vec![line(&web, "main", &ago(90), &edit(&web.join("README.md")))],
+    );
+    let one = |id: &str, title: &str, at: i64, cwd: &Path, branch: &str, file: &Path| {
+        session(id, title, vec![line(cwd, branch, &ago(at), &edit(file))])
+    };
+    one(
+        "released",
+        "Released work",
+        11,
+        &web,
+        "feat/released",
+        &web.join("README.md"),
+    );
+    session(
+        "nested",
+        "Nested worktrees",
+        vec![
+            line(&web, "main", &ago(12), &edit(&web.join(".wt/y/a.ts"))),
+            line(&web, "main", &ago(12), &edit(&web.join(".wt/z/b.ts"))),
+        ],
+    );
+    one("tagged", "Tagged", 13, &web, "v1", &web.join("README.md"));
+    one(
+        "second-clone",
+        "Second clone",
+        14,
+        &web2,
+        "feat/two",
+        &web2.join("README.md"),
+    );
+    one(
+        "in-chauffeur",
+        "Already in Chauffeur",
+        15,
+        &web,
+        "feat/chauffeur",
+        &web.join("README.md"),
     );
     let sessions = claude.join("sessions");
     std::fs::create_dir_all(&sessions).unwrap();
@@ -393,7 +511,12 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
             "simple-web",
             "away",
             "no-github",
-            "history"
+            "history",
+            "released",
+            "nested",
+            "tagged",
+            "second-clone",
+            "in-chauffeur"
         ]
     );
     assert_eq!(plan.since_days, Some(60));
@@ -433,9 +556,43 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
         plan.warnings
     );
     // GitHub could not say whether api's branch is merged: it counts as live, and says so.
+    // api's main is its default branch though origin/HEAD names a master gone since.
     assert_eq!(
         session("simple-api").branches,
-        [branch("api", "feat/live", true)]
+        [
+            branch("api", "feat/live", true),
+            branch("api", "main", false)
+        ]
+    );
+    // A PR into a release branch merged nothing into main.
+    assert_eq!(
+        session("released").branches,
+        [branch("web", "feat/released", true)]
+    );
+    // A worktree deleted but still listed gives its branch; one removed, nothing.
+    assert_eq!(session("nested").branches, [branch("web", "feat/y", true)]);
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|w| w.contains("“Nested worktrees” wrote in") && w.contains(".wt/z")),
+        "{:?}",
+        plan.warnings
+    );
+    assert_eq!(session("tagged").branches, [branch("web", "v1", true)]);
+    assert_eq!(
+        session("second-clone").branches,
+        [branch("web", "feat/two", true)]
+    );
+    assert_eq!(
+        session("in-chauffeur").branches,
+        [branch("web", "feat/chauffeur", false)]
+    );
+    assert!(
+        plan.warnings
+            .iter()
+            .any(|w| w == "feat/chauffeur is in a Chauffeur workspace already: left out."),
+        "{:?}",
+        plan.warnings
     );
     assert!(
         plan.warnings
@@ -501,6 +658,10 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
             "Branch feat/held on feat/held [web] parent=orchestrate-the-release chats= changes=",
             "Branch feat/live on feat/live [api,web] parent=- chats=simple-web,simple-api changes=",
             "Branch feat/away on feat/away [web] parent=- chats=away changes=",
+            "Branch feat/released on feat/released [web] parent=- chats=released changes=",
+            "Branch feat/y on feat/y [web] parent=- chats=nested changes=",
+            "Branch v1 on v1 [web] parent=- chats=tagged changes=",
+            "Branch feat/two on feat/two [web] parent=- chats=second-clone changes=",
         ]
     );
     assert_eq!(session("simple-api").lands_in.as_deref(), Some("feat/live"));
@@ -516,16 +677,77 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
         ),
         ("web", "main")
     );
-    assert_eq!(plan.histories[0].sessions, ["history"]);
+    assert_eq!(plan.histories[0].sessions, ["in-chauffeur", "history"]);
 
-    // A live branch checked out in one of the user's worktrees is released there.
+    // A live branch checked out in one of the user's worktrees, or another clone of the repo,
+    // is released there.
+    let release = |branch: &str, folder: &str| ClaudeCodeRelease {
+        repo: "web".into(),
+        branch: branch.into(),
+        folder: f.root.join(folder).to_string_lossy().into_owned(),
+    };
     assert_eq!(
         plan.releases,
-        [ClaudeCodeRelease {
-            repo: "web".into(),
-            branch: "feat/held".into(),
-            folder: f.root.join("wt/held").to_string_lossy().into_owned()
-        }]
+        [
+            release("feat/held", "wt/held"),
+            release("feat/two", "clones/web-2")
+        ]
+    );
+}
+
+async fn refusal(f: &Fixture, params: ClaudeCodeImportParams) -> String {
+    chauffeurd::claudecode::import(
+        &f.daemon,
+        ClaudeCodeImportParams {
+            dry_run: true,
+            ..params
+        },
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unreadable_window_or_folder_is_refused_and_an_empty_one_said() {
+    let f = fixture();
+    let since = refusal(
+        &f,
+        ClaudeCodeImportParams {
+            since_days: Some(u32::MAX),
+            claude_dir: Some(f.claude.to_string_lossy().into_owned()),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(since.contains("goes back before any date"), "{since}");
+    let relative = refusal(
+        &f,
+        ClaudeCodeImportParams {
+            claude_dir: Some("claude".into()),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(relative.contains("is relative"), "{relative}");
+    let empty = chauffeurd::claudecode::import(
+        &f.daemon,
+        ClaudeCodeImportParams {
+            dry_run: true,
+            claude_dir: Some(f.root.join("notes").to_string_lossy().into_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(empty.sessions.is_empty());
+    assert!(
+        empty
+            .warnings
+            .iter()
+            .any(|w| w.contains("holds no `projects` folder")),
+        "{:?}",
+        empty.warnings
     );
 }
 

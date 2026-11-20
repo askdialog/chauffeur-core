@@ -75,7 +75,11 @@ pub fn read_all(projects: &Path, cutoff: Option<&str>) -> Vec<Session> {
             let changed = file.metadata().and_then(|m| m.modified()).ok();
             let before =
                 matches!((cutoff_time, changed), (Some(cutoff), Some(changed)) if changed < cutoff);
-            if path.extension().is_some_and(|e| e == "jsonl") && !before {
+            // `agent-*.jsonl` beside the sessions: a subagent's, as older Claude Code kept them.
+            let agent = path
+                .file_stem()
+                .is_some_and(|s| s.to_string_lossy().starts_with("agent-"));
+            if path.extension().is_some_and(|e| e == "jsonl") && !before && !agent {
                 transcripts.push(path);
             }
         }
@@ -242,7 +246,7 @@ impl Reading {
             {
                 for (dir, branch) in created_branches(command) {
                     self.created.push(Created {
-                        dir: dir.map_or_else(|| cwd.clone(), |d| cwd.join(d)),
+                        dir: dir.map_or_else(|| cwd.clone(), |d| cwd.join(home(&d))),
                         branch,
                     });
                 }
@@ -257,6 +261,19 @@ fn stamp(line: &str) -> Option<&str> {
     let start = line.find(key)? + key.len();
     let end = start + line[start..].find('"')?;
     Some(&line[start..end])
+}
+
+/// `~` and `$HOME` as the home folder.
+fn home(dir: &str) -> PathBuf {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    for prefix in ["~", "$HOME", "${HOME}"] {
+        if let (Some(rest), Some(home)) = (dir.strip_prefix(prefix), &home)
+            && (rest.is_empty() || rest.starts_with('/'))
+        {
+            return home.join(rest.trim_start_matches('/'));
+        }
+    }
+    PathBuf::from(dir)
 }
 
 /// A user message's text, cut to a title's length.
@@ -281,6 +298,37 @@ static CREATES: LazyLock<Regex> = LazyLock::new(|| {
 /// The branches a shell command creates (`git worktree add -b`, `git switch -c`, `git checkout
 /// -b`), with the folder given to `-C`.
 pub fn created_branches(command: &str) -> Vec<(Option<String>, String)> {
+    let unquote = |s: &str| s.trim_matches(|c| c == '"' || c == '\'').to_string();
+    // A `cd <dir>` before it on the line moves it there, a `-C` after that, further.
+    let mut found = Vec::new();
+    let mut dir: Option<String> = None;
+    for part in command.split(['\n', ';']).flat_map(|p| p.split("&&")) {
+        let part = part.trim();
+        if let Some(to) = part.strip_prefix("cd ") {
+            let to = unquote(to.trim());
+            dir = Some(match &dir {
+                Some(from) if !to.starts_with('/') && !to.starts_with('~') => {
+                    format!("{from}/{to}")
+                }
+                _ => to,
+            });
+            continue;
+        }
+        for (at, branch) in created_in(part) {
+            let at = match (&dir, at) {
+                (Some(from), Some(at)) if !at.starts_with('/') && !at.starts_with('~') => {
+                    Some(format!("{from}/{at}"))
+                }
+                (_, Some(at)) => Some(at),
+                (from, None) => from.clone(),
+            };
+            found.push((at, branch));
+        }
+    }
+    found
+}
+
+fn created_in(command: &str) -> Vec<(Option<String>, String)> {
     let unquote = |s: &str| s.trim_matches(|c| c == '"' || c == '\'').to_string();
     CREATES
         .captures_iter(command)
@@ -311,11 +359,32 @@ pub fn running(sessions: &Path) -> HashSet<String> {
         let (Some(pid), Some(id)) = (entry["pid"].as_i64(), entry["sessionId"].as_str()) else {
             continue;
         };
-        if i32::try_from(pid).is_ok_and(alive) {
+        // A live pid, and the same process: its start as Claude Code recorded it (`ps`'s
+        // `lstart`), so a pid reused since is no session running.
+        let same = entry["procStart"].as_str().is_none_or(|recorded| {
+            started(pid)
+                .is_none_or(|now| now == recorded.split_whitespace().collect::<Vec<_>>().join(" "))
+        });
+        if i32::try_from(pid).is_ok_and(alive) && same {
             running.insert(id.to_string());
         }
     }
     running
+}
+
+/// A process's start, as `ps -o lstart=` prints it in UTC (as Claude Code records it), spaces
+/// collapsed; none when ps cannot say.
+fn started(pid: i64) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .env("TZ", "UTC")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (out.status.success() && !text.is_empty()).then_some(text)
 }
 
 fn alive(pid: i32) -> bool {
@@ -345,7 +414,20 @@ mod tests {
             ),
             (
                 "cd web && git fetch && git switch -C rel/1.2",
-                &[(None, "rel/1.2")],
+                &[(Some("web"), "rel/1.2")],
+            ),
+            ("cd ../api && git switch -c y", &[(Some("../api"), "y")]),
+            (
+                "cd /code && cd api; git checkout -b z",
+                &[(Some("/code/api"), "z")],
+            ),
+            (
+                "cd /code && git -C web switch -c w",
+                &[(Some("/code/web"), "w")],
+            ),
+            (
+                "git -C ~/code/api switch -c t",
+                &[(Some("~/code/api"), "t")],
             ),
             ("git switch main", &[]),
             ("git checkout -- file.ts", &[]),
@@ -369,7 +451,7 @@ mod tests {
             r#"{"type":"user","cwd":"/code/web","gitBranch":"main","entrypoint":"claude-vscode","timestamp":"2026-11-01T10:00:00.000Z","message":{"content":"<command-name>/clear</command-name>"}}"#,
             r#"{"type":"user","cwd":"/code/web","gitBranch":"main","timestamp":"2026-11-01T10:00:01.000Z","message":{"content":[{"type":"text","text":"Fix the login\nthen ship"}]}}"#,
             r#"{"type":"ai-title","aiTitle":"Login fix"}"#,
-            r#"{"type":"assistant","cwd":"/code/web","gitBranch":"main","timestamp":"2026-11-01T10:00:02.000Z","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git switch -c fix/login && git -C ../api checkout -b fix/api"}}]}}"#,
+            r#"{"type":"assistant","cwd":"/code/web","gitBranch":"main","timestamp":"2026-11-01T10:00:02.000Z","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git switch -c fix/login && git -C ../api checkout -b fix/api && git -C ~/code/x switch -c fix/home"}}]}}"#,
             r#"{"type":"assistant","cwd":"/code/web","gitBranch":"fix/login","timestamp":"2026-11-01T10:00:03.000Z","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"src/a.ts"}},{"type":"tool_use","name":"Read","input":{"file_path":"/code/web/b.ts"}}]}}"#,
             r#"{"type":"assistant","cwd":"/code/web","gitBranch":"HEAD","timestamp":"2026-11-01T10:00:04.000Z","message":{"content":[{"type":"tool_use","name":"NotebookEdit","input":{"notebook_path":"/code/web/n.ipynb"}}]}}"#,
             "not json",
@@ -414,6 +496,10 @@ mod tests {
                 Created {
                     dir: PathBuf::from("/code/web/../api"),
                     branch: "fix/api".into()
+                },
+                Created {
+                    dir: PathBuf::from(std::env::var("HOME").unwrap()).join("code/x"),
+                    branch: "fix/home".into()
                 }
             ]
         );
@@ -460,6 +546,8 @@ mod tests {
             )
             .unwrap();
         }
+        // A subagent's transcript beside the sessions, as older Claude Code kept them: none.
+        std::fs::write(folder.join("agent-a1.jsonl"), r#"{"type":"user","cwd":"/code/web","timestamp":"2026-11-11T00:00:00.000Z","message":{"content":"x"}}"#).unwrap();
         let ids = |cutoff| {
             read_all(dir.path(), cutoff)
                 .into_iter()
@@ -485,6 +573,22 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.path().join("x.key"), "k").unwrap();
+        // A pid alive but started at another time than recorded: reused by another process.
+        let other = tempfile::tempdir().unwrap();
+        std::fs::write(
+            other.path().join("a.json"),
+            format!(
+                r#"{{"pid":{me},"sessionId":"reused","procStart":"Mon Jan  1 00:00:00 2001"}}"#
+            ),
+        )
+        .unwrap();
+        let started = started(i64::from(me)).unwrap();
+        std::fs::write(
+            other.path().join("b.json"),
+            format!(r#"{{"pid":{me},"sessionId":"same","procStart":"{started}"}}"#),
+        )
+        .unwrap();
         assert_eq!(running(dir.path()), HashSet::from(["live".to_string()]));
+        assert_eq!(running(other.path()), HashSet::from(["same".to_string()]));
     }
 }

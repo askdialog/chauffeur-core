@@ -45,7 +45,16 @@ pub async fn import(
         .as_deref()
         .filter(|p| !p.trim().is_empty())
     {
-        Some(dir) => expand_home(dir),
+        Some(dir) => {
+            let dir = expand_home(dir);
+            if !dir.is_absolute() {
+                return Err(Error::BadRequest(format!(
+                    "Claude Code's folder {} is relative: name it from the root",
+                    dir.display()
+                )));
+            }
+            dir
+        }
         None => Locations::of(&d.shell_env.vars())
             .map(|at| at.config().to_path_buf())
             .ok_or_else(|| {
@@ -60,7 +69,15 @@ pub async fn import(
         (!params.all && since_date.is_none()).then(|| params.since_days.unwrap_or(DEFAULT_DAYS));
     let start = match (&since_date, since_days) {
         (Some(date), _) => Some(midnight(date)?),
-        (None, Some(days)) => Some(chrono::Utc::now() - chrono::Duration::days(i64::from(days))),
+        (None, Some(days)) => Some(
+            chrono::Duration::try_days(i64::from(days))
+                .and_then(|span| chrono::Utc::now().checked_sub_signed(span))
+                .ok_or_else(|| {
+                    Error::BadRequest(format!(
+                        "--since {days} days goes back before any date: use --all"
+                    ))
+                })?,
+        ),
         (None, None) => None,
     };
     let cutoff = start.map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
@@ -77,6 +94,12 @@ pub async fn import(
     };
     let mut repos = Repos::new(d);
     let mut warnings = Vec::new();
+    if !claude.join("projects").is_dir() {
+        warnings.push(format!(
+            "{} holds no `projects` folder: is it Claude Code's?",
+            claude.display()
+        ));
+    }
     let mut plans = Vec::new();
     let mut placed = Vec::new();
     for session in read {
@@ -151,14 +174,13 @@ pub async fn import(
     let mut changes = Vec::new();
     let mut bases = HashMap::new();
     for repo in &touched {
-        let Some(clone) = repos.clones.get(repo).cloned() else {
-            continue;
-        };
-        let base = repos.refs(&clone).await.base.clone();
-        if repos.default_has_changes(&clone, &base).await {
-            changes.push(repo.clone());
+        for clone in repos.clones.get(repo).cloned().unwrap_or_default() {
+            let base = repos.refs(&clone).await.base.clone();
+            if repos.default_has_changes(&clone, &base).await && !changes.contains(repo) {
+                changes.push(repo.clone());
+            }
+            bases.entry(repo.clone()).or_insert(base);
         }
-        bases.insert(repo.clone(), base);
     }
     let plan = place::place(&placed, &changes, &bases);
     for session in &mut plans {
@@ -201,6 +223,33 @@ fn midnight(date: &str) -> Result<chrono::DateTime<chrono::Utc>> {
         .ok_or_else(refused)
 }
 
+/// A path as the file system names it: its nearest existing folder resolved (`/tmp` →
+/// `/private/tmp`), the rest as written. Git names checkouts that way.
+fn real(path: &Path) -> PathBuf {
+    for existing in path.ancestors() {
+        if let Ok(resolved) = existing.canonicalize() {
+            let rest = path.strip_prefix(existing).unwrap_or(Path::new(""));
+            return if rest.as_os_str().is_empty() {
+                resolved
+            } else {
+                resolved.join(rest)
+            };
+        }
+    }
+    path.to_path_buf()
+}
+
+/// A folder name worktrees are kept under (`.wt`, `.worktrees`, `.claude/worktrees`): a path
+/// missing below one was in a worktree removed since.
+fn in_worktree_folder(rel: &Path) -> bool {
+    rel.components().any(|c| {
+        matches!(
+            c.as_os_str().to_str(),
+            Some(".wt" | ".worktrees" | "worktrees")
+        )
+    })
+}
+
 /// A checkout a session wrote in or ran from, and the repo it belongs to.
 #[derive(Clone)]
 struct Checkout {
@@ -214,6 +263,9 @@ struct Checkout {
     branch: Option<String>,
 }
 
+/// A repo's merged PRs, (head commit, base branch) by branch.
+type MergedPrs = HashMap<String, Vec<(String, String)>>;
+
 /// A clone's branches, as [`Repos::refs`] reads them.
 struct Refs {
     base: String,
@@ -225,13 +277,17 @@ struct Refs {
 /// The repos the sessions touch, read with git once each.
 struct Repos<'a> {
     d: &'a Daemon,
+    /// Git with `GIT_NO_LAZY_FETCH`: a partial clone never fetches a missing object (a PR's
+    /// head) on its own, so nothing is written there.
     git: Git,
     checkouts: HashMap<PathBuf, Option<Checkout>>,
-    /// Each repo's clone, by Chauffeur's name.
-    clones: HashMap<String, PathBuf>,
+    /// Each repo's clones, by Chauffeur's name, in the order met.
+    clones: HashMap<String, Vec<PathBuf>>,
+    /// Each clone's repo name.
+    names: HashMap<PathBuf, String>,
     live: HashMap<(PathBuf, String), bool>,
-    /// Each clone's merged PRs' heads by branch, read once; none when GitHub could not say.
-    merged: HashMap<PathBuf, Option<HashMap<String, Vec<String>>>>,
+    /// Each clone's merged PRs (head, base) by branch, read once; none when GitHub could not say.
+    merged: HashMap<PathBuf, Option<MergedPrs>>,
     refs: HashMap<PathBuf, Refs>,
     /// Clones without a GitHub remote, warned about once.
     unnamed: BTreeSet<PathBuf>,
@@ -240,11 +296,16 @@ struct Repos<'a> {
 
 impl<'a> Repos<'a> {
     fn new(d: &'a Daemon) -> Repos<'a> {
+        let env = crate::shellenv::ShellEnv::new();
+        let mut vars = d.shell_env.vars();
+        vars.insert("GIT_NO_LAZY_FETCH".into(), "1".into());
+        env.set_vars(vars);
         Repos {
             d,
-            git: Git::new(d.shell_env.clone()),
+            git: Git::new(env),
             checkouts: HashMap::new(),
             clones: HashMap::new(),
+            names: HashMap::new(),
             live: HashMap::new(),
             merged: HashMap::new(),
             refs: HashMap::new(),
@@ -299,9 +360,11 @@ impl<'a> Repos<'a> {
         let repo = match remote_of(&self.git, &clone, None).await {
             Some((owner, name)) => {
                 let name = reference(self.d, &owner, &name);
-                self.clones
-                    .entry(name.clone())
-                    .or_insert_with(|| clone.clone());
+                let clones = self.clones.entry(name.clone()).or_default();
+                if !clones.contains(&clone) {
+                    clones.push(clone.clone());
+                }
+                self.names.insert(clone.clone(), name.clone());
                 Some(name)
             }
             None => {
@@ -335,12 +398,13 @@ impl<'a> Repos<'a> {
         let mut found: Vec<(String, PathBuf, String)> = Vec::new();
         let mut gone = BTreeSet::new();
         for write in &session.writes {
+            let (path, cwd) = (real(&write.path), real(&write.cwd));
             // The checkout the session stood in (from its nearest folder still there: a worktree
             // removed since resolves to its clone, the same repo), on the branch recorded then.
-            let stood = self.checkout(&write.cwd).await;
-            let dir = write.path.parent().unwrap_or(&write.path);
+            let stood = self.checkout(&cwd).await;
+            let dir = path.parent().unwrap_or(&path).to_path_buf();
             let (checkout, branch) = if dir.is_dir() {
-                let Some(checkout) = self.checkout(&write.path).await else {
+                let Some(checkout) = self.checkout(&path).await else {
                     continue;
                 };
                 // Elsewhere than where it stood: the branch checked out there now.
@@ -351,12 +415,10 @@ impl<'a> Repos<'a> {
                 };
                 (checkout, branch)
             } else {
-                // A folder missing now: one of another branch of the checkout it stood in, or
-                // gone (a worktree removed, a scratch folder cleaned up).
-                match stood.filter(|s| write.path.starts_with(&s.top)) {
-                    Some(stood) => (stood, write.branch.clone()),
+                match self.missing(stood, &path, write.branch.clone()).await {
+                    Some(found) => found,
                     None => {
-                        gone.insert(dir.to_path_buf());
+                        gone.insert(dir);
                         continue;
                     }
                 }
@@ -366,7 +428,12 @@ impl<'a> Repos<'a> {
             }
         }
         for created in &session.created {
-            if let Some(checkout) = self.checkout(&created.dir).await
+            // A folder that is not there names no repo: its parent's would be a guess.
+            let dir = real(&created.dir);
+            if !dir.is_dir() {
+                continue;
+            }
+            if let Some(checkout) = self.checkout(&dir).await
                 && let Some(repo) = checkout.repo.clone()
             {
                 found.push((repo, checkout.clone, created.branch.clone()));
@@ -397,9 +464,37 @@ impl<'a> Repos<'a> {
         branches
     }
 
+    /// A file whose folder is missing now: in a worktree of the checkout the session stood in,
+    /// that worktree's branch (git still lists it until pruned); in a folder worktrees are kept
+    /// under, gone; elsewhere in that checkout, a folder of another branch, the one recorded.
+    async fn missing(
+        &mut self,
+        stood: Option<Checkout>,
+        path: &Path,
+        recorded: Option<String>,
+    ) -> Option<(Checkout, Option<String>)> {
+        let stood = stood.filter(|s| path.starts_with(&s.top))?;
+        let worktree = self
+            .refs(&stood.clone)
+            .await
+            .worktrees
+            .iter()
+            .filter(|e| {
+                e.path != stood.top && e.path.starts_with(&stood.top) && path.starts_with(&e.path)
+            })
+            .max_by_key(|e| e.path.components().count())
+            .map(|e| e.branch.clone());
+        match worktree {
+            Some(branch) => Some((stood, branch)),
+            None if in_worktree_folder(path.strip_prefix(&stood.top).unwrap_or(path)) => None,
+            None => Some((stood, recorded)),
+        }
+    }
+
     /// A branch that exists and is not merged into the default branch (its tip in it, or a merged
-    /// PR's head at or after it), or whose checkout holds uncommitted changes. The default branch
-    /// is none: its changes get a workspace of their own.
+    /// PR into it whose head is the tip or after it), or whose checkout holds uncommitted changes.
+    /// The default branch is none: its changes get a workspace of their own. Nor is a branch
+    /// already in one of Chauffeur's workspaces.
     async fn is_live(&mut self, clone: &Path, branch: &str) -> bool {
         let key = (clone.to_path_buf(), branch.to_string());
         if let Some(live) = self.live.get(&key) {
@@ -411,6 +506,7 @@ impl<'a> Repos<'a> {
     }
 
     async fn read_live(&mut self, clone: &Path, branch: &str) -> bool {
+        let workspaces = self.d.paths.workspaces_dir.clone();
         let refs = self.refs(clone).await;
         if branch == refs.base {
             return false;
@@ -425,6 +521,13 @@ impl<'a> Repos<'a> {
             .map(|e| e.path.clone())
             .collect();
         let merged = refs.merged.contains(branch);
+        let base = refs.base.clone();
+        if holders.iter().any(|h| h.starts_with(&workspaces)) {
+            self.warnings.push(format!(
+                "{branch} is in a Chauffeur workspace already: left out."
+            ));
+            return false;
+        }
         // Uncommitted changes in a checkout make it live, merged or not.
         for holder in holders {
             if self.has_changes(&holder).await {
@@ -434,14 +537,18 @@ impl<'a> Repos<'a> {
         if merged {
             return false;
         }
-        // Squash-merged: a merged PR from the branch whose head is its tip or after it.
+        // Squash-merged: a merged PR from the branch into the default branch whose head is its
+        // tip or after it.
         let Some(heads) = self.merged_heads(clone, branch).await else {
             self.warnings.push(format!(
                 "Could not ask whether {branch} is merged: it is counted as live."
             ));
             return true;
         };
-        for head in heads {
+        for (head, into) in heads {
+            if into != base {
+                continue;
+            }
             if head == tip
                 || self
                     .git
@@ -454,9 +561,9 @@ impl<'a> Repos<'a> {
         true
     }
 
-    /// The heads of the merged PRs from `branch`: on GitHub from the repo's recent merged PRs,
-    /// read once (`MERGED_PRS`); on GitLab, asked for that branch.
-    async fn merged_heads(&mut self, clone: &Path, branch: &str) -> Option<Vec<String>> {
+    /// The (head, base) of the merged PRs from `branch`: on GitHub from the repo's recent merged
+    /// PRs, read once (`MERGED_PRS`); on GitLab, asked for that branch.
+    async fn merged_heads(&mut self, clone: &Path, branch: &str) -> Option<Vec<(String, String)>> {
         let forge = self.d.settings.get().forge;
         if forge == chauffeur_protocol::client::Forge::Gitlab {
             let prs = crate::prs::pr_list(
@@ -465,12 +572,21 @@ impl<'a> Repos<'a> {
                 clone,
                 branch,
                 "merged",
-                "headRefOid",
+                "headRefOid,baseRefName",
             )
             .await?;
+            let base = self.refs(clone).await.base.clone();
             return Some(
                 prs.iter()
-                    .filter_map(|pr| pr["headRefOid"].as_str().map(String::from))
+                    .filter_map(|pr| {
+                        let head = pr["headRefOid"].as_str()?.to_string();
+                        Some((
+                            head,
+                            pr["baseRefName"]
+                                .as_str()
+                                .map_or_else(|| base.clone(), String::from),
+                        ))
+                    })
                     .collect(),
             );
         }
@@ -483,7 +599,7 @@ impl<'a> Repos<'a> {
     }
 
     /// A clone's branches, read once: its default branch, each branch's tip, those merged into
-    /// the default branch (their tip in `origin`'s, else the local one), its worktrees.
+    /// the default branch, its worktrees.
     async fn refs(&mut self, clone: &Path) -> &Refs {
         if !self.refs.contains_key(clone) {
             let refs = self.read_refs(clone).await;
@@ -493,25 +609,10 @@ impl<'a> Repos<'a> {
     }
 
     async fn read_refs(&self, clone: &Path) -> Refs {
-        let base = self
-            .git
-            .remote_default_branch(clone)
-            .await
-            .unwrap_or_else(|| "main".into());
-        let remote = format!("refs/remotes/origin/{base}");
-        let target = if self
-            .git
-            .ok(clone, &["rev-parse", "-q", "--verify", &remote])
-            .await
-        {
-            remote
-        } else {
-            format!("refs/heads/{base}")
-        };
-
+        let (base, target) = self.base(clone).await;
         let heads = [
             "for-each-ref",
-            "--format=%(refname:short) %(objectname)",
+            "--format=%(refname:lstrip=2) %(objectname)",
             "refs/heads",
         ];
         let tips = self
@@ -527,7 +628,7 @@ impl<'a> Repos<'a> {
             .collect();
         let in_base = [
             "for-each-ref",
-            "--format=%(refname:short)",
+            "--format=%(refname:lstrip=2)",
             "--merged",
             &target,
             "refs/heads",
@@ -540,13 +641,78 @@ impl<'a> Repos<'a> {
             .lines()
             .map(String::from)
             .collect();
-        let worktrees = self.git.worktree_list(clone).await.unwrap_or_default();
+        let worktrees = self
+            .git
+            .worktree_list(clone)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| crate::git::WorktreeEntry {
+                path: real(&e.path),
+                ..e
+            })
+            .collect();
         Refs {
             base,
             tips,
             merged,
             worktrees,
         }
+    }
+
+    /// The clone's default branch and the ref holding it: as the user set it for the repo, else
+    /// as the base remote (a fork's parent, else `origin`) names it when it still has that branch,
+    /// else `main` or `master`, whichever it has; the remote's copy when there is one.
+    async fn base(&self, clone: &Path) -> (String, String) {
+        let remote = self.git.base_remote(clone).await;
+        let has = |reference: String| async move {
+            self.git
+                .ok(clone, &["rev-parse", "-q", "--verify", &reference])
+                .await
+                .then_some(reference)
+        };
+        let set = self.names.get(clone).and_then(|name| {
+            let settings = self.d.settings.get();
+            settings
+                .repos
+                .get(crate::repos::repo_folder(name))
+                .and_then(|r| r.default_branch.clone())
+        });
+        let named = self
+            .git
+            .run(
+                clone,
+                &[
+                    "symbolic-ref",
+                    "-q",
+                    "--short",
+                    &format!("refs/remotes/{remote}/HEAD"),
+                ],
+            )
+            .await
+            .ok()
+            .and_then(|r| {
+                r.trim()
+                    .strip_prefix(&format!("{remote}/"))
+                    .map(String::from)
+            });
+        let mut candidates: Vec<String> = set.into_iter().collect();
+        candidates.extend(named);
+        candidates.extend(["main".to_string(), "master".to_string()]);
+        for branch in &candidates {
+            if let Some(found) = has(format!("refs/remotes/{remote}/{branch}")).await {
+                return (branch.clone(), found);
+            }
+            if let Some(found) = has(format!("refs/heads/{branch}")).await {
+                return (branch.clone(), found);
+            }
+        }
+        let first = candidates
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "main".into());
+        let target = format!("refs/heads/{first}");
+        (first, target)
     }
 
     /// The clone is on its default branch with uncommitted changes.
@@ -566,27 +732,25 @@ impl<'a> Repos<'a> {
             .is_ok_and(|out| !out.trim().is_empty())
     }
 
-    /// Where a live branch is checked out: the clone or one of the user's worktrees, not
-    /// Chauffeur's.
+    /// Where a live branch is checked out: one of the repo's clones or the user's worktrees,
+    /// not Chauffeur's.
     async fn holders(&mut self, repo: &str, branch: &str) -> Vec<ClaudeCodeRelease> {
-        let Some(clone) = self.clones.get(repo).cloned() else {
-            return Vec::new();
-        };
         let workspaces = self.d.paths.workspaces_dir.clone();
-        self.refs(&clone)
-            .await
-            .worktrees
-            .iter()
-            .filter(|e| {
-                e.branch.as_deref() == Some(branch)
+        let mut releases = Vec::new();
+        for clone in self.clones.get(repo).cloned().unwrap_or_default() {
+            for e in &self.refs(&clone).await.worktrees {
+                if e.branch.as_deref() == Some(branch)
                     && !e.prunable
                     && !e.path.starts_with(&workspaces)
-            })
-            .map(|e| ClaudeCodeRelease {
-                repo: repo.to_string(),
-                branch: branch.to_string(),
-                folder: e.path.to_string_lossy().into_owned(),
-            })
-            .collect()
+                {
+                    releases.push(ClaudeCodeRelease {
+                        repo: repo.to_string(),
+                        branch: branch.to_string(),
+                        folder: e.path.to_string_lossy().into_owned(),
+                    });
+                }
+            }
+        }
+        releases
     }
 }

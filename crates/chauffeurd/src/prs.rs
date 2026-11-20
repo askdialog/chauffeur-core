@@ -563,13 +563,13 @@ async fn open_prs(forge: Forge, env: &ShellEnv, clone: &Path) -> Option<Vec<Valu
     }
 }
 
-/// The head commits of a GitHub repo's merged PRs, by branch name: the `limit` most recent, in one
-/// `gh pr list`; `None` when gh fails.
+/// A GitHub repo's merged PRs, (head commit, base branch) by branch name: the `limit` most
+/// recent, in one `gh pr list`; `None` when gh fails.
 pub(crate) async fn merged_heads(
     env: &ShellEnv,
     clone: &Path,
     limit: u32,
-) -> Option<HashMap<String, Vec<String>>> {
+) -> Option<HashMap<String, Vec<(String, String)>>> {
     let limit = limit.to_string();
     let args = [
         "pr",
@@ -579,15 +579,19 @@ pub(crate) async fn merged_heads(
         "--limit",
         &limit,
         "--json",
-        "headRefName,headRefOid",
+        "headRefName,headRefOid,baseRefName",
     ];
-    let mut heads: HashMap<String, Vec<String>> = HashMap::new();
+    let mut heads: HashMap<String, Vec<(String, String)>> = HashMap::new();
     for pr in gh_json(env, clone, &args).await? {
-        if let (Some(name), Some(oid)) = (pr["headRefName"].as_str(), pr["headRefOid"].as_str()) {
+        if let (Some(name), Some(oid), Some(base)) = (
+            pr["headRefName"].as_str(),
+            pr["headRefOid"].as_str(),
+            pr["baseRefName"].as_str(),
+        ) {
             heads
                 .entry(name.to_string())
                 .or_default()
-                .push(oid.to_string());
+                .push((oid.to_string(), base.to_string()));
         }
     }
     Some(heads)
