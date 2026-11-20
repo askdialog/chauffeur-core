@@ -3,7 +3,7 @@
 // what the page says.
 
 import { mobileAuthContext } from "./mobileAuthContext";
-import type { CanvasResult, CommentAuthor, EventEnvelope, ShareAbout, ShareSnapshot, ShareStatus, SignInLinkParams, SignInLinkSessionParams, WorkspaceShareSnapshot } from "@chauffeur/protocol";
+import type { CanvasResult, CommentAuthor, DesignQuestionResult, DesignVoteParams, EventEnvelope, ShareAbout, ShareSnapshot, ShareStatus, SignInLinkParams, SignInLinkSessionParams, WorkspaceShareSnapshot } from "@chauffeur/protocol";
 
 export class ServiceError extends Error {
   constructor(
@@ -58,6 +58,9 @@ export const api = {
   signOut: () => call<void>("/v1/session", { method: "DELETE" }),
   snapshot: (id: string) => call<ShareSnapshot>(`/v1/shares/${id}/snapshot`),
   canvas: (id: string) => call<CanvasResult>(`/v1/shares/${id}/canvas`),
+  questions: (id: string) => call<DesignQuestionResult[]>(`${base("design", id)}/questions`),
+  vote: (id: string, question: string, answer: DesignVoteParams) =>
+    call<DesignQuestionResult[]>(`${base("design", id)}/questions/${encodeURIComponent(question)}/vote`, json(answer)),
   /** A markdown file's share (story 57): the file's text. */
   document: async (id: string, name: string): Promise<string> => {
     const response = await fetch(`/v1/shares/${id}/files/${encodeURIComponent(name)}`, { credentials: "same-origin", cache: "no-store" });

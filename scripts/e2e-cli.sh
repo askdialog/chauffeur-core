@@ -328,6 +328,9 @@ c share "$DESIGN" | has "not shared"
 refuses "Set office.google_client_id" c share "$DESIGN" --with bob@example.com
 refuses "Set office.google_client_id" c share "$DESIGN" --team
 refuses "only a design chat is shared" c share "$FIRST"
+echo "== design questions. an unshared canvas cannot publish to reviewers"
+refuses "Share the design before publishing questions" bun scripts/app-call.ts design.question_publish \
+  "{\"chat\":\"$DESIGN\",\"question\":{\"id\":\"question-1\",\"text\":\"Which design?\",\"options\":[]}}"
 # Workspace sharing (story 53): unshared at first; refused without the sign-in; no suggestion to dismiss.
 c share-workspace e2e-one | has "not shared"
 refuses "Set office.google_client_id" c share-workspace e2e-one --suggest bob@example.com

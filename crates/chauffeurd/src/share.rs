@@ -16,8 +16,8 @@ use chauffeur_protocol::client::{
     FilesLinkedResult, ReviewerComment, ShareConnection, ShareStartParams, SharedDesignsResult,
 };
 use chauffeur_protocol::design_share::{
-    FromDaemon, SHARE_PROTOCOL_VERSION, ShareParams, ShareSnapshot, ShareStatus, SharedDesign,
-    ToDaemon,
+    DesignQuestion, DesignQuestionResult, FromDaemon, SHARE_PROTOCOL_VERSION, ShareParams,
+    ShareSnapshot, ShareStatus, SharedDesign, ToDaemon,
 };
 use chauffeur_protocol::events::{ChatEvent, WorkspaceEvent};
 use chauffeur_protocol::model::{ChatInfo, ChatKind};
@@ -960,6 +960,45 @@ impl Shares {
         self.publish(workspace_id, key);
         held_back(notice)?;
         Ok(self.state_of(key))
+    }
+
+    pub async fn questions(
+        &self,
+        chat_key: &str,
+        publish: Option<&DesignQuestion>,
+    ) -> Result<Vec<DesignQuestionResult>> {
+        let d = self.d();
+        let chat = d.chats.resolve(chat_key)?;
+        if chat.kind != ChatKind::Design {
+            return Err(Error::BadRequest("Questions require a design chat".into()));
+        }
+        let row = d
+            .store
+            .design_share(&chat.id)?
+            .filter(|r| r.stopped_at.is_none())
+            .ok_or_else(|| {
+                Error::NotFound("Share the design before publishing questions".into())
+            })?;
+        let base = self
+            .base_url()
+            .ok_or_else(|| Error::Unavailable("Design sharing is off".into()))?;
+        let url = format!("{base}/v1/shares/{}/questions", row.share_id);
+        let token = self.token().await.map_err(Error::Unavailable)?;
+        let request = match publish {
+            Some(question) => self.http.post(url).json(question),
+            None => self.http.get(url),
+        };
+        let response = request.bearer_auth(token).send().await.map_err(|error| {
+            Error::Unavailable(format!("Could not reach the share service: {error}"))
+        })?;
+        accepted(response)
+            .await
+            .map_err(Error::Unavailable)?
+            .json()
+            .await
+            .map_err(|error| {
+                Error::Internal(anyhow::anyhow!("the share service's questions: {error}"))
+            })
     }
 
     /// Stops a share: the service drops its copy, the link ends, the comments stay local.

@@ -6,7 +6,7 @@
 // share both drive it.
 
 import type { CanvasScreen } from "@chauffeur/protocol";
-import { ImageDown, Maximize2 } from "lucide-react";
+import { Check, ImageDown, Maximize2 } from "lucide-react";
 import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type CanvasLayout,
@@ -81,6 +81,7 @@ export function CanvasViewport({
   onToggleCommentMode,
   popover,
   snapshots,
+  attachment,
 }: {
   layout: CanvasLayout;
   zoom: View;
@@ -112,6 +113,7 @@ export function CanvasViewport({
   popover: ReactNode;
   /** The picture laid over each screen occurrence, by its layout id; none on a share's reviewer page. */
   snapshots?: Record<string, Snapshot>;
+  attachment?: { selected: string[]; onToggle: (file: string) => void };
 }) {
   const element = useRef<HTMLDivElement>(null);
   const frames = useRef(new Map<string, { file: string; frame: HTMLIFrameElement }>());
@@ -336,6 +338,10 @@ export function CanvasViewport({
           }
           return;
         }
+        if (attachment) {
+          if (start.file) attachment.onToggle(start.file);
+          return;
+        }
         // A click: on a screen it selects it (⇧ adds or takes out), beside the screens it clears.
         onSelect(start.file ? toggleSelection(selection, start.file, start.additive) : start.additive ? selection : []);
       }}
@@ -458,12 +464,23 @@ export function CanvasViewport({
                       </span>
                       {published[file] && <PublishedLink url={published[file]} />}
                     </div>
-                    {selected.has(file) && (
+                    {(selected.has(file) || attachment?.selected.includes(file)) && (
                       <div
                         className="absolute rounded-[3px] ring-2 ring-accent"
                         style={{ left: left - 2, top: row - 2, width: width + 4, height: height + 4 }}
                         data-testid="canvas-selected"
                       />
+                    )}
+                    {attachment && placed.screen.url && (
+                      <IconButton
+                        title={`Attach ${placed.screen.label || file}`}
+                        aria-pressed={attachment.selected.includes(file)}
+                        className={cx("pointer-events-auto absolute border border-line-strong", attachment.selected.includes(file) ? "bg-accent-strong text-white hover:bg-accent-strong" : "bg-raised")}
+                        style={{ left: left + Math.max(0, width - 29), top: row + 5 }}
+                        onClick={() => attachment.onToggle(file)}
+                      >
+                        {attachment.selected.includes(file) && <Check size={14} />}
+                      </IconButton>
                     )}
                     {flash[file] != null && (
                       <div

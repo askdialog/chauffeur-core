@@ -14,6 +14,7 @@ use crate::Identity;
 mod digest;
 mod mail;
 mod mentions;
+pub(crate) mod questions;
 mod workspace;
 
 pub use digest::{DueDigest, WantedDigest};
@@ -113,6 +114,7 @@ impl Store {
         conn.execute_batch(mail::SCHEMA)?;
         conn.execute_batch(mentions::SCHEMA)?;
         conn.execute_batch(digest::SCHEMA)?;
+        conn.execute_batch(questions::SCHEMA)?;
         let has = |table: &str, column: &str| -> rusqlite::Result<bool> {
             conn.prepare(&format!(
                 "SELECT 1 FROM pragma_table_info('{table}') WHERE name = '{column}'"
@@ -207,7 +209,10 @@ impl Store {
     }
 
     pub fn share(&self, id: &str) -> anyhow::Result<Option<ShareRow>> {
-        let conn = self.conn.lock().unwrap();
+        Self::share_in(&self.conn.lock().unwrap(), id)
+    }
+
+    fn share_in(conn: &Connection, id: &str) -> anyhow::Result<Option<ShareRow>> {
         let row = conn
             .query_row(
                 &format!("SELECT {SHARE_COLUMNS} FROM shares WHERE id = ?1"),
@@ -218,7 +223,7 @@ impl Store {
         let Some(mut share) = row else {
             return Ok(None);
         };
-        share.reviewers = reviewers_of(&conn, id)?;
+        share.reviewers = reviewers_of(conn, id)?;
         Ok(Some(share))
     }
 
@@ -271,10 +276,14 @@ impl Store {
     }
 
     pub fn stop_share(&self, id: &str, now: u64) -> anyhow::Result<()> {
-        self.conn.lock().unwrap().execute(
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute(
             "UPDATE shares SET stopped_at = ?2 WHERE id = ?1 AND stopped_at IS NULL",
             params![id, now as i64],
         )?;
+        tx.execute("DELETE FROM design_questions WHERE share_id = ?1", [id])?;
+        tx.commit()?;
         Ok(())
     }
 

@@ -17,6 +17,58 @@ pub const SHARE_PROTOCOL_VERSION: u32 = 1;
 /// selectors still match.
 pub const DESIGN_CAPTURE_SCRIPT: &str = include_str!("design_capture.js");
 
+/// One answer choice, anchored to a screen by its path in the canvas.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[ts(export)]
+pub struct DesignQuestionOption {
+    pub file: String,
+    pub label: String,
+}
+
+/// A question's choices and wording are fixed once it is published.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[ts(export)]
+pub struct DesignQuestion {
+    /// Chosen by the authoring client so retrying a publication cannot create a duplicate.
+    pub id: String,
+    pub text: String,
+    pub options: Vec<DesignQuestionOption>,
+}
+
+/// A named answer visible to the owner and reviewers who already answered this question.
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct DesignQuestionVote {
+    pub name: String,
+    pub file: String,
+    pub note: String,
+    pub mine: bool,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct DesignQuestionResult {
+    pub question: DesignQuestion,
+    /// Absent until the viewer votes, except for the owner who can always see results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub votes: Option<Vec<DesignQuestionVote>>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct DesignVoteParams {
+    pub file: String,
+    pub note: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct DesignQuestionPublishParams {
+    pub chat: String,
+    pub question: DesignQuestion,
+}
+
 /// A share as its owner's daemon sees it.
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[ts(export)]

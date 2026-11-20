@@ -22,6 +22,9 @@ import { usePins } from "@/components/design/usePins";
 import { type CommentActions, MarkdownComments } from "@/components/MarkdownComments";
 import { FileLinkContext, type FileLinker } from "@/components/FileLinks";
 import { Button, cx, Select, type SelectOption, Spinner } from "@/components/ui";
+import type { DesignVoteParams } from "@chauffeur/protocol";
+import { DesignQuestions, QuestionsButton } from "@/components/design/DesignQuestions";
+import { useQuestionScreens } from "@/components/design/useQuestionScreens";
 import { api, type ServiceConfig, ServiceError, type ShareKind } from "./api";
 import { renderSignIn } from "./google";
 import icon from "./icon.png";
@@ -801,7 +804,7 @@ function OpenShare({
   const layout = useMemo(() => layoutCanvas(sections), [sections]);
   const steps = useMemo(() => presentOrder(sections), [sections]);
   const [selection, setSelection] = useState<string[]>([]);
-  const { zoom, area, setArea, moveView, fit, zoomTo } = useCanvasView(layout, pageIndex);
+  const { zoom, area, setArea, moveView, fit, zoomTo, reveal } = useCanvasView(layout, pageIndex);
   const [fullScreen, setFullScreen] = useState<number | null>(null);
   const [presenting, setPresenting] = useState<number | null>(null);
   const empty = noScreens(live.canvas);
@@ -814,6 +817,26 @@ function OpenShare({
   const [draft, setDraft] = useState<Draft | null>(null);
   const [openThread, setOpenThread] = useState<string | null>(null);
   const [panel, setPanel] = useState(false);
+  const [questionsOpen, setQuestionsOpen] = useState(false);
+  const questionsButton = useRef<HTMLButtonElement>(null);
+  const questionScreens = useQuestionScreens(live.canvas, pageIndex, setPage, setSelection, reveal);
+  const loadQuestions = useCallback(() => api.questions(id), [id]);
+  const vote = (question: string, answer: DesignVoteParams) => api.vote(id, question, answer);
+  const closeQuestions = () => {
+    setQuestionsOpen(false);
+    questionsButton.current?.focus();
+  };
+  const toggleQuestions = () => {
+    if (questionsOpen) {
+      closeQuestions();
+      return;
+    }
+    setQuestionsOpen(true);
+    setPanel(false);
+    setCommentMode(false);
+    setDraft(null);
+    setOpenThread(null);
+  };
   const [filter, setFilter] = useState<Filter>("open");
   const shownThread = openThread ? (threads.find((t) => t.comment.id === openThread) ?? null) : null;
   const labelOf = useCallback(
@@ -892,6 +915,7 @@ function OpenShare({
     if (takeOverOpen) setTakeOverOpen(false);
     else if (reviewersOpen) setReviewersOpen(false);
     else if (peopleOpen) setPeopleOpen(false);
+    else if (questionsOpen) closeQuestions();
     else if (draft) setDraft(null);
     else if (openThread) setOpenThread(null);
     else if (panel) setPanel(false);
@@ -946,6 +970,7 @@ function OpenShare({
   const commenting: ScreenCommenting = {
     commentMode,
     onToggleCommentMode: () => {
+      if (questionsOpen) closeQuestions();
       setCommentMode((on) => !on);
       setDraft(null);
     },
@@ -1180,8 +1205,7 @@ function OpenShare({
             size="sm"
             variant={commentMode ? "secondary" : "ghost"}
             onClick={() => {
-              setCommentMode((on) => !on);
-              setDraft(null);
+              commenting.onToggleCommentMode();
             }}
             disabled={layout.sections.length === 0}
             title={commentMode ? "Leave Comment mode (C or Esc)" : "Comment mode (C): click a screen to comment on it, its label for the whole screen"}
@@ -1190,10 +1214,14 @@ function OpenShare({
           >
             <MessageSquarePlus size={12} /> <span className="hidden @[640px]:inline">Comment</span>
           </Button>
-          <Button size="sm" variant={panel ? "secondary" : "ghost"} onClick={() => setPanel((on) => !on)} title="The comments, by screen" aria-pressed={panel} data-testid="canvas-comments">
+          <Button size="sm" variant={panel ? "secondary" : "ghost"} onClick={() => {
+            if (questionsOpen) closeQuestions();
+            setPanel((on) => !on);
+          }} title="The comments, by screen" aria-pressed={panel} data-testid="canvas-comments">
             <MessageSquareText size={12} /> <span className="hidden @[640px]:inline">Comments</span>
             {counts.open > 0 && <span className="rounded-full bg-accent/15 px-1 text-[10.5px] text-accent">{counts.open}</span>}
           </Button>
+          <QuestionsButton open={questionsOpen} onClick={toggleQuestions} buttonRef={questionsButton} />
         </div>
       </div>
       {live.canvas.error && (
@@ -1202,62 +1230,65 @@ function OpenShare({
           <span className="min-w-0 selectable">canvas.json is invalid: {live.canvas.error}. The screens are sorted automatically.</span>
         </div>
       )}
-      <div className="relative min-h-0 flex-1">
-        {empty ? (
-          <div className="flex h-full items-center justify-center p-6 text-center text-[12.5px] text-faint" data-testid="canvas-empty">
-            No screens yet.
-          </div>
-        ) : (
-          <CanvasViewport
-            layout={layout}
-            zoom={zoom}
-            area={area}
-            setZoom={moveView}
-            onArea={setArea}
-            selection={selection}
-            onSelect={setSelection}
-            flash={flash}
-            commentMode={commentMode}
-            pins={pins}
-            draft={draft}
-            openThread={shownThread}
-            onFrame={onFrame}
-            onCommentAt={startComment}
-            onOpenThread={commenting.onOpenThread}
-            onEscape={escape}
-            onToggleCommentMode={commenting.onToggleCommentMode}
-            popover={overlay ? null : popover}
-            onFullScreen={setFullScreen}
-            onFit={fit}
-            onActualSize={() => zoomTo(1)}
-            published={NO_PUBLISHED}
-          />
-        )}
-        {panel && (
-          <CommentsPanel
-            me={me.email}
-            unread={unreadSet}
-            threads={threads}
-            counts={counts}
-            stale={stale}
-            busy={false}
-            error={null}
-            filter={filter}
-            labelOf={labelOf}
-            onFilter={setFilter}
-            onOpen={(thread) => {
-              setDraft(null);
-              setOpenThread(thread.comment.id);
-            }}
-            onResolve={(threadId, resolved) => say({ type: "resolve", id: threadId, resolved })}
-            onClose={() => setPanel(false)}
-          />
-        )}
-        {toast && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center" data-testid="share-toast">
-            <div className="rounded-md border border-line-strong bg-raised px-3 py-1.5 text-[12px] text-fg shadow-xl selectable">{toast}</div>
-          </div>
-        )}
+      <div className="flex min-h-0 flex-1">
+        <div className="relative min-w-0 flex-1">
+          {empty ? (
+            <div className="flex h-full items-center justify-center p-6 text-center text-[12.5px] text-faint" data-testid="canvas-empty">
+              No screens yet.
+            </div>
+          ) : (
+            <CanvasViewport
+              layout={layout}
+              zoom={zoom}
+              area={area}
+              setZoom={moveView}
+              onArea={setArea}
+              selection={selection}
+              onSelect={setSelection}
+              flash={flash}
+              commentMode={commentMode}
+              pins={pins}
+              draft={draft}
+              openThread={shownThread}
+              onFrame={onFrame}
+              onCommentAt={startComment}
+              onOpenThread={commenting.onOpenThread}
+              onEscape={escape}
+              onToggleCommentMode={commenting.onToggleCommentMode}
+              popover={overlay ? null : popover}
+              onFullScreen={setFullScreen}
+              onFit={fit}
+              onActualSize={() => zoomTo(1)}
+              published={NO_PUBLISHED}
+            />
+          )}
+          {panel && (
+            <CommentsPanel
+              me={me.email}
+              unread={unreadSet}
+              threads={threads}
+              counts={counts}
+              stale={stale}
+              busy={false}
+              error={null}
+              filter={filter}
+              labelOf={labelOf}
+              onFilter={setFilter}
+              onOpen={(thread) => {
+                setDraft(null);
+                setOpenThread(thread.comment.id);
+              }}
+              onResolve={(threadId, resolved) => say({ type: "resolve", id: threadId, resolved })}
+              onClose={() => setPanel(false)}
+            />
+          )}
+          {toast && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center" data-testid="share-toast">
+              <div className="rounded-md border border-line-strong bg-raised px-3 py-1.5 text-[12px] text-fg shadow-xl selectable">{toast}</div>
+            </div>
+          )}
+        </div>
+      <DesignQuestions open={questionsOpen} load={loadQuestions} vote={owner ? undefined : vote} {...questionScreens} onClose={closeQuestions} />
       </div>
       </>
       )}
