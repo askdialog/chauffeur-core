@@ -665,12 +665,14 @@ export async function loadUsage(refresh = false): Promise<void> {
  */
 export async function signIn(agent: AgentKind): Promise<void> {
   const name = AGENT_NAMES[agent];
+  set((s) => ({ signingIn: [...s.signingIn.filter((a) => a !== agent), agent] }));
   try {
     const { url } = await client.call("agent.login", { agent });
-    set((s) => ({ signingIn: [...s.signingIn.filter((a) => a !== agent), agent] }));
+    if (!get().signingIn.includes(agent)) return;
     await openExternal(url);
     toast(`Finish signing in to ${name} in your browser`);
   } catch (error) {
+    set((s) => ({ signingIn: s.signingIn.filter((a) => a !== agent) }));
     const workspace = get().selectedId;
     const command = loginCommand(agent);
     if (workspace && get().workspaces[workspace]?.state === "ready") {
@@ -1613,7 +1615,10 @@ function onRegistry(envelope: EventEnvelope) {
     // The reading says whether it is news (a replay after a reconnection is not).
     void loadUsage().catch(() => {});
   } else if (event.event.type === "login_ended") {
-    // A worker's login is followed by state/workerLogins; this machine's by `account_changed`.
+    const { agent, worker, success, error } = event.event;
+    if (worker || !get().signingIn.includes(agent)) return;
+    set((s) => ({ signingIn: s.signingIn.filter((a) => a !== agent) }));
+    if (!success) toast(`${AGENT_NAMES[agent]} could not sign in: ${error ?? "try signing in again"}`, "error");
   } else if (event.event.type === "chat_removed") {
     removeChat(event.event.chat_id);
   } else if (event.event.type === "idle_reminder") {

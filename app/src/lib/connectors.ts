@@ -60,7 +60,9 @@ export function brokenConnectors(chats: ChatInfo[], agent: AgentKind, connecting
 
 /** The command that logs an agent in from a terminal, when Chauffeur cannot do it itself. */
 export function loginCommand(agent: AgentKind): string {
-  return agent === "claude" ? "claude auth login" : "codex login";
+  if (agent === "claude") return "claude auth login";
+  if (agent === "vibe") return "vibe --setup";
+  return "codex login";
 }
 
 /** The command that logs an agent's MCP server in from a terminal opened in its workspace. */

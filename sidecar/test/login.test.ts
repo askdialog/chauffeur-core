@@ -3,7 +3,9 @@ import { claudeLogin, claudeLoginCancel, claudeLoginCode } from "../src/agents/c
 import { claudeUsage } from "../src/agents/claude/usage.ts";
 import { codexLogin, codexLoginCancel } from "../src/agents/codex/login.ts";
 import { readCodexUsage } from "../src/agents/codex/usage.ts";
+import { vibeLogin } from "../src/agents/vibe/account.ts";
 import { silentLogger } from "../src/log.ts";
+import { FakeAcp } from "./support/acp-fakes.ts";
 import { FakeAppServer, HOOK } from "./support/codex-fakes.ts";
 import { FakeQuery, flush } from "./support/fakes.ts";
 
@@ -60,6 +62,44 @@ function claudeDeps(prepare: (query: LoginQuery) => void) {
 }
 
 describe("agent accounts", () => {
+  test.each([
+    ["completed", true, null],
+    ["completed", false, "a new Vibe process could not read the credentials"],
+    ["save_error:permission denied", false, "Vibe could not save its credentials"],
+  ] as const)("Vibe checks saved credentials after browser sign-in (%s, authenticated: %s)", async (persistResult, authenticated, error) => {
+    const processes: FakeAcp[] = [];
+    const deps = {
+      baseEnv: {},
+      resolveExecutable: () => "/usr/bin/vibe-acp",
+      spawn(options: ConstructorParameters<typeof FakeAcp>[0]) {
+        const signIn = processes.length === 0;
+        const process = new FakeAcp(options);
+        processes.push(process);
+        const request = process.request.bind(process);
+        process.request = async <T>(method: string, params: unknown): Promise<T> => {
+          if (signIn && method === "authenticate") {
+            const details = params && typeof params === "object" && "action" in params && params.action === "start"
+              ? { attemptId: "vibe-login", signInUrl: "https://example.com/vibe" }
+              : { persistResult };
+            return { _meta: { "browser-auth-delegated": details } } as T;
+          }
+          if (method === "_auth/status") {
+            expect(signIn).toBe(false);
+            expect(processes[0]?.closed).toBe(true);
+            return { authenticated } as T;
+          }
+          return request<T>(method, params);
+        };
+        return process;
+      },
+    };
+    const done = Promise.withResolvers<[boolean, string | null]>();
+    expect(await vibeLogin(deps, silentLogger, (success, reason) => done.resolve([success, reason])))
+      .toEqual({ url: "https://example.com/vibe" });
+    expect(await done.promise).toEqual([error === null, error ? `${error}. Run \`vibe --setup\` in a terminal to sign in directly` : null]);
+    expect(processes).toHaveLength(persistResult === "completed" ? 2 : 1);
+  });
+
   test("Claude logged in to nothing reads as signed out, without asking its usage", async () => {
     const usage = await claudeUsage(
       claudeDeps((query) => {

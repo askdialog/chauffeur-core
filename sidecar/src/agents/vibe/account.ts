@@ -234,10 +234,10 @@ interface DelegatedSignIn {
   attemptId?: string;
   signInUrl?: string;
   expiresAt?: string;
-  status?: string;
+  persistResult?: string;
 }
 
-let login: { connection: AcpConnection; cancelled: boolean } | undefined;
+let login: { connection: AcpConnection; cancelled: "cancelled" | "replaced" | null } | undefined;
 
 /**
  * Vibe's own sign-in, delegated: Vibe gives the page to open (`browser-auth-delegated`), then
@@ -246,7 +246,7 @@ let login: { connection: AcpConnection; cancelled: boolean } | undefined;
  * expires. Vibe stores the key; Chauffeur never sees it.
  */
 export async function vibeLogin(deps: VibeSessionDeps, log: Logger, ended: (success: boolean, error: string | null) => void): Promise<AgentLoginResult> {
-  vibeLoginCancel();
+  cancelVibeLogin("replaced");
   const connection = deps.spawn({
     executable: deps.resolveExecutable(deps.baseEnv),
     args: [],
@@ -261,7 +261,7 @@ export async function vibeLogin(deps: VibeSessionDeps, log: Logger, ended: (succ
       },
     },
   });
-  const current = { connection, cancelled: false };
+  const current: NonNullable<typeof login> = { connection, cancelled: null };
   login = current;
   let started: DelegatedSignIn;
   try {
@@ -281,11 +281,10 @@ export async function vibeLogin(deps: VibeSessionDeps, log: Logger, ended: (succ
   const expiresAt = started.expiresAt ? Date.parse(started.expiresAt) : Date.now() + 10 * 60_000;
   void (async () => {
     let error: string | null = null;
-    let success = false;
+    let completion: { _meta?: { "browser-auth-delegated"?: DelegatedSignIn } } | undefined;
     while (!current.cancelled && Date.now() < expiresAt) {
       try {
-        await connection.request("authenticate", { methodId: "browser-auth-delegated", action: "complete", attemptId });
-        success = true;
+        completion = await connection.request("authenticate", { methodId: "browser-auth-delegated", action: "complete", attemptId });
         break;
       } catch (failure) {
         error = errorMessage(failure);
@@ -294,17 +293,34 @@ export async function vibeLogin(deps: VibeSessionDeps, log: Logger, ended: (succ
         await Bun.sleep(5_000);
       }
     }
-    if (login === current) login = undefined;
     await connection.close().catch(() => {});
+    if (completion && !current.cancelled) {
+      const persisted = completion._meta?.["browser-auth-delegated"]?.persistResult;
+      try {
+        // Vibe can complete the browser flow with a key that lives only in that process.
+        if (persisted && persisted !== "completed") throw new Error("Vibe could not save its credentials");
+        const status = await probeVibe(deps, log, "verify its sign-in", ({ connection }) => connection.request<AuthStatus>("_auth/status", {}));
+        error = status.authenticated ? null : "a new Vibe process could not read the credentials";
+      } catch (failure) {
+        error = errorMessage(failure);
+      }
+      if (error) error = `${error}. Run \`vibe --setup\` in a terminal to sign in directly`;
+    }
+    if (login === current) login = undefined;
+    if (current.cancelled === "replaced") return;
     if (current.cancelled) ended(false, "cancelled");
-    else ended(success, success ? null : (error ?? "the sign-in page expired"));
+    else ended(Boolean(completion) && error === null, completion ? error : (error ?? "the sign-in page expired"));
   })();
   return { url: started.signInUrl };
 }
 
 export function vibeLoginCancel(): void {
+  cancelVibeLogin("cancelled");
+}
+
+function cancelVibeLogin(reason: "cancelled" | "replaced"): void {
   if (!login) return;
-  login.cancelled = true;
+  login.cancelled = reason;
   void login.connection.close();
   login = undefined;
 }

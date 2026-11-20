@@ -137,6 +137,7 @@ describe("connectors", () => {
   test("the commands that log in from a terminal", () => {
     expect(loginCommand("claude")).toBe("claude auth login");
     expect(loginCommand("codex")).toBe("codex login");
+    expect(loginCommand("vibe")).toBe("vibe --setup");
     expect(mcpLoginCommand("claude", "claude.ai Linear")).toBe("claude /mcp");
     expect(mcpLoginCommand("codex", "neon")).toBe("codex mcp login neon");
     expect(mcpLoginCommand("codex", "it's")).toBe(`codex mcp login 'it'\\''s'`);
