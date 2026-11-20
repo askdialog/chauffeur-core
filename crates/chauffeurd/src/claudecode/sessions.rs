@@ -197,8 +197,15 @@ impl Reading {
     }
 
     fn saw(&mut self, stamp: &str) {
-        if self.last_active.as_deref().is_none_or(|last| stamp > last) {
-            self.last_active = Some(stamp.to_string());
+        let Some(stamp) = instant(stamp) else {
+            return;
+        };
+        if self
+            .last_active
+            .as_deref()
+            .is_none_or(|last| stamp.as_str() > last)
+        {
+            self.last_active = Some(stamp);
         }
     }
 
@@ -256,6 +263,20 @@ impl Reading {
 }
 
 /// A transcript line's time, read as text: its first `"timestamp":"…"` (keys are never escaped).
+/// A time as UTC with milliseconds (`2026-11-02T06:37:58.718Z`, as Claude Code writes it), so
+/// that times compare as text: another offset or precision is converted; none when it is no time.
+pub fn instant(stamp: &str) -> Option<String> {
+    let canonical = stamp.len() == 24 && stamp.ends_with('Z');
+    if canonical {
+        return Some(stamp.to_string());
+    }
+    let at = chrono::DateTime::parse_from_rfc3339(stamp).ok()?;
+    Some(
+        at.with_timezone(&chrono::Utc)
+            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+    )
+}
+
 fn stamp(line: &str) -> Option<&str> {
     let key = "\"timestamp\":\"";
     let start = line.find(key)? + key.len();
@@ -503,6 +524,23 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn times_compare_as_instants_whatever_their_offset_or_precision() {
+        assert_eq!(
+            instant("2026-11-02T06:37:58.718Z").as_deref(),
+            Some("2026-11-02T06:37:58.718Z")
+        );
+        assert_eq!(
+            instant("2026-11-02T08:37:58.7+02:00").as_deref(),
+            Some("2026-11-02T06:37:58.700Z")
+        );
+        assert_eq!(
+            instant("2026-11-02T06:37:58Z").as_deref(),
+            Some("2026-11-02T06:37:58.000Z")
+        );
+        assert!(instant("yesterday").is_none());
     }
 
     #[test]

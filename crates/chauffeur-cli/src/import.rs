@@ -87,9 +87,17 @@ pub async fn run(source: Source, client: &mut Client, json: bool) -> anyhow::Res
                 },
                 None => (None, None),
             };
-            // The daemon runs elsewhere: a relative folder is the one from here.
+            // The daemon runs elsewhere: `~` is the home folder, a relative folder the one from here.
             let claude_dir = claude_dir
-                .map(|dir| std::path::absolute(&dir).map(|p| p.to_string_lossy().into_owned()))
+                .map(
+                    |dir| match (dir.strip_prefix("~/"), std::env::var_os("HOME")) {
+                        (Some(rest), Some(home)) => Ok(std::path::Path::new(&home)
+                            .join(rest)
+                            .to_string_lossy()
+                            .into_owned()),
+                        _ => std::path::absolute(&dir).map(|p| p.to_string_lossy().into_owned()),
+                    },
+                )
                 .transpose()?;
             let params = ClaudeCodeImportParams {
                 since_days,

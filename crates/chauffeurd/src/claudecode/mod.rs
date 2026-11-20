@@ -108,7 +108,7 @@ pub async fn import(
         };
         // Chauffeur's own chats are Claude Code sessions too, run through the Agent SDK (as other
         // apps' are): only sessions of Claude Code itself, in a terminal or an editor, come.
-        if folder.starts_with(&d.paths.workspaces_dir)
+        if real(&folder).starts_with(real(&d.paths.workspaces_dir))
             || session
                 .entrypoint
                 .as_deref()
@@ -291,6 +291,8 @@ struct Repos<'a> {
     refs: HashMap<PathBuf, Refs>,
     /// Clones without a GitHub remote, warned about once.
     unnamed: BTreeSet<PathBuf>,
+    /// Chauffeur's workspaces folder, resolved as git names folders.
+    workspaces: PathBuf,
     warnings: Vec<String>,
 }
 
@@ -310,6 +312,7 @@ impl<'a> Repos<'a> {
             merged: HashMap::new(),
             refs: HashMap::new(),
             unnamed: BTreeSet::new(),
+            workspaces: real(&d.paths.workspaces_dir),
             warnings: Vec::new(),
         }
     }
@@ -340,7 +343,7 @@ impl<'a> Repos<'a> {
                 .ok()?
                 .trim(),
         );
-        if top.starts_with(&self.d.paths.workspaces_dir) {
+        if top.starts_with(&self.workspaces) {
             return None;
         }
         let common = self
@@ -506,7 +509,7 @@ impl<'a> Repos<'a> {
     }
 
     async fn read_live(&mut self, clone: &Path, branch: &str) -> bool {
-        let workspaces = self.d.paths.workspaces_dir.clone();
+        let workspaces = self.workspaces.clone();
         let refs = self.refs(clone).await;
         if branch == refs.base {
             return false;
@@ -595,7 +598,32 @@ impl<'a> Repos<'a> {
             self.merged.insert(clone.to_path_buf(), heads);
         }
         let heads = self.merged.get(clone)?.as_ref()?;
-        Some(heads.get(branch).cloned().unwrap_or_default())
+        if let Some(found) = heads.get(branch) {
+            return Some(found.clone());
+        }
+        // The list stopped at its limit: an older PR is asked for by its branch.
+        if heads.values().map(Vec::len).sum::<usize>() < MERGED_PRS as usize {
+            return Some(Vec::new());
+        }
+        let prs = crate::prs::pr_list(
+            forge,
+            &self.d.shell_env,
+            clone,
+            branch,
+            "merged",
+            "headRefOid,baseRefName",
+        )
+        .await?;
+        Some(
+            prs.iter()
+                .filter_map(|pr| {
+                    Some((
+                        pr["headRefOid"].as_str()?.to_string(),
+                        pr["baseRefName"].as_str()?.to_string(),
+                    ))
+                })
+                .collect(),
+        )
     }
 
     /// A clone's branches, read once: its default branch, each branch's tip, those merged into
@@ -735,7 +763,7 @@ impl<'a> Repos<'a> {
     /// Where a live branch is checked out: one of the repo's clones or the user's worktrees,
     /// not Chauffeur's.
     async fn holders(&mut self, repo: &str, branch: &str) -> Vec<ClaudeCodeRelease> {
-        let workspaces = self.d.paths.workspaces_dir.clone();
+        let workspaces = self.workspaces.clone();
         let mut releases = Vec::new();
         for clone in self.clones.get(repo).cloned().unwrap_or_default() {
             for e in &self.refs(&clone).await.worktrees {

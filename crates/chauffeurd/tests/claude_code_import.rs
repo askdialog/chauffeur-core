@@ -167,6 +167,8 @@ fn fixture() -> Fixture {
     std::fs::create_dir_all(&inside).unwrap();
     // A PR from feat/released merged into a release branch, not into main.
     let released = branch_at("feat/released", "released.txt");
+    // Squash-merged long ago: past the merged PRs the list returns, found by its branch.
+    let old_squash = branch_at("feat/old-squash", "old-squash.txt");
     // Worktrees inside the clone: .wt/y deleted by hand (git still lists it), .wt/z removed.
     branch_at("feat/y", "y.txt");
     branch_at("feat/z", "z.txt");
@@ -247,7 +249,9 @@ fn fixture() -> Fixture {
     let gh = bin.join("gh");
     std::fs::write(
         &gh,
-        format!("#!/bin/sh\ncase \"$PWD\" in */api) exit 1 ;; esac\ncase \"$*\" in\n  *--state\\ merged*) echo '[{{\"headRefName\":\"feat/squashed\",\"headRefOid\":\"{squashed}\",\"baseRefName\":\"main\"}},{{\"headRefName\":\"feat/released\",\"headRefOid\":\"{released}\",\"baseRefName\":\"release\"}}]' ;;\n  *) exit 1 ;;\nesac\n"),
+        format!(
+            "#!/bin/sh\ncase \"$PWD\" in */api) exit 1 ;; esac\ncase \"$*\" in\n  *--head\\ feat/old-squash*) echo '[{{\"headRefOid\":\"{old_squash}\",\"baseRefName\":\"main\"}}]' ;;\n  *--head*) echo '[]' ;;\n  *--state\\ merged*) printf '['; i=0; while [ $i -lt 1000 ]; do printf '{{\"headRefName\":\"other-%s\",\"headRefOid\":\"x\",\"baseRefName\":\"main\"}},' $i; i=$((i+1)); done; echo '{{\"headRefName\":\"feat/squashed\",\"headRefOid\":\"{squashed}\",\"baseRefName\":\"main\"}},{{\"headRefName\":\"feat/released\",\"headRefOid\":\"{released}\",\"baseRefName\":\"release\"}}]' ;;\n  *) exit 1 ;;\nesac\n"
+        ),
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
@@ -336,6 +340,12 @@ fn fixture() -> Fixture {
             ),
             line(&web, "main", &ago(10), &edit(&web.join("README.md"))),
             line(&web, "main", &ago(10), &bash("git switch -c feat/gone")),
+            line(
+                &web,
+                "feat/old-squash",
+                &ago(10),
+                &edit(&web.join("old-squash.txt")),
+            ),
             // A folder that is not there: no repo, not its parent's.
             line(
                 &web,
@@ -434,12 +444,9 @@ fn fixture() -> Fixture {
         "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46950\nlinear_enabled = false\n",
     )
     .unwrap();
-    let daemon = Daemon::open(Paths::new(
-        home,
-        root.join("workspaces"),
-        root.join("repos"),
-    ))
-    .unwrap();
+    // Chauffeur's workspaces folder named through a symlink, as a user may set it.
+    std::os::unix::fs::symlink(root.join("workspaces"), root.join("ws-link")).unwrap();
+    let daemon = Daemon::open(Paths::new(home, root.join("ws-link"), root.join("repos"))).unwrap();
     let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
     let path = format!("{}:{}", bin.display(), vars["PATH"]);
     vars.insert("PATH".into(), path);
@@ -615,6 +622,7 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
             branch("web", "feat/merged", false),
             branch("web", "feat/squashed", false),
             branch("web", "main", false),
+            branch("web", "feat/old-squash", false),
             branch("web", "feat/gone", false)
         ]
     );

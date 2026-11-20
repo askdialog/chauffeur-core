@@ -644,7 +644,7 @@ refuses "is not a model name" c ollama pull "bad name"
 # daemon (~/.chauffeur): the one the agent's own chats run on. This throwaway daemon passes for it
 # under a HOME of its own; an explicit CHAUFFEUR_HOME of another folder is still stopped.
 mkdir -p "$T/user" && ln -s "$T/home" "$T/user/.chauffeur"
-echo "== claude-code. the import's dry run places a session on its live branch; without it, refused"
+echo "== claude-code. the import's dry run places a session on its live branch, changing nothing"
 CC="$T/claude-code"
 mkdir -p "$CC/claude/projects/-e2e"
 git clone -q "$T/origin/alpha.git" "$CC/web"
@@ -658,7 +658,7 @@ NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
   echo '{"type":"ai-title","aiTitle":"E2E work"}'
   echo "{\"type\":\"assistant\",\"cwd\":\"$CC/web\",\"gitBranch\":\"feat/cc\",\"entrypoint\":\"cli\",\"timestamp\":\"$NOW\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Edit\",\"input\":{\"file_path\":\"$CC/web/cc.txt\"}}]}}"
 } > "$CC/claude/projects/-e2e/s1.jsonl"
-cc_files() { (cd "$CC" && find . -path ./web/.git -prune -o -type f -print0 | sort -z | xargs -0 shasum | shasum); }
+cc_files() { (cd "$CC" && find . -type f -print0 | sort -z | xargs -0 shasum | shasum); }
 cc_before=$(cc_files)
 c import claude-code --dry-run --claude-dir "$CC/claude" > "$T/cc-plan"
 has "E2E work  ($CC/web)  → feat/cc" < "$T/cc-plan"
