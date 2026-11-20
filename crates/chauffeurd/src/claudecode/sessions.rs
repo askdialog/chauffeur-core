@@ -369,7 +369,7 @@ mod tests {
             r#"{"type":"user","cwd":"/code/web","gitBranch":"main","entrypoint":"claude-vscode","timestamp":"2026-11-01T10:00:00.000Z","message":{"content":"<command-name>/clear</command-name>"}}"#,
             r#"{"type":"user","cwd":"/code/web","gitBranch":"main","timestamp":"2026-11-01T10:00:01.000Z","message":{"content":[{"type":"text","text":"Fix the login\nthen ship"}]}}"#,
             r#"{"type":"ai-title","aiTitle":"Login fix"}"#,
-            r#"{"type":"assistant","cwd":"/code/web","gitBranch":"main","timestamp":"2026-11-01T10:00:02.000Z","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git switch -c fix/login"}}]}}"#,
+            r#"{"type":"assistant","cwd":"/code/web","gitBranch":"main","timestamp":"2026-11-01T10:00:02.000Z","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"git switch -c fix/login && git -C ../api checkout -b fix/api"}}]}}"#,
             r#"{"type":"assistant","cwd":"/code/web","gitBranch":"fix/login","timestamp":"2026-11-01T10:00:03.000Z","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"src/a.ts"}},{"type":"tool_use","name":"Read","input":{"file_path":"/code/web/b.ts"}}]}}"#,
             r#"{"type":"assistant","cwd":"/code/web","gitBranch":"HEAD","timestamp":"2026-11-01T10:00:04.000Z","message":{"content":[{"type":"tool_use","name":"NotebookEdit","input":{"notebook_path":"/code/web/n.ipynb"}}]}}"#,
             "not json",
@@ -406,10 +406,16 @@ mod tests {
         );
         assert_eq!(
             session.created,
-            [Created {
-                dir: PathBuf::from("/code/web"),
-                branch: "fix/login".into()
-            }]
+            [
+                Created {
+                    dir: PathBuf::from("/code/web"),
+                    branch: "fix/login".into()
+                },
+                Created {
+                    dir: PathBuf::from("/code/web/../api"),
+                    branch: "fix/api".into()
+                }
+            ]
         );
     }
 
