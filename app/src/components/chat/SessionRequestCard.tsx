@@ -1,9 +1,10 @@
 import { KeyRound } from "lucide-react";
-import { useContext, useState } from "react";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
 import type { SessionRequestItem } from "@/lib/chat";
-import { openExternal } from "@/lib/native";
+import { isMac } from "@/lib/keys";
+import { isTauri, openExternal, windowFocused } from "@/lib/native";
 import { errorMessage } from "@/lib/rpc";
-import { client, toast } from "@/state/app";
+import { client, toast, useApp } from "@/state/app";
 import { Button } from "../ui";
 import { RequestFrame, type Respond, WorkspaceIdContext } from "./ChatItems";
 
@@ -34,11 +35,22 @@ export function SessionRequestCard({
   const [printed, setPrinted] = useState("");
   const open = item.state === "open" && !readOnly && workspace !== null;
 
-  const login = async () => {
+  const local = useApp(state => {
+    const target = workspace && state.workspaces[workspace];
+    return !!target && !target.moved_to;
+  });
+  const attempted = useRef<string | null>(null);
+  const login = useCallback(async (automatic = false) => {
     if (workspace === null) return;
     setBusy("login");
     try {
-      const result = await client.call("session.login", { workspace, name: item.session, remote: false });
+      const result = await client.call("session.login", {
+        workspace,
+        name: item.session,
+        remote: false,
+        automatic_request: automatic ? item.requestId : undefined,
+      });
+      if (automatic && !result.url && !result.output) return;
       setStarted(true);
       setPrinted(result.output);
       if (result.url) await openExternal(result.url);
@@ -47,7 +59,20 @@ export function SessionRequestCard({
     } finally {
       setBusy(null);
     }
-  };
+  }, [workspace, item.session, item.requestId]);
+
+  useEffect(() => {
+    if (!open || !local || !item.browserConsent || !isMac || !isTauri) return;
+    const start = () => {
+      if (!windowFocused() || attempted.current === item.requestId) return;
+      attempted.current = item.requestId;
+      void login(true);
+    };
+    start();
+    window.addEventListener("focus", start);
+    return () => window.removeEventListener("focus", start);
+  }, [open, local, item.browserConsent, item.requestId, login]);
+
   const decline = async () => {
     setBusy("decline");
     try {
@@ -65,9 +90,11 @@ export function SessionRequestCard({
       outcome={item.outcome ? (OUTCOMES[item.outcome] ?? item.outcome) : null}
       outcomeTone={item.outcome === "answered" ? "success" : "neutral"}
     >
-      <div className="text-[12px] text-muted">
-        {started ? "Finish the login in your browser: this card closes once it holds." : "A command waits on this session, which has expired."}
-      </div>
+      {open && (
+        <div className="text-[12px] text-muted">
+          {started ? "Finish the login in your browser. Work resumes automatically." : "A command waits on this session, which has expired."}
+        </div>
+      )}
       {started && printed && item.state === "open" && (
         <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-panel px-2 py-1.5 font-mono text-[11.5px] text-muted selectable" data-testid="session-login-output">
           {printed}

@@ -22400,11 +22400,19 @@ login_remote = "echo 'Open https://phone.example/device'; echo 'Code: PH0N'"
     assert_eq!(sessions[0].repo, None);
     assert_eq!(sessions[0].state, LoginSessionState::Holds);
 
-    let login = d.sessions.login(d, &ws.id, "svc", false).await.unwrap();
+    let login = d
+        .sessions
+        .login(d, &ws.id, "svc", false, None)
+        .await
+        .unwrap();
     assert_eq!(login.url.as_deref(), Some("https://login.example/device"));
     assert!(login.output.contains("Code: AB12"), "{}", login.output);
     assert!(login.session.logging_in);
-    let again = d.sessions.login(d, &ws.id, "svc", false).await.unwrap_err();
+    let again = d
+        .sessions
+        .login(d, &ws.id, "svc", false, None)
+        .await
+        .unwrap_err();
     assert!(again.to_string().contains("already running"), "{again}");
 
     let mut held = None;
@@ -22427,9 +22435,17 @@ login_remote = "echo 'Open https://phone.example/device'; echo 'Code: PH0N'"
 
     // No login_remote: the phone cannot log in to it; with one, it runs that command.
     assert!(!held.remote_login);
-    let remote = d.sessions.login(d, &ws.id, "svc", true).await.unwrap_err();
+    let remote = d
+        .sessions
+        .login(d, &ws.id, "svc", true, None)
+        .await
+        .unwrap_err();
     assert!(remote.to_string().contains("from the Mac only"), "{remote}");
-    let phone = d.sessions.login(d, &ws.id, "phoned", true).await.unwrap();
+    let phone = d
+        .sessions
+        .login(d, &ws.id, "phoned", true, None)
+        .await
+        .unwrap();
     assert!(phone.session.remote_login);
     assert_eq!(phone.url.as_deref(), Some("https://phone.example/device"));
     assert!(phone.output.contains("Code: PH0N"), "{}", phone.output);
@@ -22474,6 +22490,7 @@ async fn ensure_asks_the_user_once_and_answers_when_the_session_holds_or_is_decl
         &format!(
             r#"
 [repos.repo-a.sessions.svc]
+browser_consent = true
 label = "Service (staging)"
 check = "test -f {on}"
 login = "echo 'Open https://login.example/device'; sleep 1; touch {on}"
@@ -22538,7 +22555,10 @@ login = "true"
         .unwrap_err();
     assert!(allowed.to_string().contains("logging in"), "{allowed}");
 
-    d.sessions.login(d, &ws.id, "svc", false).await.unwrap();
+    let auto_login = |id| d.sessions.login(d, &ws.id, "svc", false, Some(id));
+    assert!(auto_login("old-request").await.unwrap().url.is_none());
+    assert!(auto_login(&request).await.unwrap().url.is_some());
+    assert!(auto_login(&request).await.unwrap().url.is_none());
     for waiter in [first, second] {
         let session = tokio::time::timeout(Duration::from_secs(10), waiter)
             .await
