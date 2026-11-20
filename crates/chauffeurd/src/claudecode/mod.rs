@@ -165,11 +165,16 @@ pub async fn import(
         });
         plans.push(plan);
     }
+    // Every repo the sessions ran in or wrote on, live branch or not: their clones' default-branch
+    // changes come too.
     let touched: BTreeSet<String> = placed
         .iter()
-        .flat_map(|s| {
-            std::iter::once(s.repo.clone()).chain(s.live.iter().map(|(repo, _)| repo.clone()))
-        })
+        .map(|s| s.repo.clone())
+        .chain(
+            plans
+                .iter()
+                .flat_map(|p| p.branches.iter().map(|b| b.repo.clone())),
+        )
         .collect();
     let mut changes = Vec::new();
     let mut bases = HashMap::new();
@@ -467,31 +472,49 @@ impl<'a> Repos<'a> {
         branches
     }
 
-    /// A file whose folder is missing now: in a worktree of the checkout the session stood in,
-    /// that worktree's branch (git still lists it until pruned); in a folder worktrees are kept
-    /// under, gone; elsewhere in that checkout, a folder of another branch, the one recorded.
+    /// A file whose folder is missing now: in a worktree of a clone met so far, that worktree's
+    /// branch (git still lists it until pruned); in a folder worktrees are kept under, gone;
+    /// elsewhere in the checkout the session stood in, a folder of another branch, the one recorded.
     async fn missing(
         &mut self,
         stood: Option<Checkout>,
         path: &Path,
         recorded: Option<String>,
     ) -> Option<(Checkout, Option<String>)> {
-        let stood = stood.filter(|s| path.starts_with(&s.top))?;
-        let worktree = self
-            .refs(&stood.clone)
-            .await
-            .worktrees
-            .iter()
-            .filter(|e| {
-                e.path != stood.top && e.path.starts_with(&stood.top) && path.starts_with(&e.path)
-            })
-            .max_by_key(|e| e.path.components().count())
-            .map(|e| e.branch.clone());
-        match worktree {
-            Some(branch) => Some((stood, branch)),
-            None if in_worktree_folder(path.strip_prefix(&stood.top).unwrap_or(path)) => None,
-            None => Some((stood, recorded)),
+        // A worktree of a clone met so far holding it, removed since but still listed (a scratch
+        // worktree under /tmp, one inside the clone): that worktree's branch.
+        let mut clones: Vec<PathBuf> = self.clones.values().flatten().cloned().collect();
+        if let Some(stood) = &stood
+            && !clones.contains(&stood.clone)
+        {
+            clones.push(stood.clone.clone());
         }
+        let mut holder: Option<(PathBuf, crate::git::WorktreeEntry)> = None;
+        for clone in clones {
+            for entry in &self.refs(&clone).await.worktrees {
+                let deeper = holder.as_ref().is_none_or(|(_, held)| {
+                    entry.path.components().count() > held.path.components().count()
+                });
+                if entry.path != clone && path.starts_with(&entry.path) && deeper {
+                    holder = Some((clone.clone(), entry.clone()));
+                }
+            }
+        }
+        if let Some((clone, entry)) = holder {
+            let repo = self.names.get(&clone).cloned();
+            let checkout = Checkout {
+                top: entry.path,
+                clone,
+                repo,
+                branch: entry.branch.clone(),
+            };
+            return Some((checkout, entry.branch));
+        }
+        let stood = stood.filter(|s| path.starts_with(&s.top))?;
+        if in_worktree_folder(path.strip_prefix(&stood.top).unwrap_or(path)) {
+            return None;
+        }
+        Some((stood, recorded))
     }
 
     /// A branch that exists and is not merged into the default branch (its tip in it, or a merged

@@ -84,7 +84,7 @@ struct Fixture {
 fn fixture() -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
-    for name in ["web", "api"] {
+    for name in ["web", "api", "docs"] {
         let seed = root.join("seed").join(name);
         std::fs::create_dir_all(&seed).unwrap();
         git(&seed, &["init", "-q", "-b", "main"]);
@@ -241,6 +241,20 @@ fn fixture() -> Fixture {
     // The clones, named through a symlinked folder.
     std::os::unix::fs::symlink(root.join("clones"), root.join("alias")).unwrap();
     // web's own changes on main, made once the branches above are cut (they would carry them).
+    // docs, touched on its default branch only, holds changes there too.
+    std::fs::write(
+        root.join("clones/docs/README.md"),
+        "docs, uncommitted on main\n",
+    )
+    .unwrap();
+    // A scratch worktree outside the clone, deleted since by hand: git still lists it.
+    branch_at("feat/ext", "ext.txt");
+    let ext = root.join("scratch/ext");
+    git(
+        &web,
+        &["worktree", "add", "-q", ext.to_str().unwrap(), "feat/ext"],
+    );
+    std::fs::remove_dir_all(root.join("scratch")).unwrap();
     std::fs::write(web.join("README.md"), "web, uncommitted on main\n").unwrap();
 
     // A gh that knows one merged PR, from feat/squashed at its tip.
@@ -362,6 +376,12 @@ fn fixture() -> Fixture {
                 &ago(10),
                 &edit(&root.join("tmp/scratch/x.ts")),
             ),
+            line(
+                &web,
+                "main",
+                &ago(10),
+                &edit(&root.join("clones/docs/README.md")),
+            ),
         ],
     );
     session(
@@ -427,6 +447,14 @@ fn fixture() -> Fixture {
         &web,
         "feat/chauffeur",
         &web.join("README.md"),
+    );
+    session(
+        "external",
+        "In a scratch worktree",
+        vec![
+            line(&web, "main", &ago(16), &edit(&web.join("src/e.ts"))),
+            line(&ext, "feat/ext", &ago(16), &edit(&ext.join("x.ts"))),
+        ],
     );
     let sessions = claude.join("sessions");
     std::fs::create_dir_all(&sessions).unwrap();
@@ -523,7 +551,8 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
             "nested",
             "tagged",
             "second-clone",
-            "in-chauffeur"
+            "in-chauffeur",
+            "external"
         ]
     );
     assert_eq!(plan.since_days, Some(60));
@@ -586,6 +615,14 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
         plan.warnings
     );
     assert_eq!(session("tagged").branches, [branch("web", "v1", true)]);
+    // A scratch worktree removed since but listed by git: its branch.
+    assert_eq!(
+        session("external").branches,
+        [
+            branch("web", "main", false),
+            branch("web", "feat/ext", true)
+        ]
+    );
     assert_eq!(
         session("second-clone").branches,
         [branch("web", "feat/two", true)]
@@ -623,6 +660,7 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
             branch("web", "feat/squashed", false),
             branch("web", "main", false),
             branch("web", "feat/old-squash", false),
+            branch("docs", "main", false),
             branch("web", "feat/gone", false)
         ]
     );
@@ -670,6 +708,9 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
             "Branch feat/y on feat/y [web] parent=- chats=nested changes=",
             "Branch v1 on v1 [web] parent=- chats=tagged changes=",
             "Branch feat/two on feat/two [web] parent=- chats=second-clone changes=",
+            "Branch feat/ext on feat/ext [web] parent=- chats=external changes=",
+            // docs, touched only on main, carries its changes there.
+            "Changes docs-changes on (new) [docs] parent=- chats= changes=docs",
         ]
     );
     assert_eq!(session("simple-api").lands_in.as_deref(), Some("feat/live"));
