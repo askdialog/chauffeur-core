@@ -17,7 +17,7 @@
 
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SourceClone } from "../protocol.ts";
 import { type Command, type Group, type List, readLine, type Word } from "./shell-line.ts";
 
@@ -1115,7 +1115,8 @@ const FOLD_CASE = process.platform === "darwin";
 
 function inside(path: string, dir: string): boolean {
   const rel = FOLD_CASE ? relative(dir.toLowerCase(), path.toLowerCase()) : relative(dir, path);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  // A parent segment, not a name starting with `..` (`<clone>/..config` is inside).
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 /** A path as a shell or a tool reads it from `dir`: `~`, `$HOME` and `${HOME}` are the home folder. */

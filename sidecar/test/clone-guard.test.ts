@@ -23,6 +23,7 @@ describe("cloneWriteRefusal", () => {
     ["NotebookEdit", { notebook_path: "/code/web/nb.ipynb" }],
     ["Write", { file_path: "../../code/web/x.ts" }],
     ["Edit", { file_path: "/code/web" }],
+    ["Write", { file_path: "/code/web/..config/x" }],
   ];
   for (const [tool, input] of refused) {
     test(`refuses: ${tool} ${JSON.stringify(input)}`, () => {
@@ -512,6 +513,7 @@ describe("cloneCommandRefusal", () => {
       'echo "${x/$(touch /code/web/x)/y}"',
       "(cd /tmp && ls) > /code/web/out",
       "cp /code/web/a $DEST",
+      "touch /code/web/..config",
       "git -C /code/web submodule foreach 'touch x'",
       "cd /code/web >| /tmp/log && touch x",
       "cd /code/web && make",
