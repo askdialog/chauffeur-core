@@ -121,8 +121,8 @@ export function splitCommands(command: string): string[][] {
     }
     if (c === "`") inBacktick = false;
     if (c === "&" || c === "|" || c === ";" || c === "\n" || c === "(" || c === ")" || c === "`") {
-      // Redirections such as `2>&1` or `&>` are not command separators.
-      if (c === "&" && (word.endsWith(">") || word.endsWith("<") || next === ">")) {
+      // Redirections such as `2>&1`, `&>` or `>|` are not command separators.
+      if ((c === "&" && (word.endsWith(">") || word.endsWith("<") || next === ">")) || (c === "|" && word.endsWith(">"))) {
         word += c;
         inWord = true;
         continue;
@@ -173,7 +173,7 @@ function unwrap(words: string[], depth: number): SimpleCommand[] {
   for (;;) {
     const word = words[i];
     if (word === undefined) return wrappers;
-    if (/^(?:\d|&)?>>?$/.test(word)) {
+    if (/^(?:\d|&)?(?:>>?|>\||>&)$/.test(word)) {
       redirections.push(word, ...words.slice(i + 1, i + 2));
       i += 2;
       continue;

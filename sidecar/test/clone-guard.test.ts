@@ -141,6 +141,13 @@ describe("cloneCommandRefusal", () => {
     "> /tmp/out cp a.ts /code/web/a.ts",
     "cp a.ts /code/web/a.ts 2> /dev/null",
     "rm -rf /code/web/build > /dev/null",
+    "echo x >| /code/web/f",
+    "echo x >|/code/web/f",
+    "echo x >& /code/web/f",
+    "echo x >&/code/web/f",
+    "cp a.ts /code/web/a.ts 2>&1",
+    "find /code/web -name x -exec touch {} ;",
+    "find /code/web -name '*.ts' -execdir chmod +x {} ;",
   ];
   for (const command of refused) {
     test(`refuses: ${JSON.stringify(command)}`, () => {
@@ -197,6 +204,11 @@ describe("cloneCommandRefusal", () => {
     "cd /code/web && cd - && touch x",
     "git config --file /code/web/.git/config user.email",
     "cd /code/web && git config --file /tmp/c user.email x",
+    "cd /code/web && make 2>&1 | tee /tmp/log",
+    "cd /code/web && make >&2",
+    "cd /code/web && make 2>&-",
+    "cd /code/web && make >& 2",
+    "find /code/web -name '*.ts' -exec grep -l x {} ;",
   ];
   for (const command of allowed) {
     test(`allows: ${JSON.stringify(command)}`, () => {

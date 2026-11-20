@@ -239,8 +239,9 @@ function topLevel(command: string): { text: string; then: string }[] {
     else if (c === "`") backtick = !backtick;
     if (depth > 0 || backtick) continue;
     const operator = OPERATORS.find((op) => command.startsWith(op, i));
-    // `2>&1` and `&>` redirect: no command ends there.
+    // `2>&1`, `&>` and `>|` redirect: no command ends there.
     if (operator === undefined || (operator === "&" && (command[i - 1] === ">" || command[i + 1] === ">"))) continue;
+    if (operator === "|" && command[i - 1] === ">") continue;
     parts.push({ text: command.slice(start, i), then: operator });
     i += operator.length - 1;
     start = i + 1;
@@ -263,7 +264,9 @@ function writtenClone(program: string, args: string[], dir: string, clones: Guar
   }
   if (IN_PLACE.has(program) && args.some((arg) => /^-\w*i/.test(arg) || arg.startsWith("--in-place"))) return firstClone(words, inClone);
   if (program === "dd") return firstClone(args.filter((arg) => arg.startsWith("of=")).map((arg) => arg.slice(3)), inClone);
-  if (program === "find" && (args.includes("-delete") || args.some((arg, i) => arg === "-exec" && args[i + 1] === "rm"))) {
+  // `find … -delete`, or `-exec` / `-execdir` running a program that changes what it is given.
+  const execWrites = (arg: string, i: number) => (arg === "-exec" || arg === "-execdir") && WRITERS.has(args[i + 1] ?? "");
+  if (program === "find" && (args.includes("-delete") || args.some(execWrites))) {
     const roots = args.slice(0, Math.max(0, args.findIndex((arg) => arg.startsWith("-"))));
     return firstClone(roots.length > 0 ? roots : ["."], inClone);
   }
@@ -339,15 +342,23 @@ function firstClone(words: string[], inClone: (word: string) => GuardedClone | u
 }
 
 /**
- * A redirection's target, when the word is one: the operator alone (`>`, `>>`, `2>`, `&>`), its
- * target the next word, or the operator with its target attached (`>file`, `x>>file`, `2>file`).
+ * A redirection, when the word is one: the operator alone (`>`, `>>`, `>|`, `>&`, `2>`, `&>`), its
+ * target the next word; the operator with its target attached (`>file`, `x>>file`, `>|file`,
+ * `>&file`); or a copy of another stream (`2>&1`, `>&2`, `2>&-`), with no file.
  * A quoted word with `>` inside (`'=>'`, `'.x > 1'`) is none: the parser dropped its quotes, but a
  * redirection's target has no space and follows its operator.
  */
-function redirection(word: string): { attached: string } | { next: true } | undefined {
-  if (/^(?:\d|&)?>>?$/.test(word)) return { next: true };
-  const match = /^[^\s>]*?(?:\d|&)?>>?([^\s>&]\S*)$/.exec(word);
-  return match?.[1] ? { attached: match[1] } : undefined;
+function redirection(word: string): { attached: string } | { next: true } | { stream: true } | undefined {
+  if (/^(?:\d|&)?(?:>>?|>\||>&)$/.test(word)) return { next: true };
+  const match = /^[^\s>]*?(?:\d|&)?(>>|>\||>&|>)([^\s>|]\S*)$/.exec(word);
+  const [, operator, target] = match ?? [];
+  if (target === undefined) return undefined;
+  return operator === ">&" && isStream(target) ? { stream: true } : { attached: target };
+}
+
+/** A stream after `>&`: a descriptor or `-` (closed), not a file. */
+function isStream(target: string): boolean {
+  return /^(?:\d+|-)$/.test(target);
 }
 
 /** The words that are not options, redirections or a redirection's target. */
@@ -367,8 +378,9 @@ function redirections(args: string[]): string[] {
   const targets: string[] = [];
   args.forEach((arg, i) => {
     const found = redirection(arg);
-    const target = found && ("attached" in found ? found.attached : args[i + 1]);
-    if (target && !target.startsWith("&")) targets.push(target);
+    if (!found || "stream" in found) return;
+    const target = "attached" in found ? found.attached : args[i + 1];
+    if (target !== undefined && !(arg.endsWith(">&") && isStream(target))) targets.push(target);
   });
   return targets;
 }
