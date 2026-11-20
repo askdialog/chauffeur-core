@@ -121,8 +121,8 @@ export function splitCommands(command: string): string[][] {
     }
     if (c === "`") inBacktick = false;
     if (c === "&" || c === "|" || c === ";" || c === "\n" || c === "(" || c === ")" || c === "`") {
-      // Redirections such as `2>&1`, `&>` or `>|` are not command separators.
-      if ((c === "&" && (word.endsWith(">") || word.endsWith("<") || next === ">")) || (c === "|" && word.endsWith(">"))) {
+      // Redirections such as `2>&1` or `&>` are not command separators.
+      if (c === "&" && (word.endsWith(">") || word.endsWith("<") || next === ">")) {
         word += c;
         inWord = true;
         continue;
@@ -167,22 +167,10 @@ function unwrap(words: string[], depth: number): SimpleCommand[] {
   let i = 0;
   // `xargs` is reported as a command of its own as well: its program gets words nobody can read here.
   const wrappers: SimpleCommand[] = [];
-  // Redirections before the program (`> out.txt echo hi`) go after its arguments, where they mean the same.
-  const redirections: string[] = [];
   // Leading keywords, wrappers and environment assignments: `FOO=1 sudo -E env BAR=2 git …`.
   for (;;) {
     const word = words[i];
     if (word === undefined) return wrappers;
-    if (/^(?:\d|&)?(?:>>?|>\||>&)$/.test(word)) {
-      redirections.push(word, ...words.slice(i + 1, i + 2));
-      i += 2;
-      continue;
-    }
-    if (/^(?:\d|&)?>>?\S/.test(word)) {
-      redirections.push(word);
-      i++;
-      continue;
-    }
     if (KEYWORDS.has(word) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) {
       i++;
       continue;
@@ -209,7 +197,7 @@ function unwrap(words: string[], depth: number): SimpleCommand[] {
     break;
   }
   const program = basename(words[i] as string);
-  const args = [...words.slice(i + 1), ...redirections];
+  const args = words.slice(i + 1);
 
   if (SHELLS.has(program)) {
     const script = shellScriptArgument(args);

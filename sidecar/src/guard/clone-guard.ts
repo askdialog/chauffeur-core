@@ -1,19 +1,25 @@
 // Keeps agents out of the user's source clones (docs/adr/claude-code-import.md): a workspace's
 // worktrees are made from them, and nothing else stops an agent from changing the clone itself
 // (auto mode leaves it to a classifier, shell commands are not checked). A file tool writing into a
-// clone is refused with the matching path in the workspace's worktree; a shell command that writes
-// and names a clone is refused the same way. Reads stay allowed, and so do the writes git makes in
-// a clone's `.git` for its worktrees (a commit from the worktree).
+// clone is refused with the matching path in the workspace's worktree.
 //
-// A guard rail, not a sandbox: it reads a shell command as the other guards do, and catches what an
-// agent writes (a redirection, a file command, a git command that changes the clone). A program
-// that writes where it runs (`npm install` once in the clone) is not caught.
+// A shell command is judged the other way round: one that names a clone (a path in it, a folder
+// holding it, or the clone as the folder it runs in) is refused unless it is a read the guard
+// knows (`cat`, `grep`, `ls`, `find` with no action, `git log`…), a copy out of the clone, or a
+// write whose target it can place outside. A redirection into a clone is refused whatever the
+// command. When the line names a clone, a command that may change files with a value only known
+// when it runs (a variable it does not set, a command's output, `xargs`' input) is refused too.
+// The writes git makes in a clone's `.git` for its worktrees (a commit from the worktree) stay
+// allowed. A refusal costs little: the worktree holds the same files.
+//
+// A guard rail, not a sandbox: a program whose own code writes into the clone, the command line
+// not naming it (a script, a build step run from elsewhere), is not caught.
 
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { SourceClone } from "../protocol.ts";
-import { simpleCommands } from "./worktree-guard.ts";
+import { type Command, type Group, type List, readLine, type Word } from "./shell-line.ts";
 
 /** A source clone, and its worktree's git folder in the clone's `.git` when it has one. */
 export interface GuardedClone extends SourceClone {
@@ -58,7 +64,8 @@ function writeDenial(path: string, clone: GuardedClone): string {
 
 function commandDenial(clone: GuardedClone): string {
   return (
-    `This command writes into ${clone.clone}, the user's own clone of this repo: agents never change it. ` +
+    `This command changes, or may change, files in ${clone.clone}, the user's own clone of this repo: ` +
+    "agents never change it, and only reads run there (cat, grep, ls, git status, log, diff…). " +
     `Run it in this workspace's worktree, ${clone.worktree}, instead.`
   );
 }
@@ -82,317 +89,956 @@ export function cloneWriteRefusal(toolName: string, toolInput: unknown, cwd: str
   return clone && writeDenial(path, clone);
 }
 
-/** Programs that change every path they are given. */
-const WRITERS = new Set(["rm", "rmdir", "unlink", "mkdir", "touch", "mv", "chmod", "chown", "chgrp", "truncate", "tee", "shred"]);
-/** Programs that read their sources and write their last path. */
-const COPIERS = new Set(["cp", "rsync", "install", "ln", "scp"]);
-/** Copiers whose `-t` / `--target-directory` names where they write (rsync's `-t` keeps times). */
-const TARGET_OPTION = new Set(["cp", "ln", "install"]);
-/** Programs that change their files with `-i` or `--in-place`. */
-const IN_PLACE = new Set(["sed", "perl", "gsed"]);
-/** Git subcommands that only read. */
-const GIT_READS = new Set([
-  "status",
-  "log",
-  "diff",
-  "diff-tree",
-  "diff-index",
-  "diff-files",
-  "show",
-  "show-branch",
-  "blame",
-  "grep",
-  "ls-files",
-  "ls-tree",
-  "ls-remote",
-  "rev-parse",
-  "rev-list",
-  "describe",
-  "shortlog",
-  "cat-file",
-  "for-each-ref",
-  "show-ref",
-  "name-rev",
-  "whatchanged",
-  "merge-base",
-  "cherry",
-  "range-diff",
-  "count-objects",
-  "check-ignore",
-  "check-attr",
-  "var",
-  "help",
-  "version",
-]);
-/** Options of `git branch` and `git tag` that list rather than create. */
-const LISTING = new Set(["--list", "-l", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--show-current", "--format"]);
-/** Git's global options that take a value as the next word. */
-const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"]);
-/** Shell operators that end a command at the top level of a command line. */
-const OPERATORS = ["&&", "||", ";", "\n", "|", "&"];
-
-/** The denial for a shell command that writes into a clone, or undefined. */
+/** The denial for a shell command that changes, or may change, a clone, or undefined. */
 export function cloneCommandRefusal(command: string, cwd: string, clones: GuardedClone[]): string | undefined {
-  let dir = cwd;
-  let previous = cwd;
-  for (const { text, then } of topLevel(command)) {
-    const commands = simpleCommands(text);
-    // A `cd` alone moves the commands after it on the line; one in a group, a substitution or a
-    // pipe stays there.
-    const only = commands.length === 1 ? commands[0] : undefined;
-    if (only && isCd(only.program) && /^\s*(?:\{\s*)?(?:cd|pushd)\b/.test(text) && then !== "|") {
-      [previous, dir] = [dir, cdTarget(dir, previous, only.args)];
-      continue;
+  const judge = new Judge(clones);
+  try {
+    judge.list(readLine(command), { dir: cwd, previous: undefined, stack: [], vars: new Map() });
+  } catch {
+    // Nested past what the stack holds: refused rather than let through unread.
+    return TOO_DEEP;
+  }
+  const { changed, named, blind } = judge.verdict;
+  const clone = changed ?? (blind ? named : undefined);
+  return clone && commandDenial(clone);
+}
+
+const TOO_DEEP = "This command line is nested too deeply for the guard that keeps agents out of the user's clones to read it: split it into simpler commands.";
+
+/** A word as the line gives it. */
+interface Value {
+  text: string;
+  /** No part of it is only known when the line runs (a variable not set on the line, a command's output). */
+  known: boolean;
+  /** It holds a wildcard (`*`, `?`, `[`, `{`): the paths it names start with `prefix`. */
+  glob: boolean;
+  /** The text before the first unknown part or wildcard. */
+  prefix: string;
+}
+
+/** Where a command of the line runs, and what the line set before it. */
+interface State {
+  /** Undefined after a `cd` to a value unknown. */
+  dir: string | undefined;
+  previous: string | undefined;
+  stack: (string | undefined)[];
+  /** The variables the line set: undefined when only known as it runs. */
+  vars: Map<string, string | undefined>;
+  /** A clone an environment variable names (`GIT_DIR`, `CARGO_TARGET_DIR`, `DESTDIR`…): a program may write there. */
+  env?: GuardedClone;
+}
+
+function copy(state: State): State {
+  return { ...state, stack: [...state.stack], vars: new Map(state.vars) };
+}
+
+function exact(text: string): Value {
+  return { text, known: true, glob: false, prefix: text };
+}
+
+function isExact(value: Value): boolean {
+  return value.known && !value.glob;
+}
+
+/** The value from `from` on: an option's attached value (`--file=x`, `-tdir`). */
+function after(value: Value, from: number): Value {
+  return { ...value, text: value.text.slice(from), prefix: value.prefix.slice(from) };
+}
+
+/** An option's name and its attached value: `--file=x` is `--file` and `x`. */
+function option(text: string): [string, string | undefined] {
+  const eq = text.indexOf("=");
+  return text.startsWith("--") && eq > 0 ? [text.slice(0, eq), text.slice(eq + 1)] : [text, undefined];
+}
+
+/** Words that open or close a compound command: the command is what follows them. */
+const RESERVED = new Set(["!", "if", "then", "elif", "else", "fi", "do", "done", "while", "until", "{", "}", "esac", "function"]);
+/** Programs that only read, whatever they are given (the exceptions are in `onlyReads`). */
+const READERS = new Set([
+  ...["cat", "head", "tail", "less", "more", "grep", "egrep", "fgrep", "zgrep", "zcat", "rg", "ag", "ack", "ls", "tree", "wc"],
+  ...["diff", "cmp", "comm", "stat", "file", "du", "df", "realpath", "readlink", "basename", "dirname", "pwd", "echo"],
+  ...["printf", "true", "false", "test", "[", "[[", ":", "which", "whereis", "type", "jq", "yq", "cut", "sort", "uniq"],
+  ...["tr", "column", "nl", "od", "xxd", "hexdump", "strings", "md5", "md5sum", "shasum", "sha1sum", "sha256sum"],
+  ...["sha512sum", "cksum", "bat", "tac", "rev", "fold", "fmt", "paste", "join", "expand", "unexpand", "base64"],
+  ...["date", "sleep", "id", "whoami", "uname", "hostname", "printenv", "locale", "seq", "sed", "gsed", "awk"],
+  ...["gawk", "mawk", "nawk", "fd", "fdfind", "set", "shopt", "exit", "return", "wait", "jobs"],
+]);
+/** Programs that run code given in their words or their input: a clone's path in that code is a write. */
+const INTERPRETERS = new Set([
+  ...["python", "python3", "node", "ruby", "perl", "php", "bun", "deno", "tsx", "ts-node", "osascript", "Rscript", "lua"],
+  ...["awk", "gawk", "mawk", "nawk", "sed", "gsed"],
+]);
+const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh", "fish"]);
+/** Programs that run the command after their own options, and those options that take a value. */
+const WRAPPERS: Record<string, { values: string[]; dirs?: string[]; positional?: number }> = {
+  sudo: { values: ["-u", "-g", "-h", "-p", "-C", "-T", "-U", "-r", "-t", "--user", "--group", "--host", "--prompt"], dirs: ["-D", "--chdir"] },
+  doas: { values: ["-u", "-C"] },
+  env: { values: ["-u", "--unset", "-S", "--split-string"], dirs: ["-C", "--chdir"] },
+  nice: { values: ["-n", "--adjustment"] },
+  ionice: { values: ["-c", "-n", "--class", "--classdata"] },
+  nohup: { values: [] },
+  timeout: { values: ["-s", "--signal", "-k", "--kill-after"], positional: 1 },
+  time: { values: ["-f", "--format", "-o", "--output"] },
+  stdbuf: { values: ["-i", "-o", "-e", "--input", "--output", "--error"] },
+  caffeinate: { values: ["-t", "-w"] },
+  command: { values: [] },
+  builtin: { values: [] },
+  exec: { values: ["-a"] },
+  chronic: { values: [] },
+};
+/** xargs' options that take the next word as their value. */
+const XARGS_VALUES = new Set(["-I", "-n", "-L", "-P", "-s", "-d", "-E", "-a", "--arg-file"]);
+/** Copiers: what they write is their last operand, or the value of `-t`. Their options taking a value. */
+const COPIERS: Record<string, string[]> = {
+  cp: ["-S", "--suffix"],
+  ln: ["-S", "--suffix"],
+  install: ["-S", "--suffix", "-m", "--mode", "-o", "--owner", "-g", "--group"],
+  scp: ["-i", "-P", "-o", "-F", "-c", "-l", "-S", "-J", "-D", "-X"],
+  rsync: [
+    ...["-e", "--rsh", "--exclude", "--include", "--filter", "-f", "--files-from", "--exclude-from", "--include-from"],
+    ...["--compare-dest", "--copy-dest", "--link-dest", "--read-batch", "--chmod", "--chown", "--usermap"],
+    ...["--groupmap", "--port", "--sockopts", "--out-format", "--log-file-format", "--password-file", "--suffix"],
+    ...["--max-size", "--min-size", "-B", "--block-size", "--timeout", "--contimeout", "--modify-window", "--iconv"],
+    ...["--checksum-choice", "--compress-choice", "--skip-compress", "--bwlimit", "--info", "--debug", "--max-delete"],
+    ...["--rsync-path", "--address", "-M", "--remote-option"],
+  ],
+};
+/** rsync's options naming a file or folder it writes. */
+const RSYNC_WRITES = new Set(["--log-file", "-T", "--temp-dir", "--partial-dir", "--backup-dir", "--write-batch", "--only-write-batch"]);
+
+/** Git's options before the subcommand that take the next word as their value. */
+const GIT_VALUES = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"]);
+/** Git subcommands that only read, whatever their options (an `--output` file is judged apart). */
+const GIT_READS = new Set([
+  ...["status", "log", "diff", "diff-tree", "diff-index", "diff-files", "show", "show-branch", "blame", "annotate"],
+  ...["grep", "ls-files", "ls-tree", "ls-remote", "rev-parse", "rev-list", "describe", "shortlog", "cat-file"],
+  ...["for-each-ref", "show-ref", "name-rev", "whatchanged", "merge-base", "cherry", "range-diff", "count-objects"],
+  ...["check-ignore", "check-attr", "check-ref-format", "verify-commit", "verify-tag", "var", "help", "version"],
+  ...["archive"],
+]);
+/** `git branch` and `git tag` options that list, and those after which a word is a pattern. */
+const LISTING = {
+  branch: {
+    flags: ["-a", "--all", "-r", "--remotes", "-l", "--list", "-v", "-vv", "--verbose", "-q", "--quiet", "--show-current"],
+    patterns: ["-l", "--list"],
+  },
+  tag: { flags: ["-l", "--list", "-v", "--verify", "-q", "--quiet"], patterns: ["-l", "--list", "-v", "--verify"] },
+};
+const LISTING_FLAGS = ["--color", "--no-color", "--column", "--no-column", "-i", "--ignore-case", "--omit-empty", "--abbrev", "--no-abbrev"];
+const LISTING_VALUES = ["--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"];
+/** `git config` options that read, and those taking a value. */
+const CONFIG_READS = [
+  ...["--global", "--system", "--local", "--worktree", "--show-origin", "--show-scope", "--null", "-z", "--name-only"],
+  ...["--bool", "--int", "--bool-or-int", "--path", "--expiry-date", "--includes", "--no-includes"],
+];
+const CONFIG_GETS = ["--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color", "--get-colorbool", "--list", "-l"];
+const CONFIG_VALUES = ["--file", "-f", "--blob", "--type", "--default"];
+/** Git's options naming a file or folder it writes, whatever the subcommand. */
+const GIT_OUTPUTS = new Set(["--output", "--output-directory", "--separate-git-dir"]);
+/** `git clone` and `git init` options that take the next word as their value. */
+const CLONE_VALUES = new Set([
+  ...["-o", "--origin", "-b", "--branch", "-u", "--upload-pack", "--reference", "--reference-if-able", "--depth"],
+  ...["--shallow-since", "--shallow-exclude", "-c", "--config", "--server-option", "-j", "--jobs", "--template"],
+  ...["--filter", "--bundle-uri", "--separate-git-dir", "--initial-branch", "--object-format", "--ref-format"],
+]);
+
+/** What a line does to the clones, command by command. */
+class Judge {
+  readonly verdict: {
+    /** A clone a command changes, or may change. */
+    changed?: GuardedClone;
+    /** A clone the line names, if only to read it. */
+    named?: GuardedClone;
+    /** A command that may change files works with a value only known when the line runs. */
+    blind: boolean;
+  } = { blind: false };
+
+  /**
+   * Variables `read` and `for` set as the line runs, unknown on the whole line: the loop that uses
+   * them may run in a pipeline's subshell (`ls | while read f; do rm "$f"; done`).
+   */
+  private readonly looped = new Set<string>();
+
+  constructor(private readonly clones: GuardedClone[]) {}
+
+  list(list: List, state: State): void {
+    let before = "";
+    let piped: string[] = [];
+    for (const { node, then } of list) {
+      // A command of a pipeline, or one sent to the background, runs in a subshell: its `cd` stays there.
+      const apart = then === "|" || then === "|&" || then === "&" || before === "|" || before === "|&";
+      this.node(node, apart ? copy(state) : state, piped);
+      // `cat <<'EOF' | bash`: a here-document piped on is the next command's input.
+      piped = (then === "|" || then === "|&") && "documents" in node ? node.documents : [];
+      before = then;
     }
-    let local = dir;
-    let localPrevious = previous;
-    for (const { program, args } of commands) {
-      if (isCd(program)) {
-        [localPrevious, local] = [local, cdTarget(local, localPrevious, args)];
+  }
+
+  private node(node: Command | Group, state: State, piped: string[]): void {
+    if ("group" in node) {
+      this.redirections(node, state);
+      this.list(node.group, node.subshell ? copy(state) : state);
+      return;
+    }
+    for (const here of node.here) this.list(here, copy(state));
+    this.redirections(node, state);
+    const values = node.words.map((word) => this.value(word, state));
+    let i = 0;
+    while (i < node.words.length && isAssignment(node.words[i])) i++;
+    // Assignments alone set the line's variables; before a command, only its environment.
+    if (i === values.length) {
+      for (const value of values) this.assign(value, state);
+      return;
+    }
+    // `GIT_DIR=… git …`: the variable is set for that command only.
+    const env = values.slice(0, i).map((value) => this.envClone(value)).find(Boolean);
+    const local = env && !state.env ? { ...copy(state), env } : state;
+    const input = [
+      ...piped,
+      ...node.documents,
+      ...node.redirections.filter((redirection) => redirection.input).map(({ target }) => this.value(target, state).text),
+    ];
+    this.run(values.slice(i), local, false, input);
+  }
+
+  /** The clone an assignment's value names: a variable exported with it points a program there. */
+  private envClone(value: Value): GuardedClone | undefined {
+    const eq = value.text.indexOf("=");
+    if (eq < 0) return undefined;
+    const assigned = value.text.slice(eq + 1);
+    return isAbsolute(assigned) ? cloneAround(resolve(assigned), this.clones) : undefined;
+  }
+
+  private redirections({ redirections }: Command | Group, state: State): void {
+    for (const { writes, target } of redirections) {
+      const value = this.value(target, state);
+      if (writes) this.writes(value, state, false);
+      else this.reads([value], state);
+    }
+  }
+
+  /** A word's value; the commands in it are judged as they run, before the command they are in. */
+  private value(word: Word, state: State): Value {
+    let text = "";
+    let prefix: string | undefined;
+    let known = true;
+    let glob = false;
+    for (const part of word.parts) {
+      if ("text" in part) {
+        if (part.glob) {
+          glob = true;
+          prefix ??= text;
+        }
+        text += part.text;
         continue;
       }
-      const clone = writtenClone(program, args, local, clones);
-      if (clone) return commandDenial(clone);
-    }
-    // A substitution inside double quotes runs too, where the parser keeps it as text.
-    for (const inner of quotedSubstitutions(text)) {
-      const refusal = cloneCommandRefusal(inner, local, clones);
-      if (refusal) return refusal;
-    }
-  }
-  return undefined;
-}
-
-/** The commands substituted inside double quotes, `"$( … )"` or `"` … `"`; single quotes substitute nothing. */
-function quotedSubstitutions(text: string): string[] {
-  const found: string[] = [];
-  let quote: string | undefined;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (c === "\\") {
-      i++;
-      continue;
-    }
-    if (quote === "'") {
-      if (c === "'") quote = undefined;
-      continue;
-    }
-    if (c === "'" && quote === undefined) quote = c;
-    else if (c === '"') quote = quote === '"' ? undefined : '"';
-    else if (quote === '"' && text.startsWith("$(", i)) {
-      let depth = 1;
-      let j = i + 2;
-      for (; j < text.length && depth > 0; j++) {
-        if (text[j] === "(") depth++;
-        else if (text[j] === ")") depth--;
+      const set = "variable" in part ? this.variable(part.variable, state) : undefined;
+      if (set !== undefined) {
+        text += set;
+        continue;
       }
-      found.push(text.slice(i + 2, depth === 0 ? j - 1 : j));
-      i = j - 1;
-    } else if (quote === '"' && c === "`") {
-      const end = text.indexOf("`", i + 1);
-      found.push(text.slice(i + 1, end === -1 ? undefined : end));
-      if (end === -1) break;
-      i = end;
+      if ("variable" in part && part.fallback) {
+        const fallback = this.value({ parts: part.fallback }, state);
+        if (isExact(fallback)) {
+          text += fallback.text;
+          continue;
+        }
+      }
+      if ("command" in part) this.list(part.command, copy(state));
+      // An array's words are read; the array's value is not known.
+      if ("array" in part) this.reads(part.array.map((word) => this.value(word, state)), state);
+      known = false;
+      prefix ??= text;
+    }
+    return { text, known, glob, prefix: prefix ?? text };
+  }
+
+  private variable(name: string, state: State): string | undefined {
+    if (name === "HOME") return homedir();
+    if (name === "PWD") return state.dir;
+    if (name === "OLDPWD") return state.previous;
+    return this.looped.has(name) ? undefined : state.vars.get(name);
+  }
+
+  private assign(value: Value, state: State): void {
+    const name = /^([A-Za-z_][A-Za-z0-9_]*)(\+?)=/.exec(value.text);
+    if (!name?.[1]) return;
+    state.vars.set(name[1], isExact(value) && !name[2] ? value.text.slice(name[0].length) : undefined);
+  }
+
+  /**
+   * A command, its words valued: the program first. `fed`: more arguments come from its input
+   * (`xargs`). `input`: its here-documents' and here-strings' text.
+   */
+  private run(words: Value[], state: State, fed: boolean, input: string[] = []): void {
+    let start = 0;
+    while (words[start]?.known && RESERVED.has(words[start]?.text ?? "")) start++;
+    const program = words[start];
+    if (!program) return;
+    const args = words.slice(start + 1);
+    if (!program.known) {
+      this.opaque(words.slice(start), state, true, input);
+      return;
+    }
+    const name = basename(program.text);
+    const texts = args.map((arg) => arg.text);
+    if (name === "for" || name === "select") {
+      if (texts[0]) this.looped.add(texts[0]);
+      this.reads(args.slice(texts.indexOf("in") + 1 || args.length), state);
+    } else if (name === "cd" || name === "pushd" || name === "popd") this.changeDir(name, args, state);
+    else if (["export", "local", "declare", "typeset", "readonly"].includes(name)) {
+      for (const arg of args) this.assign(arg, state);
+      if (name === "export" || texts.some((text) => /^-[a-zA-Z]*x/.test(text))) this.exported(args, state);
+    } else if (["read", "mapfile", "readarray"].includes(name)) {
+      for (const text of texts) if (!text.startsWith("-")) this.looped.add(text);
+    } else if (name === "unset") for (const text of texts) state.vars.delete(text);
+    else if (name === "case") return;
+    else if (name === "eval" || name === "trap") this.script(name === "eval" ? args : args.slice(0, 1), state);
+    else if (SHELLS.has(name)) this.shell([program, ...args], state, fed, input);
+    else if (name === "source" || name === ".") this.source(args, state, fed);
+    else if (name === "parallel") this.parallel(args, state);
+    else if (name === "command" && (texts[0] === "-v" || texts[0] === "-V")) return;
+    else if (WRAPPERS[name]) this.wrapper(name, args, state, fed, input);
+    else if (name === "watch") this.watch(args, state);
+    else if (name === "xargs") this.xargs(args, state);
+    else if (name === "find") this.find(args, state, fed);
+    else if (name === "git") this.git(args, state);
+    else if (READERS.has(name) && onlyReads(name, texts)) {
+      this.reads(args, state);
+    }
+    else {
+      const targets = writeTargets(name, args);
+      if (!targets) {
+        this.opaque([program, ...args], state, fed, input);
+        return;
+      }
+      for (const target of targets.writes) this.writes(target, state, true);
+      this.reads(targets.reads, state);
+      if (fed) this.verdict.blind = true;
     }
   }
-  return found;
-}
 
-function isCd(program: string): boolean {
-  return program === "cd" || program === "pushd";
-}
-
-/** Where `cd` goes: its folder, the previous one for `cd -`, home with none. */
-function cdTarget(dir: string, previous: string, args: string[]): string {
-  const target = args.find((arg) => arg === "-" || !arg.startsWith("-"));
-  if (target === "-") return previous;
-  return target === undefined ? homedir() : at(dir, target);
-}
-
-/**
- * The command line's top-level commands, each with the operator after it: groups `( … )`,
- * substitutions `$( … )` and backticks stay inside the command they are in, as quoted text does.
- * A `{ …; }` group is split as the shell runs it: a `cd` in it moves the commands after it.
- */
-function topLevel(command: string): { text: string; then: string }[] {
-  const parts: { text: string; then: string }[] = [];
-  let depth = 0;
-  let backtick = false;
-  let quote: string | undefined;
-  let start = 0;
-  for (let i = 0; i < command.length; i++) {
-    const c = command[i];
-    if (c === "\\") {
-      i++;
-      continue;
+  /** `export NAME=…` or `export NAME`: a clone it names is where a program may now write. */
+  private exported(args: Value[], state: State): void {
+    for (const arg of args) {
+      const set = /^[A-Za-z_][A-Za-z0-9_]*$/.test(arg.text) ? state.vars.get(arg.text) : undefined;
+      state.env ??= this.envClone(set === undefined ? arg : exact(`=${set}`));
     }
-    if (quote) {
-      if (c === quote) quote = undefined;
-      continue;
-    }
-    if (c === "'" || c === '"') {
-      quote = c;
-      continue;
-    }
-    if (c === "(") depth++;
-    else if (c === ")") depth = Math.max(0, depth - 1);
-    else if (c === "`") backtick = !backtick;
-    if (depth > 0 || backtick) continue;
-    const operator = OPERATORS.find((op) => command.startsWith(op, i));
-    // `2>&1`, `&>` and `>|` redirect: no command ends there.
-    if (operator === undefined || (operator === "&" && (command[i - 1] === ">" || command[i + 1] === ">"))) continue;
-    if (operator === "|" && command[i - 1] === ">") continue;
-    parts.push({ text: command.slice(start, i), then: operator });
-    i += operator.length - 1;
-    start = i + 1;
   }
-  parts.push({ text: command.slice(start), then: "" });
-  return parts.filter((part) => part.text.trim() !== "");
+
+  /** `source file`: a `.env` file sets variables; any other file runs commands unseen. */
+  private source(args: Value[], state: State, fed: boolean): void {
+    const file = args[0];
+    if (file && isExact(file) && /(^|\/)\.env(\.[\w.-]+)?$|\.env$/.test(file.text)) this.reads([file], state);
+    else this.opaque([exact("source"), ...args], state, fed);
+  }
+
+  /** `parallel` runs its command with words from its input or after `:::`. */
+  private parallel(args: Value[], state: State): void {
+    let i = 0;
+    while (args[i]?.known && args[i]?.text.startsWith("-")) i++;
+    const sources = args.findIndex((arg) => arg.text === ":::" || arg.text === "::::");
+    const command = args.slice(i, sources < 0 ? args.length : sources);
+    if (sources >= 0) this.reads(args.slice(sources + 1), state);
+    this.run(command.length > 0 ? command : [exact("echo")], copy(state), true);
+  }
+
+  /** `eval` and `trap`: their words are a command line. */
+  private script(words: Value[], state: State): void {
+    if (words.every(isExact)) this.list(readLine(words.map((word) => word.text).join(" ")), state);
+    else this.verdict.blind = true;
+  }
+
+  private changeDir(name: string, args: Value[], state: State): void {
+    if (name === "popd") {
+      if (state.stack.length === 0) return;
+      state.previous = state.dir;
+      state.dir = state.stack.pop();
+      return;
+    }
+    const target = args.find((arg) => !arg.known || arg.text === "-" || !arg.text.startsWith("-"));
+    let next: string | undefined;
+    if (!target) next = name === "cd" ? homedir() : undefined;
+    else if (isExact(target) && target.text === "-") next = state.previous;
+    else if (isExact(target)) next = this.place(target.text, state.dir);
+    else this.reads([target], state);
+    if (name === "pushd") state.stack.push(state.dir);
+    state.previous = state.dir;
+    state.dir = next;
+  }
+
+  /** `bash -c '…' args` runs its script with `$0`, `$1`… set; `bash file` a script unseen; `bash` alone its input. */
+  private shell(words: Value[], state: State, fed: boolean, input: string[]): void {
+    let script = false;
+    let i = 1;
+    for (; i < words.length; i++) {
+      const word = words[i];
+      if (!word?.known || !/^[-+]/.test(word.text)) break;
+      if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(word.text)) script = true;
+      else if (["-o", "+o", "-O", "+O", "--rcfile", "--init-file"].includes(word.text)) i++;
+    }
+    const operand = words[i];
+    if (script) {
+      if (!operand) return;
+      const local = copy(state);
+      const positional = words.slice(i + 1);
+      this.reads(positional, state);
+      positional.forEach((arg, n) => local.vars.set(String(n), isExact(arg) ? arg.text : undefined));
+      this.script([operand], local);
+    } else if (operand) this.opaque(words, state, fed, input);
+    else if (input.length > 0) for (const text of input) this.list(readLine(text), copy(state));
+    else this.verdict.blind = true;
+  }
+
+  private wrapper(name: string, args: Value[], state: State, fed: boolean, input: string[]): void {
+    const spec = WRAPPERS[name];
+    if (!spec) return;
+    const local = copy(state);
+    let i = 0;
+    while (i < args.length) {
+      const arg = args[i];
+      if (!arg?.known) break;
+      if (arg.text === "--") {
+        i++;
+        break;
+      }
+      if (name === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg.text)) {
+        local.env ??= this.envClone(arg);
+        i++;
+        continue;
+      }
+      if (!arg.text.startsWith("-") || arg.text === "-") break;
+      let [opt, attached] = option(arg.text);
+      // `-S'…'`, `-Cdir`: a short option with its value attached.
+      const short = opt.slice(0, 2);
+      if (!opt.startsWith("--") && opt.length > 2 && (spec.values.includes(short) || (spec.dirs ?? []).includes(short))) {
+        attached = opt.slice(2);
+        opt = short;
+      }
+      const takes = spec.values.includes(opt) || (spec.dirs ?? []).includes(opt);
+      const value = attached !== undefined ? after(arg, arg.text.length - attached.length) : takes ? args[i + 1] : undefined;
+      i += attached === undefined && takes ? 2 : 1;
+      if (!value) continue;
+      if ((spec.dirs ?? []).includes(opt)) {
+        local.previous = local.dir;
+        local.dir = isExact(value) ? this.place(value.text, local.dir) : undefined;
+      } else if (name === "time" && (opt === "-o" || opt === "--output")) this.writes(value, state, false);
+      else if (name === "env" && (opt === "-S" || opt === "--split-string")) {
+        this.script([value, ...args.slice(i)], local);
+        return;
+      }
+    }
+    i += spec.positional ?? 0;
+    const inner = args.slice(i);
+    if (inner.length > 0) this.run(inner, local, fed, input);
+  }
+
+  /** `watch` runs its words as a command line, through `sh -c` unless `-x`. */
+  private watch(args: Value[], state: State): void {
+    let i = 0;
+    let direct = false;
+    for (; args[i]?.known && args[i]?.text.startsWith("-"); i++) {
+      const text = args[i]?.text;
+      if (text === "-n" || text === "--interval") i++;
+      if (text === "-x" || text === "--exec") direct = true;
+    }
+    if (direct) this.run(args.slice(i), copy(state), false);
+    else this.script(args.slice(i), copy(state));
+  }
+
+  /** `xargs` runs its command with words from its input: at the end, or where `-I`'s string is. */
+  private xargs(args: Value[], state: State): void {
+    let replace: string | undefined;
+    let i = 0;
+    for (; i < args.length; i++) {
+      const arg = args[i];
+      if (!arg?.known || !arg.text.startsWith("-") || arg.text === "-") break;
+      if (arg.text === "--") {
+        i++;
+        break;
+      }
+      const [opt, attached] = option(arg.text);
+      if (opt === "-I") replace = args[i + 1]?.text;
+      else if (/^-I./.test(opt)) replace = opt.slice(2);
+      else if (opt === "-i" || opt === "--replace") replace = attached ?? "{}";
+      else if (/^-i./.test(opt)) replace = opt.slice(2);
+      const input = opt === "-a" || opt === "--arg-file" ? (attached !== undefined ? after(arg, opt.length + 1) : args[i + 1]) : undefined;
+      if (input) this.reads([input], state);
+      if (attached === undefined && XARGS_VALUES.has(opt)) i++;
+    }
+    const inner = args.slice(i);
+    const words = inner.length > 0 ? inner : [exact("echo")];
+    const fed = replace === undefined;
+    const placed = fed
+      ? words
+      : words.map((word) => (replace && word.text.includes(replace) ? { ...word, known: false, prefix: word.text.slice(0, word.text.indexOf(replace)) } : word));
+    this.run(placed, copy(state), fed);
+  }
+
+  /** `find` reads, unless it deletes, prints into a file, or runs a command on what it finds. */
+  private find(args: Value[], state: State, fed: boolean): void {
+    let i = 0;
+    for (; args[i]?.known && /^-(?:[HLP]|O\d*|D)$/.test(args[i]?.text ?? ""); i++) if (args[i]?.text === "-D") i++;
+    const roots: Value[] = [];
+    for (; i < args.length; i++) {
+      const arg = args[i];
+      if (!arg || (arg.known && /^[-(!),]/.test(arg.text))) break;
+      roots.push(arg);
+    }
+    if (roots.length === 0) roots.push(exact("."));
+    this.reads(roots, state);
+    for (; i < args.length; i++) {
+      const text = args[i]?.text ?? "";
+      if (text === "-delete") for (const root of roots) this.writes(root, state, true);
+      else if (["-fprint", "-fprint0", "-fls", "-fprintf"].includes(text)) {
+        const file = args[++i];
+        if (file) this.writes(file, state, false);
+      } else if (["-exec", "-execdir", "-ok", "-okdir"].includes(text)) {
+        let end = i + 1;
+        while (end < args.length && !(args[end]?.known && (args[end]?.text === ";" || args[end]?.text === "+"))) end++;
+        const command = args.slice(i + 1, end);
+        for (const root of roots) {
+          const local = copy(state);
+          if (text.endsWith("dir")) local.dir = isExact(root) ? this.place(root.text, state.dir) : undefined;
+          this.run(
+            command.map((word) => (word.text.includes("{}") ? found(word, root) : word)),
+            local,
+            fed,
+          );
+        }
+        i = end;
+      }
+    }
+  }
+
+  /** Git changes the repository it runs on, unless it reads; whatever it reads, its outputs. */
+  private git(args: Value[], state: State): void {
+    let where = state.dir;
+    const given: (string | undefined)[] = [];
+    let i = 0;
+    for (; i < args.length; i++) {
+      const arg = args[i];
+      if (!arg?.known || !arg.text.startsWith("-")) break;
+      const [opt, attached] = option(arg.text);
+      const value = attached !== undefined ? after(arg, opt.length + 1) : GIT_VALUES.has(opt) ? args[++i] : undefined;
+      if (!value) continue;
+      const place = isExact(value) ? this.place(value.text, where) : undefined;
+      if (opt === "-C") where = place;
+      else if (opt === "--work-tree" || opt === "--git-dir") given.push(place);
+    }
+    const sub = args[i];
+    const rest = args.slice(i + 1);
+    if (!sub) return;
+    const local = { ...state, dir: where };
+    for (const out of gitOutputs(sub.text, rest)) this.writes(out, local, false);
+    const texts = rest.map((arg) => arg.text);
+    const file = sub.text === "config" ? optionValue(rest, ["-f", "--file"]) : undefined;
+    // The repository it works on: `--work-tree` and `--git-dir` both given, where it runs no longer counts.
+    const repos = file ? [isExact(file) ? this.place(file.text, where) : undefined] : given.length === 2 ? given : [where, ...given];
+    let clone = repos.map((repo) => (repo === undefined ? undefined : cloneOf(repo, this.clones))).find((found) => found !== undefined);
+    // The folder `clone` and `init` make, and paths outside the repository it names.
+    if (sub.text === "clone" || sub.text === "init") {
+      const operands = gitOperands(texts);
+      const folder = sub.text === "clone" ? operands[1] : operands[0];
+      const target = folder === undefined ? where : this.place(folder, where);
+      clone = target === undefined ? undefined : cloneOf(target, this.clones);
+      if (target === undefined) this.verdict.blind = true;
+    }
+    // `GIT_DIR` and the like, set for it, point it at a clone.
+    clone ??= sub.text === "clone" || sub.text === "init" ? undefined : state.env;
+    if (!sub.known) this.verdict.blind = true;
+    else if (sub.text === "submodule" && texts.includes("foreach")) {
+      const script = rest.slice(texts.indexOf("foreach") + 1).find((arg) => !arg.text.startsWith("-"));
+      if (script) this.script([script], local);
+      return;
+    } else if (sub.text !== "clone" && sub.text !== "init" && gitReads(sub.text, texts)) {
+      this.verdict.named ??= clone;
+      return;
+    }
+    // Paths it is given only name what it reads or works on in the repository: only where it
+    // runs, its outputs and the folder `clone` or `init` makes are written.
+    if (clone) this.verdict.changed ??= clone;
+    else if (repos.some((repo) => repo === undefined)) this.verdict.blind = true;
+  }
+
+  /** A path the command writes: in a clone, or for a folder (`around`), holding one. */
+  private writes(value: Value, state: State, around: boolean): void {
+    const paths = this.paths(value, state);
+    for (const path of paths) this.verdict.changed ??= around ? cloneAround(path, this.clones) : cloneOf(path, this.clones);
+    // A value known only in part, from a folder outside the clones (`web/$f`), stays there.
+    if (paths.length === 0 && (!value.known || value.text !== "")) this.verdict.blind = true;
+  }
+
+  /** Paths a command only reads, and the folder it runs in. */
+  private reads(values: Value[], state: State): void {
+    if (state.dir !== undefined) this.verdict.named ??= cloneOf(state.dir, this.clones);
+    for (const value of values) for (const path of this.paths(value, state)) this.verdict.named ??= cloneOf(path, this.clones);
+  }
+
+  /**
+   * A program the guard does not know: it changes what it names, the folder it runs in, and where
+   * an environment variable set for it points. An interpreter also changes a clone its code names.
+   */
+  private opaque(words: Value[], state: State, fed: boolean, input: string[] = []): void {
+    if (state.dir === undefined) this.verdict.blind = true;
+    else this.verdict.changed ??= cloneOf(state.dir, this.clones);
+    this.verdict.changed ??= state.env;
+    const interpreter = INTERPRETERS.has(basename(words[0]?.text ?? ""));
+    for (const [n, word] of words.entries()) {
+      // The program is found on the PATH unless written as a path (`./run.sh`, `/code/web/bin/x`).
+      const paths = n === 0 && !word.text.includes("/") ? [] : this.paths(word, state);
+      for (const path of paths) this.verdict.changed ??= cloneAround(path, this.clones);
+      if (interpreter) this.verdict.changed ??= this.inText(word.text);
+      if (paths.length === 0 && (!word.known || this.unplaced(word, state))) this.verdict.blind = true;
+    }
+    if (interpreter) for (const text of input) this.verdict.changed ??= this.inText(text);
+    if (fed) this.verdict.blind = true;
+  }
+
+  /** The paths a word may name: as given, after `=` or `:`, an option's attached path, a wildcard's folder. */
+  private paths(value: Value, state: State): string[] {
+    const braces = value.known ? /^([^{}]*)\{([^{}]*,[^{}]*)\}(.*)$/.exec(value.text) : null;
+    if (braces) {
+      // `{a,b}`: each of its words.
+      return (braces[2] ?? "").split(",").flatMap((choice) => {
+        const text = `${braces[1] ?? ""}${choice}${braces[3] ?? ""}`;
+        const wild = /[*?[{]/.exec(text);
+        return this.paths(wild ? { text, known: true, glob: true, prefix: text.slice(0, wild.index) } : exact(text), state);
+      });
+    }
+    let texts: string[];
+    if (isExact(value)) texts = spellings(value.text);
+    else if (value.known || value.prefix) texts = [folderOf(value.prefix)];
+    else texts = [];
+    return texts.flatMap((text) => {
+      const place = this.place(text, state.dir);
+      return place === undefined ? [] : [place];
+    });
+  }
+
+  /** A relative path from a folder unknown. */
+  private unplaced(value: Value, state: State): boolean {
+    return state.dir === undefined && value.text !== "" && !isAbsolute(value.text);
+  }
+
+  private place(path: string, dir: string | undefined): string | undefined {
+    if (isAbsolute(path)) return resolve(path);
+    return dir === undefined ? undefined : resolve(dir, path);
+  }
+
+  /** A clone's path written inside a word (`python -c "open('/code/web/x', 'w')"`). */
+  private inText(text: string): GuardedClone | undefined {
+    for (const { clone } of this.clones) {
+      for (let from = text.indexOf(clone); from >= 0; from = text.indexOf(clone, from + 1)) {
+        const path = /^[^\s'"`;,()<>|&=:]*/.exec(text.slice(from))?.[0] ?? "";
+        if (path !== clone && !path.startsWith(`${clone}/`)) continue;
+        const found = cloneOf(resolve(path), this.clones);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  }
 }
 
-function writtenClone(program: string, args: string[], dir: string, clones: GuardedClone[]): GuardedClone | undefined {
-  const inClone = (word: string) => cloneOf(at(dir, word), clones);
-  for (const target of redirections(args)) {
-    const clone = inClone(target);
-    if (clone) return clone;
+function isAssignment(word: Word | undefined): boolean {
+  const first = word?.parts[0];
+  return first !== undefined && "text" in first && /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(first.text);
+}
+
+/** The ways a word without a wildcard may name a path. */
+function spellings(text: string): string[] {
+  if (!text || text === "-" || text === "--") return [];
+  if (/\s/.test(text)) return [text];
+  const all = [text];
+  const eq = text.indexOf("=");
+  if (eq > 0) all.push(text.slice(eq + 1));
+  if (text.includes(":")) all.push(...text.split(":"));
+  if (/^-[A-Za-z][~/.]/.test(text)) all.push(text.slice(2));
+  return all.filter((spelling) => spelling !== "");
+}
+
+/** The folder a wildcard's matches are in: `/a/b*` is in `/a/`, `*.log` in `.`. */
+function folderOf(prefix: string): string {
+  const slash = prefix.lastIndexOf("/");
+  return slash < 0 ? "." : prefix.slice(0, slash + 1);
+}
+
+/** `find -exec`'s `{}`, as each starting point. */
+function found(word: Value, root: Value): Value {
+  const text = word.text.replaceAll("{}", root.text);
+  if (isExact(root)) return exact(text);
+  return { text, known: root.known, glob: root.glob, prefix: word.text.startsWith("{}") ? root.prefix : "" };
+}
+
+/** A reader that, with these options, writes after all. */
+function onlyReads(name: string, texts: string[]): boolean {
+  switch (name) {
+    case "sed":
+    case "gsed":
+      // `-i` edits in place; a script's `w file` or `s/…/…/w file` writes that file.
+      return !texts.some((text) => /^-[a-zA-Z]*i/.test(text) || text.startsWith("--in-place")) && !sedScripts(texts).some((script) => /(^|[;}\s/])w\s+\S/.test(script));
+    case "awk":
+    case "gawk":
+    case "mawk":
+    case "nawk": {
+      let program: string | undefined;
+      for (let i = 0; i < texts.length; i++) {
+        const text = texts[i] ?? "";
+        if (text === "-f" || text.startsWith("--file") || text.startsWith("-i") || text.startsWith("--include")) return false;
+        if (text === "-v" || text === "-F") i++;
+        else if (!text.startsWith("-")) {
+          program = text;
+          break;
+        }
+      }
+      // `print > "file"`, `print | "cmd"`, `system()`, `"cmd" | getline`: a comparison's `>` is no write.
+      return program === undefined || !/\bprintf?\b[^;}]*[>|]|system\s*\(|\|\s*getline/.test(program);
+    }
+    case "sort":
+      return !texts.some((text) => /^-[a-zA-Z]*o/.test(text) || text.startsWith("--output"));
+    case "uniq":
+      return texts.filter((text) => !text.startsWith("-")).length <= 1;
+    case "yq":
+      return !texts.some((text) => text === "-i" || text.startsWith("--inplace"));
+    case "rg":
+      return !texts.some((text) => text.startsWith("--pre"));
+    case "tree":
+      return !texts.some((text) => text === "-o" || text.startsWith("--output"));
+    case "xxd":
+      return !texts.some((text) => /^-[a-zA-Z]*r/.test(text) || text === "-revert");
+    case "base64":
+      return !texts.some((text) => text === "-o" || text.startsWith("--output"));
+    case "fd":
+    case "fdfind":
+      return !texts.some((text) => ["-x", "-X", "--exec", "--exec-batch"].includes(text));
+    default:
+      return true;
   }
-  const words = operands(args);
-  if (WRITERS.has(program)) return firstClone(words, inClone);
-  if (COPIERS.has(program)) {
-    const target = (TARGET_OPTION.has(program) ? optionValue(args, "-t", "--target-directory") : undefined) ?? words.at(-1);
-    return target === undefined ? undefined : inClone(target);
+}
+
+/** A sed command's scripts: `-e`'s values, else its first operand. */
+function sedScripts(texts: string[]): string[] {
+  const scripts: string[] = [];
+  for (let i = 0; i < texts.length; i++) {
+    const text = texts[i] ?? "";
+    if (text === "-e" || text === "--expression") scripts.push(texts[++i] ?? "");
+    else if (text.startsWith("--expression=")) scripts.push(text.slice("--expression=".length));
+    else if (text === "-f" || text === "--file" || text === "-l") i++;
+    else if (!text.startsWith("-") && scripts.length === 0) return [text];
   }
-  if (IN_PLACE.has(program) && args.some((arg) => /^-\w*i/.test(arg) || arg.startsWith("--in-place"))) return firstClone(words, inClone);
-  if (program === "dd") return firstClone(args.filter((arg) => arg.startsWith("of=")).map((arg) => arg.slice(3)), inClone);
-  // `find … -delete`, or `-exec` / `-execdir` running a program that changes what it is given.
-  const execWrites = (arg: string, i: number) => (arg === "-exec" || arg === "-execdir") && WRITERS.has(args[i + 1] ?? "");
-  if (program === "find" && (args.includes("-delete") || args.some(execWrites))) {
-    const roots = args.slice(0, Math.max(0, args.findIndex((arg) => arg.startsWith("-"))));
-    return firstClone(roots.length > 0 ? roots : ["."], inClone);
+  return scripts;
+}
+
+/** What a writer the guard knows writes, and what it only reads; undefined for other programs. */
+function writeTargets(name: string, args: Value[]): { writes: Value[]; reads: Value[] } | undefined {
+  const operands = args.filter((arg) => !arg.known || !arg.text.startsWith("-") || arg.text === "-");
+  if (name === "tee") return { writes: operands, reads: [] };
+  if (name === "uniq") return { writes: operands.slice(1), reads: operands.slice(0, 1) };
+  if (name === "sort") {
+    const output = optionValue(args, ["-o", "--output"]) ?? args.map((arg) => /^-[a-zA-Z]*o(.+)$/.exec(arg.text)?.[1]).find(Boolean);
+    const value = typeof output === "string" ? exact(output) : output;
+    return { writes: value ? [value] : [], reads: operands };
   }
-  if (program === "git") return gitWrite(args, dir, clones);
+  if (name === "tar" || name === "bsdtar" || name === "gtar") return tarred(args);
+  if (name === "zip") return { writes: operands.slice(0, 1), reads: operands.slice(1) };
+  if (name === "unzip") {
+    const into = optionValue(args, ["-d"]);
+    return { writes: [into ?? exact(".")], reads: operands.filter((operand) => operand !== into) };
+  }
+  const values = COPIERS[name];
+  return values ? copied(name, args, new Set(values)) : undefined;
+}
+
+/** `tar`: creating writes its archive; extracting writes into `-C`'s folder or where it runs; listing reads. */
+function tarred(args: Value[]): { writes: Value[]; reads: Value[] } | undefined {
+  const first = args[0]?.text ?? "";
+  const modes = first.startsWith("-") ? args.filter((arg) => /^-[a-zA-Z]+$/.test(arg.text)).map((arg) => arg.text).join("") : first;
+  const file = optionValue(args, ["-f", "--file"]) ?? (!first.startsWith("-") && first.includes("f") ? args[1] : undefined);
+  const into = optionValue(args, ["-C", "--directory"]);
+  const reads = args.filter((arg) => arg !== file && arg !== into && !arg.text.startsWith("-") && arg !== args[0]);
+  if (/[xX]/.test(modes) || args.some((arg) => arg.text === "--extract" || arg.text === "--get")) return { writes: [into ?? exact(".")], reads: [] };
+  if (/[t]/.test(modes) || args.some((arg) => arg.text === "--list")) return { writes: [], reads: file ? [file] : [] };
+  if (/[cru]/.test(modes) || args.some((arg) => ["--create", "--append", "--update"].includes(arg.text))) {
+    const archive = file && file.text !== "-" ? [file] : [];
+    return { writes: archive, reads: into ? [into, ...reads] : reads };
+  }
   return undefined;
 }
 
-/** The clone a git command changes: the one it runs in (`-C`, `--work-tree`, `--git-dir`, `cd`), unless it only reads. */
-function gitWrite(args: string[], dir: string, clones: GuardedClone[]): GuardedClone | undefined {
-  let where = dir;
-  let workTree: string | undefined;
-  let gitDir: string | undefined;
-  let i = 0;
-  for (; i < args.length; i++) {
-    const arg = args[i];
-    const value = args[i + 1];
-    if (arg === undefined || !arg.startsWith("-")) break;
-    const [name, attached] = arg.startsWith("--") && arg.includes("=") ? [arg.slice(0, arg.indexOf("=")), arg.slice(arg.indexOf("=") + 1)] : [arg, undefined];
-    const given = attached ?? (GIT_VALUE_OPTIONS.has(name) ? value : undefined);
-    if (given !== undefined && name === "-C") where = at(where, given);
-    if (given !== undefined && name === "--work-tree") workTree = at(where, given);
-    if (given !== undefined && name === "--git-dir") gitDir = at(where, given);
-    if (attached === undefined && GIT_VALUE_OPTIONS.has(name)) i++;
-  }
-  const sub = args[i];
-  const rest = args.slice(i + 1);
-  // `--output` (diff, log, show) and `--output-directory` (format-patch) write wherever they name.
-  for (const [k, arg] of rest.entries()) {
-    const name = arg.split("=")[0];
-    if (name !== "--output" && name !== "--output-directory") continue;
-    const target = arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : rest[k + 1];
-    const written = target === undefined ? undefined : cloneOf(at(where, target), clones);
-    if (written) return written;
-  }
-  const words = rest.filter((arg) => !arg.startsWith("-"));
-  // `git clone` writes its destination, by default a folder in the one it runs from: a URL alone
-  // resolves there too.
-  if (sub === "clone") return cloneOf(at(where, words.at(-1) ?? "."), clones);
-  // Both `--work-tree` and `--git-dir` given, the folder it runs from no longer counts.
-  const places = workTree !== undefined && gitDir !== undefined ? [workTree, gitDir] : [where, workTree, gitDir];
-  // `git config --file <path>` reads or writes that file, wherever git runs.
-  const file = sub === "config" ? optionValue(rest, "-f", "--file") : undefined;
-  if (file !== undefined) places.splice(0, places.length, at(where, file));
-  const clone = places.map((place) => place && cloneOf(place, clones)).find((found) => found !== undefined);
-  if (!clone) return undefined;
-  if (sub === undefined || GIT_READS.has(sub)) return undefined;
-  if ((sub === "branch" || sub === "tag") && (words.length === 0 || rest.some((arg) => LISTING.has(arg.split("=")[0] ?? arg)))) return undefined;
-  if (sub === "remote" && (words.length === 0 || words[0] === "get-url" || words[0] === "show")) return undefined;
-  if (sub === "stash" && (words[0] === "list" || words[0] === "show")) return undefined;
-  if (sub === "worktree" && words[0] === "list") return undefined;
-  if (sub === "reflog" && words[0] !== "expire" && words[0] !== "delete") return undefined;
-  const configWrite = rest.some((arg) => /^--(?:unset|remove-section)/.test(arg));
-  const keys = words.filter((word) => word !== file);
-  if (sub === "config" && ((keys.length === 1 && !configWrite) || rest.some((arg) => arg === "--list" || arg === "-l" || arg.startsWith("--get")))) return undefined;
-  return clone;
-}
-
-/** The value of an option, given as `-t value`, `--long value` or `--long=value`. */
-function optionValue(args: string[], short: string, long: string): string | undefined {
-  for (const [k, arg] of args.entries()) {
-    if (arg === short || arg === long) return args[k + 1];
-    if (arg.startsWith(`${long}=`)) return arg.slice(long.length + 1);
-  }
-  return undefined;
-}
-
-function firstClone(words: string[], inClone: (word: string) => GuardedClone | undefined): GuardedClone | undefined {
-  for (const word of words) {
-    const clone = inClone(word);
-    if (clone) return clone;
-  }
-  return undefined;
-}
-
-/**
- * A redirection, when the word is one: the operator alone (`>`, `>>`, `>|`, `>&`, `2>`, `&>`), its
- * target the next word; the operator with its target attached (`>file`, `x>>file`, `>|file`,
- * `>&file`); or a copy of another stream (`2>&1`, `>&2`, `2>&-`), with no file.
- * A quoted word with `>` inside (`'=>'`, `'.x > 1'`) is none: the parser dropped its quotes, but a
- * redirection's target has no space and follows its operator.
- */
-function redirection(word: string): { attached: string } | { next: true } | { stream: true } | undefined {
-  if (/^(?:\d|&)?(?:>>?|>\||>&)$/.test(word)) return { next: true };
-  const match = /^[^\s>]*?(?:\d|&)?(>>|>\||>&|>)([^\s>|]\S*)$/.exec(word);
-  const [, operator, target] = match ?? [];
-  if (target === undefined) return undefined;
-  return operator === ">&" && isStream(target) ? { stream: true } : { attached: target };
-}
-
-/** A stream after `>&`: a descriptor or `-` (closed), not a file. */
-function isStream(target: string): boolean {
-  return /^(?:\d+|-)$/.test(target);
-}
-
-/** The words that are not options, redirections or a redirection's target. */
-function operands(args: string[]): string[] {
-  const words: string[] = [];
+/** A copier's destination (`-t`'s value, or its last operand) and the sources it only reads. */
+function copied(name: string, args: Value[], values: Set<string>): { writes: Value[]; reads: Value[] } {
+  const writes: Value[] = [];
+  const sources: Value[] = [];
+  let target: Value | undefined;
+  let removesSources = false;
+  const targetOption = name === "cp" || name === "ln" || name === "install";
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i] as string;
-    const found = redirection(arg);
-    if (found && "next" in found) i++;
-    else if (!found && !arg.startsWith("-")) words.push(arg);
+    const arg = args[i];
+    if (!arg) continue;
+    if (!arg.known || !arg.text.startsWith("-") || arg.text === "-") {
+      sources.push(arg);
+      continue;
+    }
+    if (arg.text === "--") {
+      sources.push(...args.slice(i + 1));
+      break;
+    }
+    const [opt, attached] = option(arg.text);
+    if (opt === "--remove-source-files") removesSources = true;
+    const isTarget = targetOption && (opt === "-t" || opt === "--target-directory");
+    // `-rt dir`, `-tdir`, `-Dt dir`: `t` in a cluster of short options takes the rest, or the next word.
+    const cluster = targetOption && !opt.startsWith("--") ? /^-[a-zA-Z]*?t(.*)$/.exec(opt) : null;
+    if (cluster && opt !== "-t") {
+      const value = cluster[1] ? after(arg, opt.length - cluster[1].length) : args[++i];
+      if (value) target = value;
+      continue;
+    }
+    const takes = isTarget || values.has(opt) || (name === "rsync" && RSYNC_WRITES.has(opt));
+    const value = attached !== undefined ? after(arg, opt.length + 1) : takes ? args[++i] : undefined;
+    if (!value) continue;
+    if (isTarget) target = value;
+    else if (name === "rsync" && RSYNC_WRITES.has(opt)) writes.push(value);
   }
-  return words;
+  // `ln -s /a/b`: the link is made in the folder the command runs in.
+  target ??= name === "ln" && sources.length === 1 ? exact(".") : sources.pop();
+  if (target) writes.push(target);
+  return removesSources ? { writes: [...writes, ...sources], reads: [] } : { writes, reads: sources };
 }
 
-/** The files the command's output goes to. */
-function redirections(args: string[]): string[] {
-  const targets: string[] = [];
-  args.forEach((arg, i) => {
-    const found = redirection(arg);
-    if (!found || "stream" in found) return;
-    const target = "attached" in found ? found.attached : args[i + 1];
-    if (target !== undefined && !(arg.endsWith(">&") && isStream(target))) targets.push(target);
-  });
-  return targets;
+/** The value of the first of `names` among the words: `-f x`, `--file x` or `--file=x`. */
+function optionValue(args: Value[], names: string[]): Value | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg) continue;
+    const [opt, attached] = option(arg.text);
+    if (!names.includes(opt)) continue;
+    return attached !== undefined ? after(arg, opt.length + 1) : args[i + 1];
+  }
+  return undefined;
+}
+
+/** The files and folders a git command writes by an option: `--output`, `format-patch -o`… */
+function gitOutputs(sub: string, rest: Value[]): Value[] {
+  const outputs: Value[] = [];
+  const words = rest.filter((arg) => !arg.text.startsWith("-"));
+  if (sub === "bundle" && words[0]?.text === "create" && words[1]) outputs.push(words[1]);
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (!arg?.known) continue;
+    const [opt, attached] = option(arg.text);
+    const isOutput = GIT_OUTPUTS.has(opt) || ((sub === "format-patch" || sub === "archive") && opt === "-o");
+    if (!isOutput && (sub === "format-patch" || sub === "archive") && /^-o./.test(opt)) outputs.push(after(arg, 2));
+    if (!isOutput) continue;
+    const value = attached !== undefined ? after(arg, opt.length + 1) : rest[++i];
+    if (value) outputs.push(value);
+  }
+  return outputs;
+}
+
+/** `git clone` and `git init` operands, their options' values left out. */
+function gitOperands(texts: string[]): string[] {
+  const operands: string[] = [];
+  for (let i = 0; i < texts.length; i++) {
+    const text = texts[i] ?? "";
+    if (!text.startsWith("-")) operands.push(text);
+    else if (CLONE_VALUES.has(text)) i++;
+  }
+  return operands;
+}
+
+/** A git subcommand that only reads, with these words. */
+function gitReads(sub: string, texts: string[]): boolean {
+  // `git grep -O<cmd>` opens what it finds with a command.
+  if (sub === "grep" && texts.some((text) => text.startsWith("-O") || text.startsWith("--open-files-in-pager"))) return false;
+  if (GIT_READS.has(sub)) return true;
+  const words = texts.filter((text) => !text.startsWith("-"));
+  switch (sub) {
+    case "branch":
+    case "tag":
+      return listing(texts, LISTING[sub]);
+    case "remote":
+      return words.length === 0 ? texts.every((text) => text === "-v" || text === "--verbose") : words[0] === "get-url" || words[0] === "show";
+    case "stash":
+      return words[0] === "list" || words[0] === "show";
+    case "worktree":
+      return words[0] === "list";
+    case "reflog":
+      return !["expire", "delete", "drop", "write"].includes(words[0] ?? "");
+    case "notes":
+      return words[0] === "list" || words[0] === "show";
+    case "submodule":
+      return words[0] === undefined || words[0] === "status" || words[0] === "summary";
+    case "config":
+      return configReads(texts);
+    case "symbolic-ref":
+      return words.length <= 1 && !texts.some((text) => text === "-d" || text === "--delete");
+    case "fsck":
+      return !texts.includes("--lost-found");
+    case "lfs":
+      return ["ls-files", "status", "env", "version", "logs"].includes(words[0] ?? "");
+    case "bundle":
+      return ["create", "verify", "list-heads"].includes(words[0] ?? "");
+    case "format-patch":
+      // Its patches go into the folder it runs in, unless printed or sent elsewhere.
+      return texts.some((text) => text === "--stdout" || text === "-o" || /^-o./.test(text) || text.startsWith("--output-directory"));
+    default:
+      return false;
+  }
+}
+
+/** `git branch` or `git tag` listing: listing options only, and a pattern only after `--list`. */
+function listing(texts: string[], { flags, patterns }: { flags: string[]; patterns: string[] }): boolean {
+  let pattern = false;
+  let operands = 0;
+  for (let i = 0; i < texts.length; i++) {
+    const [opt, attached] = option(texts[i] ?? "");
+    if (!opt.startsWith("-")) operands++;
+    else if (LISTING_VALUES.includes(opt)) {
+      if (attached === undefined) i++;
+    } else if (flags.includes(opt) || LISTING_FLAGS.includes(opt) || /^-n\d*$/.test(opt)) pattern ||= patterns.includes(opt);
+    else return false;
+  }
+  return operands === 0 || pattern;
+}
+
+/** `git config` reading: read options only, and one key or a `--get`/`--list`. */
+function configReads(texts: string[]): boolean {
+  let keys = 0;
+  let gets = false;
+  for (let i = 0; i < texts.length; i++) {
+    const [opt, attached] = option(texts[i] ?? "");
+    if (!opt.startsWith("-")) {
+      if (keys === 0 && !gets && ["set", "unset", "rename-section", "remove-section", "edit"].includes(opt)) return false;
+      if (keys === 0 && !gets && (opt === "get" || opt === "list")) gets = true;
+      else keys++;
+    } else if (CONFIG_VALUES.includes(opt)) {
+      if (attached === undefined) i++;
+    } else if (CONFIG_GETS.includes(opt)) gets = true;
+    else if (!CONFIG_READS.includes(opt)) return false;
+  }
+  return gets || keys === 1;
+}
+
+/** The clone a path is in, or the clone in the folder it names. */
+function cloneAround(path: string, clones: GuardedClone[]): GuardedClone | undefined {
+  return cloneOf(path, clones) ?? clones.find(({ clone }) => inside(clone, path));
 }
 
 /** The clone a path is in, unless it is in a worktree of the workspace or its git folder. */
 function cloneOf(path: string, clones: GuardedClone[]): GuardedClone | undefined {
-  if (clones.some(({ worktree, gitdir }) => inside(path, worktree) || (gitdir !== undefined && inside(path, gitdir)))) return undefined;
-  return clones.find(({ clone }) => inside(path, clone));
+  return exempt(path, clones) ? undefined : clones.find(({ clone }) => inside(path, clone));
 }
 
+/** A path in a worktree of the workspace, or in its git folder in the clone's `.git`. */
+function exempt(path: string, clones: GuardedClone[]): boolean {
+  return clones.some(({ worktree, gitdir }) => inside(path, worktree) || (gitdir !== undefined && inside(path, gitdir)));
+}
+
+/** macOS's file system ignores case: `~/Documents/GitHub/web` is `~/Documents/github/web`. */
+const FOLD_CASE = process.platform === "darwin";
+
 function inside(path: string, dir: string): boolean {
-  const rel = relative(dir, path);
+  const rel = FOLD_CASE ? relative(dir.toLowerCase(), path.toLowerCase()) : relative(dir, path);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
