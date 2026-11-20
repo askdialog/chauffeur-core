@@ -1,7 +1,7 @@
 // A markdown file's comments in the Files tab (story 57), against the daemon: read and changed
 // through `files.comment*`, "Send N new" to the chat that wrote the file or another, and the
 // file's share (its reviewers' comments come back through the daemon). The view is
-// MarkdownComments; the rules live in the daemon (file_comments.rs).
+// PassageComments; the rules live in the daemon (file_comments.rs).
 
 import type { CommentAuthor, DesignComment, DesignShareState } from "@chauffeur/protocol";
 import { Send } from "lucide-react";
@@ -10,7 +10,7 @@ import { chatLabel, openChats } from "@/lib/chatTabs";
 import { counts } from "@/lib/comments";
 import { errorMessage } from "@/lib/rpc";
 import { chatsOf, client, sendNow, setDesignShare, toast, useApp } from "@/state/app";
-import { type CommentActions, MarkdownComments } from "./MarkdownComments";
+import { type CommentActions, PassageComments } from "./PassageComments";
 import { Button, Select } from "./ui";
 
 export type FileComments = {
@@ -176,7 +176,7 @@ export function CommentedMarkdown({
   );
 
   return (
-    <MarkdownComments
+    <PassageComments
       text={text}
       comments={state.comments}
       me={state.me}
