@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Checks shared by the e2e scripts, sourced by each: `source scripts/e2e-lib.sh` from the repo's
 # root, `source "$(dirname "$0")/e2e-lib.sh"` before a script changes folder.
 
