@@ -25,8 +25,15 @@ test("shared HTML is isolated, PDFs render, updates replace blobs and revoked ac
   let refused = "";
   const onRefused = (text: string) => { refused = text; };
   const onSignedOut = () => {};
+  const review = {
+    comments: [],
+    me: { email: "reviewer@example.com", name: "Reviewer" },
+    panel: false,
+    onPanel: () => {},
+    actions: { add: async () => {}, reply: async () => {}, edit: () => {}, remove: () => {}, resolve: () => {} },
+  };
   const render = (name: string, revision: number) => act(async () => {
-    root.render(<SharedDocument id="share" name={name} title="Report" revision={revision} onSignedOut={onSignedOut} onRefused={onRefused} />);
+    root.render(<SharedDocument id="share" name={name} title="Report" revision={revision} onSignedOut={onSignedOut} onRefused={onRefused} review={review} />);
   });
   try {
     await render("report.html", 0);
@@ -35,6 +42,8 @@ test("shared HTML is isolated, PDFs render, updates replace blobs and revoked ac
     expect(await resources[1].text()).toContain("default-src 'none'");
     expect(container.querySelector("a")?.getAttribute("href")).toBe("blob:test-1");
     expect(await resources[1].text()).toStartWith('<!doctype html><meta charset="utf-8">');
+    expect(await resources[1].text()).toContain("html-passages");
+    expect(container.querySelector("button[aria-pressed]")?.textContent?.trim()).toBe("Comments");
     expect(resources[1].type).toBe("text/html;charset=utf-8");
     const frame = container.querySelector("iframe");
     await render("report.html", 1);
@@ -45,6 +54,7 @@ test("shared HTML is isolated, PDFs render, updates replace blobs and revoked ac
     expect(revoke.mock.calls.map(([url]) => url)).toContain("blob:test-2");
     await render("report.pdf", 3);
     expect(container.querySelector("iframe")?.hasAttribute("sandbox")).toBe(false);
+    expect(container.querySelector("button[aria-pressed]")).toBeNull();
     expect(container.querySelector("iframe")?.getAttribute("src")).toContain("#navpanes=0");
     failure = true;
     await render("report.pdf", 4);

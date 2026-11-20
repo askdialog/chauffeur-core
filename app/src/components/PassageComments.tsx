@@ -1,8 +1,3 @@
-// A markdown file with its comments (story 57): the rendered file, its commented passages
-// highlighted, "Comment" on a selection, and the Comments column (threads on their passages, open
-// or resolved). The app's Files tab and a reviewer's page of a shared file both draw it; what a
-// comment does (the daemon, the share's socket) comes from the props. Passages: lib/passages.ts.
-
 import type { CommentAuthor, DesignComment, Mention } from "@chauffeur/protocol";
 import { MessageSquare, MessageSquareQuote, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
@@ -10,6 +5,7 @@ import { counts, type Thread, threadsOf } from "@/lib/comments";
 import { findPassage, passageRange, rangeText } from "@/lib/passages";
 import { QUOTE_MAX, quoteOf } from "@/lib/shareComments";
 import { CommentComposer, type Filter, ThreadView } from "./design/CommentsPanel";
+import { HtmlPassages, type HtmlPreview, type PassageSelection } from "./HtmlPassages";
 import type { MentionSetup } from "./design/Mentions";
 import { Markdown } from "./Markdown";
 import { Badge, Button, cx, IconButton } from "./ui";
@@ -29,11 +25,8 @@ export type CommentActions = {
   opened?: (id: string) => void;
 };
 
-/** A passage the user selected, and where the selection ends on screen. */
-type Selected = { quote: string; top: number; left: number };
-
 /** The user's selection, when it lies in the rendered file: its passage as a comment keeps it. */
-function selectedPassage(article: HTMLElement | null): Selected | null {
+function selectedPassage(article: HTMLElement | null): PassageSelection | null {
   const selection = window.getSelection();
   if (!article || !selection || selection.isCollapsed || selection.rangeCount === 0) return null;
   const range = selection.getRangeAt(0);
@@ -47,8 +40,9 @@ function selectedPassage(article: HTMLElement | null): Selected | null {
   return { quote: quoteOf(raw), top: box.bottom, left: box.right };
 }
 
-export function MarkdownComments({
+export function PassageComments({
   text,
+  html,
   comments,
   me,
   error,
@@ -61,8 +55,7 @@ export function MarkdownComments({
   mentionSetup,
   unread,
   focus,
-}: {
-  text: string;
+}: ({ text: string; html?: never } | { text?: never; html: HtmlPreview }) & {
   comments: DesignComment[];
   me: CommentAuthor | null;
   error?: string | null;
@@ -83,18 +76,32 @@ export function MarkdownComments({
   const article = useRef<HTMLDivElement>(null);
   const column = useRef<HTMLDivElement>(null);
   const threads = useMemo(() => threadsOf(comments), [comments]);
-  const [selected, setSelected] = useState<Selected | null>(null);
+  const [selected, setSelected] = useState<PassageSelection | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
   const [active, setActive] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("open");
   const [stale, setStale] = useState<ReadonlySet<string>>(() => new Set());
   const ranges = useRef(new Map<string, Range>());
+  const [position, setPosition] = useState(0);
+  const [clear, setClear] = useState(0);
+  const anchors = useMemo(() => threads.flatMap(({ comment }) => comment.quote ? [{
+    id: comment.id, quote: comment.quote, resolved: comment.resolved != null,
+  }] : []), [threads]);
+  const annotations = useMemo(() => ({ anchors, active, focus: position, clear }), [anchors, active, position, clear]);
+  const markMissing = (ids: Iterable<string>) => {
+    const missing = new Set(ids);
+    setStale((known) => (known.size === missing.size && [...missing].every((id) => known.has(id)) ? known : missing));
+  };
+  const previewChannel = html?.channel;
+  useEffect(() => {
+    if (previewChannel) setSelected(null);
+  }, [previewChannel]);
 
   // The open threads' passages, painted once the file is drawn; a passage not found is outdated.
   useEffect(() => {
+    const root = article.current;
+    if (!root) return;
     const frame = requestAnimationFrame(() => {
-      const root = article.current;
-      if (!root) return;
       const found = new Map<string, Range>();
       const missing = new Set<string>();
       for (const thread of threads) {
@@ -105,7 +112,7 @@ export function MarkdownComments({
         else missing.add(thread.comment.id);
       }
       ranges.current = found;
-      setStale((known) => (known.size === missing.size && [...missing].every((id) => known.has(id)) ? known : missing));
+      markMissing(missing);
       const highlights = typeof CSS !== "undefined" && "highlights" in CSS ? CSS.highlights : null;
       if (!highlights) return;
       highlights.set(ALL, new Highlight(...found.values()));
@@ -128,15 +135,19 @@ export function MarkdownComments({
   /** Shows a thread: its passage in the file, and its card in the column. */
   const show = (id: string) => {
     setActive(id);
+    if (html) setPosition((n) => n + 1);
     onPanel(true);
     actions.opened?.(id);
     ranges.current.get(id)?.startContainer.parentElement?.scrollIntoView({ block: "center", behavior: "smooth" });
-    requestAnimationFrame(() => column.current?.querySelector(`[data-thread="${id}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+    requestAnimationFrame(() => column.current?.querySelector(`[data-thread="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
   };
   const focused = useRef<number | null>(null);
   useEffect(() => {
-    if (!focus || focused.current === focus.at || !threads.some((t) => t.comment.id === focus.id)) return;
+    if (!focus || focused.current === focus.at) return;
+    const thread = threads.find((t) => t.comment.id === focus.id);
+    if (!thread) return;
     focused.current = focus.at;
+    if (html) setFilter(thread.comment.resolved ? "resolved" : "open");
     requestAnimationFrame(() => show(focus.id));
   });
 
@@ -163,20 +174,27 @@ export function MarkdownComments({
     );
 
   return (
-    <div className="flex h-full min-h-0">
-      <div
-        className="h-full min-w-0 flex-1 overflow-y-auto px-8 py-6"
-        onScroll={() => setSelected(null)}
-        onMouseDown={() => setSelected(null)}
-        // Read once the browser has settled the selection.
-        onMouseUp={() => requestAnimationFrame(() => setSelected(selectedPassage(article.current)))}
-        onClick={onClick}
-        data-testid="markdown-preview"
-      >
-        <div ref={article} className="mx-auto max-w-[760px]">
-          <Markdown text={text} />
+    <div className={cx("flex h-full min-h-0", html && "flex-col min-[701px]:flex-row")}>
+      {html ? (
+        <div className="min-h-0 min-w-0 flex-1">
+          <HtmlPassages preview={html} annotations={annotations} onSelection={setSelected}
+            onThread={(id) => { setFilter(anchors.find((anchor) => anchor.id === id)?.resolved ? "resolved" : "open"); show(id); }} onMissing={markMissing} />
         </div>
-      </div>
+      ) : (
+        <div
+          className="h-full min-w-0 flex-1 overflow-y-auto px-8 py-6"
+          onScroll={() => setSelected(null)}
+          onMouseDown={() => setSelected(null)}
+          // Read once the browser has settled the selection.
+          onMouseUp={() => requestAnimationFrame(() => setSelected(selectedPassage(article.current)))}
+          onClick={onClick}
+          data-testid="markdown-preview"
+        >
+          <div ref={article} className="mx-auto max-w-[760px]">
+            <Markdown text={text} />
+          </div>
+        </div>
+      )}
       {selected && (
         <Button
           size="sm"
@@ -190,7 +208,8 @@ export function MarkdownComments({
             setSelected(null);
             setFilter("open");
             onPanel(true);
-            window.getSelection()?.removeAllRanges();
+            if (html) setClear((n) => n + 1);
+            else window.getSelection()?.removeAllRanges();
           }}
           data-testid="file-comment-selection"
         >
@@ -198,7 +217,7 @@ export function MarkdownComments({
         </Button>
       )}
       {panel && (
-        <aside className="flex w-[340px] max-w-[85vw] shrink-0 flex-col border-l border-line bg-bg" aria-label="Comments" data-testid="file-comments">
+        <aside className={cx("flex shrink-0 flex-col border-line bg-bg", html ? "h-[42%] border-t min-[701px]:h-full min-[701px]:w-[340px] min-[701px]:border-l min-[701px]:border-t-0" : "w-[340px] max-w-[85vw] border-l")} aria-label="Comments" data-testid="file-comments">
           <div className="flex h-9 shrink-0 items-center gap-2 border-b border-line px-3">
             <MessageSquare size={13} className="text-faint" />
             <span className="font-semibold text-fg">Comments</span>

@@ -19,7 +19,7 @@ import type { MentionSetup } from "@/components/design/Mentions";
 import { useCanvasView } from "@/components/design/useCanvasView";
 import type { ScreenCommenting } from "@/components/design/ScreenComments";
 import { usePins } from "@/components/design/usePins";
-import { type CommentActions, MarkdownComments } from "@/components/MarkdownComments";
+import { type CommentActions, PassageComments } from "@/components/PassageComments";
 import { FileLinkContext, type FileLinker } from "@/components/FileLinks";
 import { Button, cx, Select, type SelectOption, Spinner } from "@/components/ui";
 import type { DesignVoteParams } from "@chauffeur/protocol";
@@ -558,7 +558,7 @@ function OpenShare({
   onSignedOut: () => void;
 }) {
   const [live, setLive] = useState<Live>(() => liveOf(first));
-  // A markdown file's share (story 57): the file rendered with its passages' comments, no canvas.
+  // A shared file opens in its document reader.
   const fileName = first.document ?? null;
   const renderedDocument = !!fileName && /\.(html?|pdf)$/i.test(fileName);
   const [documentRevision, setDocumentRevision] = useState(0);
@@ -1021,6 +1021,16 @@ function OpenShare({
     resolve: (threadId, resolved) => say({ type: "resolve", id: threadId, resolved }),
     opened: markSeen,
   };
+  const documentReview = {
+    comments: shownComments,
+    me,
+    panel: documentPanel,
+    onPanel: setDocumentPanel,
+    actions: documentActions,
+    mentionSetup,
+    unread: unreadSet,
+    focus: focusThread,
+  };
   if (mobile && !fileName) return <MobileReview key={`${id}:${me.email}`} snapshotEpoch={snapshotEpoch} onReconnect={() => socket.current?.close()} id={id} title={first.title} owner={first.owner.name} me={me} canvas={live.canvas} comments={live.comments} online={live.online} lastPushAt={live.lastPushAt} connected={connected} say={say} serviceError={toast} pins={pins} stale={stale} onFrame={onFrame} elementUnder={elementUnder} mentionSetup={{ ...mentionSetup, canInvite: false }} unreadThreads={unread} onSeen={markSeen} />;
 
 
@@ -1131,26 +1141,19 @@ function OpenShare({
           )}
           <div className="relative min-h-0 flex-1">
           {renderedDocument ? (
-            <SharedDocument id={id} name={fileName} title={first.title} revision={documentRevision} onSignedOut={onSignedOut} onRefused={onRefused} />
+            <SharedDocument id={id} name={fileName} title={first.title} revision={documentRevision} onSignedOut={onSignedOut} onRefused={onRefused} review={documentReview} />
           ) : documentText == null ? (
             <div className="flex h-full items-center justify-center text-faint">
               <Spinner />
             </div>
           ) : (
             <FileLinkContext.Provider value={linker}>
-            <MarkdownComments
+            <PassageComments
               key={shown ?? undefined}
               text={documentText}
-              comments={shownComments}
-              me={me}
+              {...documentReview}
               busy={false}
-              panel={documentPanel}
-              onPanel={setDocumentPanel}
-              actions={documentActions}
               canSend={false}
-              mentionSetup={mentionSetup}
-              unread={unreadSet}
-              focus={focusThread}
             />
             </FileLinkContext.Provider>
           )}
