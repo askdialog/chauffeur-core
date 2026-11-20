@@ -158,11 +158,13 @@ if $ip_mode; then
   python3 -m venv /opt/certbot
   /opt/certbot/bin/pip install --disable-pip-version-check certbot==5.4.0
   install -d -m 0755 /var/www/acme
+  # Caddy inserts automatic redirects before catch-all routes. Match the IP
+  # explicitly so the HTTP-01 challenge is served before the HTTPS redirect.
   cat > "$caddyfile" <<CADDY
 {
     default_sni $relay_domain
 }
-:80 {
+http://$relay_domain {
     handle /.well-known/acme-challenge/* {
         root * /var/www/acme
         file_server
