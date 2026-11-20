@@ -727,7 +727,9 @@ class Judge {
   }
 
   /** A clone's path written inside a word (`python -c "open('/code/web/x', 'w')"`). */
-  private inText(text: string): GuardedClone | undefined {
+  private inText(written: string): GuardedClone | undefined {
+    // `\/code\/web` in a sed or a regex is the path too.
+    const text = `${written} ${written.replace(/\\(.)/g, "$1")}`;
     for (const { clone } of this.clones) {
       for (let from = text.indexOf(clone); from >= 0; from = text.indexOf(clone, from + 1)) {
         const path = /^[^\s'"`;,()<>|&=:]*/.exec(text.slice(from))?.[0] ?? "";
@@ -775,8 +777,12 @@ function onlyReads(name: string, texts: string[]): boolean {
   switch (name) {
     case "sed":
     case "gsed":
-      // `-i` edits in place; a script's `w file` or `s/…/…/w file` writes that file.
-      return !texts.some((text) => /^-[a-zA-Z]*i/.test(text) || text.startsWith("--in-place")) && !sedScripts(texts).some((script) => /(^|[;}\s/])w\s+\S/.test(script));
+      // `-i` edits in place; a script's `w file` or `s/…/…/w file` writes that file, and its `e`
+      // command or `s/…/…/e` runs a command.
+      return (
+        !texts.some((text) => /^-[a-zA-Z]*i/.test(text) || text.startsWith("--in-place")) &&
+        !sedScripts(texts).some((script) => /(^|[;}\s/])w\s+\S/.test(script) || /(^|[;}\s\d$/])e(\s|$)/.test(script) || SED_E_FLAG.test(script))
+      );
     case "awk":
     case "gawk":
     case "mawk":
@@ -816,6 +822,9 @@ function onlyReads(name: string, texts: string[]): boolean {
   }
 }
 
+/** `s/…/…/e`: a substitution whose flags hold `e`, any delimiter. */
+const SED_E_FLAG = /s(.)(?:(?!\1)[^\\]|\\.)*\1(?:(?!\1)[^\\]|\\.)*\1[a-zA-Z0-9]*e/;
+
 /** A sed command's scripts: `-e`'s values, else its first operand. */
 function sedScripts(texts: string[]): string[] {
   const scripts: string[] = [];
@@ -849,11 +858,20 @@ function writeTargets(name: string, args: Value[]): { writes: Value[]; reads: Va
   return values ? copied(name, args, new Set(values)) : undefined;
 }
 
+/** `tar -czf x.tgz`, `-cfx.tar`: `f` in a cluster of short options takes the rest, or the next word. */
+function clusterFile(args: Value[]): Value | undefined {
+  for (const [i, arg] of args.entries()) {
+    const cluster = arg.known && !arg.text.startsWith("--") ? /^-[a-zA-Z]*?f(.*)$/.exec(arg.text) : null;
+    if (cluster) return cluster[1] ? after(arg, arg.text.length - cluster[1].length) : args[i + 1];
+  }
+  return undefined;
+}
+
 /** `tar`: creating writes its archive; extracting writes into `-C`'s folder or where it runs; listing reads. */
 function tarred(args: Value[]): { writes: Value[]; reads: Value[] } | undefined {
   const first = args[0]?.text ?? "";
-  const modes = first.startsWith("-") ? args.filter((arg) => /^-[a-zA-Z]+$/.test(arg.text)).map((arg) => arg.text).join("") : first;
-  const file = optionValue(args, ["-f", "--file"]) ?? (!first.startsWith("-") && first.includes("f") ? args[1] : undefined);
+  const modes = first.startsWith("-") ? args.map((arg) => /^-([a-zA-Z]+)/.exec(arg.text)?.[1] ?? "").join("") : first;
+  const file = optionValue(args, ["-f", "--file"]) ?? clusterFile(args) ?? (!first.startsWith("-") && first.includes("f") ? args[1] : undefined);
   const into = optionValue(args, ["-C", "--directory"]);
   const reads = args.filter((arg) => arg !== file && arg !== into && !arg.text.startsWith("-") && arg !== args[0]);
   if (/[xX]/.test(modes) || args.some((arg) => arg.text === "--extract" || arg.text === "--get")) return { writes: [into ?? exact(".")], reads: [] };
