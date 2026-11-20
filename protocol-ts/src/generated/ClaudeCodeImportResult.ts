@@ -6,9 +6,13 @@ import type { ClaudeCodeWorkspacePlan } from "./ClaudeCodeWorkspacePlan";
 
 export type ClaudeCodeImportResult = { dry_run: boolean, 
 /**
- * The window read, in days; none with `all`.
+ * The window read, in days; none with `all` or `since_date`.
  */
 since_days: number | null, 
+/**
+ * The day the window starts, when asked by date.
+ */
+since_date: string | null, 
 /**
  * Claude Code's folder read.
  */

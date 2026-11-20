@@ -335,17 +335,31 @@ fn fixture() -> Fixture {
 }
 
 async fn plan(f: &Fixture, since_days: Option<u32>, all: bool) -> ClaudeCodeImportResult {
-    chauffeurd::claudecode::import(
-        &f.daemon,
+    planned(
+        f,
         ClaudeCodeImportParams {
             since_days,
             all,
-            dry_run: true,
-            claude_dir: Some(f.claude.to_string_lossy().into_owned()),
+            ..Default::default()
         },
     )
     .await
     .unwrap()
+}
+
+async fn planned(
+    f: &Fixture,
+    params: ClaudeCodeImportParams,
+) -> chauffeurd::Result<ClaudeCodeImportResult> {
+    chauffeurd::claudecode::import(
+        &f.daemon,
+        ClaudeCodeImportParams {
+            dry_run: true,
+            claude_dir: Some(f.claude.to_string_lossy().into_owned()),
+            ..params
+        },
+    )
+    .await
 }
 
 fn branch(repo: &str, name: &str, live: bool) -> ClaudeCodeBranch {
@@ -516,7 +530,7 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_window_widens_with_since_and_all() {
+async fn the_window_widens_with_since_a_day_and_all() {
     let f = fixture();
     let ids =
         |plan: ClaudeCodeImportResult| plan.sessions.into_iter().map(|s| s.id).collect::<Vec<_>>();
@@ -525,6 +539,38 @@ async fn the_window_widens_with_since_and_all() {
     let all = plan(&f, Some(1), true).await;
     assert_eq!(all.since_days, None);
     assert!(ids(all).contains(&"old".to_string()));
+    // Since a day: from its midnight here.
+    let day = |days: i64| {
+        (chrono::Local::now() - chrono::Duration::days(days))
+            .format("%Y-%m-%d")
+            .to_string()
+    };
+    let since_date = |days| ClaudeCodeImportParams {
+        since_date: Some(day(days)),
+        ..Default::default()
+    };
+    let by_date = planned(&f, since_date(100)).await.unwrap();
+    assert_eq!(
+        (by_date.since_date.clone(), by_date.since_days),
+        (Some(day(100)), None)
+    );
+    assert!(ids(by_date).contains(&"old".to_string()));
+    assert!(!ids(planned(&f, since_date(30)).await.unwrap()).contains(&"old".to_string()));
+    let refused = planned(
+        &f,
+        ClaudeCodeImportParams {
+            since_date: Some("last week".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        refused
+            .to_string()
+            .contains("takes a number of days or a date, YYYY-MM-DD"),
+        "{refused}"
+    );
     let narrow = ids(plan(&f, Some(5), false).await);
     assert!(
         narrow.contains(&"simple-api".to_string()) && !narrow.contains(&"simple-web".to_string()),
@@ -533,7 +579,7 @@ async fn the_window_widens_with_since_and_all() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn without_a_dry_run_the_import_is_refused_until_it_is_switched_on() {
+async fn without_a_dry_run_the_import_is_refused() {
     let f = fixture();
     let error = chauffeurd::claudecode::import(
         &f.daemon,

@@ -13,12 +13,12 @@ use regex::Regex;
 use serde_json::Value;
 
 /// A file tool's call, as a transcript line spells it.
-const CALLS: &[&str] = &[
-    "\"name\":\"Write\"",
-    "\"name\":\"Edit\"",
-    "\"name\":\"MultiEdit\"",
-    "\"name\":\"NotebookEdit\"",
-];
+static CALLS: LazyLock<Vec<String>> = LazyLock::new(|| {
+    FILE_TOOLS
+        .iter()
+        .map(|(tool, _)| format!("\"name\":\"{tool}\""))
+        .collect()
+});
 
 /// The file tools and the input naming the file they write.
 const FILE_TOOLS: &[(&str, &str)] = &[
@@ -179,7 +179,7 @@ impl Reading {
         if line.contains("\"tool_use\"") {
             // A file tool's call, or a command that may create a branch (`git` with a `-b`, `-B`,
             // `-c` or `-C`).
-            return CALLS.iter().any(|call| line.contains(call))
+            return CALLS.iter().any(|call| line.contains(call.as_str()))
                 || (line.contains("\"name\":\"Bash\"")
                     && line.contains("git")
                     && [" -b", " -B", " -c", " -C"]

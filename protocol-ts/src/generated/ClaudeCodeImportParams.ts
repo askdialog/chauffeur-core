@@ -6,6 +6,10 @@ export type ClaudeCodeImportParams = {
  */
 since_days?: number, 
 /**
+ * Sessions active since this day (`YYYY-MM-DD`, from its midnight here), over `since_days`.
+ */
+since_date?: string, 
+/**
  * Every session, whatever its age.
  */
 all: boolean, 

@@ -44,9 +44,9 @@ pub enum Source {
         /// Print what would be imported and released, and change nothing.
         #[arg(long)]
         dry_run: bool,
-        /// Sessions active in the last DAYS days (60 by default).
-        #[arg(long, value_name = "DAYS", conflicts_with = "all")]
-        since: Option<u32>,
+        /// Sessions active in the last DAYS days, or since a day (YYYY-MM-DD); 60 days by default.
+        #[arg(long, value_name = "DAYS|DATE", conflicts_with = "all")]
+        since: Option<String>,
         /// Every session, whatever its age.
         #[arg(long)]
         all: bool,
@@ -57,42 +57,73 @@ pub enum Source {
 }
 
 pub async fn run(source: Source, client: &mut Client, json: bool) -> anyhow::Result<()> {
-    let (workspaces, dry_run, include_archived, yes, db) = match source {
+    match source {
         Source::Conductor {
             workspaces,
             dry_run,
             include_archived,
             yes,
             db,
-        } => (workspaces, dry_run, include_archived, yes, db),
+        } => {
+            let params = ConductorImportParams {
+                db,
+                workspaces,
+                include_archived,
+                dry_run: true,
+            };
+            conductor(params, dry_run, yes, client, json).await
+        }
         Source::ClaudeCode {
             dry_run,
             since,
             all,
             claude_dir,
         } => {
+            // A number of days, or a date the daemon reads.
+            let (since_days, since_date) = match since {
+                Some(since) => match since.trim().parse::<u32>() {
+                    Ok(days) => (Some(days), None),
+                    Err(_) => (None, Some(since)),
+                },
+                None => (None, None),
+            };
             let params = ClaudeCodeImportParams {
-                since_days: since,
+                since_days,
+                since_date,
                 all,
                 dry_run,
                 claude_dir,
             };
-            let plan: ClaudeCodeImportResult =
-                client.call(ClientCall::ClaudeCodeImport(params)).await?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&plan)?);
-            } else {
-                println!("{}", sanitize_terminal(&render_claude_code(&plan)));
-                println!("\nDry run: nothing changed.");
-            }
-            return Ok(());
+            claude_code(params, client, json).await
         }
-    };
+    }
+}
+
+async fn claude_code(
+    params: ClaudeCodeImportParams,
+    client: &mut Client,
+    json: bool,
+) -> anyhow::Result<()> {
+    let plan: ClaudeCodeImportResult = client.call(ClientCall::ClaudeCodeImport(params)).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&plan)?);
+    } else {
+        println!("{}", sanitize_terminal(&render_claude_code(&plan)));
+        println!("\nDry run: nothing changed.");
+    }
+    Ok(())
+}
+
+async fn conductor(
+    params: ConductorImportParams,
+    dry_run: bool,
+    yes: bool,
+    client: &mut Client,
+    json: bool,
+) -> anyhow::Result<()> {
     let params = ConductorImportParams {
-        db,
-        workspaces,
-        include_archived,
         dry_run: true,
+        ..params
     };
     let plan: ConductorImportResult = client
         .call(ClientCall::ConductorImport(params.clone()))
@@ -300,9 +331,10 @@ fn outcomes(result: &ConductorImportResult) -> String {
 }
 
 fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
-    let window = match plan.since_days {
-        Some(days) => format!("active in the last {days} days"),
-        None => "all".into(),
+    let window = match (&plan.since_date, plan.since_days) {
+        (Some(date), _) => format!("active since {date}"),
+        (None, Some(days)) => format!("active in the last {days} days"),
+        (None, None) => "all".into(),
     };
     let mut out = format!(
         "Claude Code: {}\n\nSessions ({}, {window}):",
@@ -318,16 +350,11 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
             ClaudeCodeOutcome::Import => {
                 format!("→ {}", s.lands_in.as_deref().unwrap_or("nowhere"))
             }
-            ClaudeCodeOutcome::Running | ClaudeCodeOutcome::Skipped => {
-                format!(
-                    "{}: {}",
-                    if s.outcome == ClaudeCodeOutcome::Running {
-                        "refused"
-                    } else {
-                        "skipped"
-                    },
-                    s.reason.as_deref().unwrap_or_default()
-                )
+            ClaudeCodeOutcome::Running => {
+                format!("refused: {}", s.reason.as_deref().unwrap_or_default())
+            }
+            ClaudeCodeOutcome::Skipped => {
+                format!("skipped: {}", s.reason.as_deref().unwrap_or_default())
             }
         };
         out.push_str(&format!("\n  {day}  {}  ({})  {state}", s.title, s.folder));

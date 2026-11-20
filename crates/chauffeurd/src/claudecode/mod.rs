@@ -49,14 +49,21 @@ pub async fn import(
         None => Locations::of(&d.shell_env.vars())
             .map(|at| at.config().to_path_buf())
             .ok_or_else(|| {
-                Error::BadRequest("No home folder to find Claude Code's sessions in".into())
+                Error::BadRequest(
+                    "No home folder to find Claude Code's sessions in: pass `--claude-dir <folder>`"
+                        .into(),
+                )
             })?,
     };
-    let since_days = (!params.all).then(|| params.since_days.unwrap_or(DEFAULT_DAYS));
-    let cutoff = since_days.map(|days| {
-        (chrono::Utc::now() - chrono::Duration::days(i64::from(days)))
-            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-    });
+    let since_date = params.since_date.filter(|_| !params.all);
+    let since_days =
+        (!params.all && since_date.is_none()).then(|| params.since_days.unwrap_or(DEFAULT_DAYS));
+    let start = match (&since_date, since_days) {
+        (Some(date), _) => Some(midnight(date)?),
+        (None, Some(days)) => Some(chrono::Utc::now() - chrono::Duration::days(i64::from(days))),
+        (None, None) => None,
+    };
+    let cutoff = start.map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
     let (read, running) = {
         let claude = claude.clone();
         tokio::task::spawn_blocking(move || {
@@ -120,7 +127,7 @@ pub async fn import(
             plans.push(plan);
             continue;
         };
-        plan.branches = repos.branches(&session, &mut warnings).await;
+        plan.branches = repos.branches(&session).await;
         placed.push(place::Session {
             id: session.id.clone(),
             title: session.title.clone(),
@@ -147,7 +154,7 @@ pub async fn import(
         let Some(clone) = repos.clones.get(repo).cloned() else {
             continue;
         };
-        let base = repos.default_branch(&clone).await;
+        let base = repos.refs(&clone).await.base.clone();
         if repos.default_has_changes(&clone, &base).await {
             changes.push(repo.clone());
         }
@@ -170,6 +177,7 @@ pub async fn import(
     Ok(ClaudeCodeImportResult {
         dry_run: params.dry_run,
         since_days,
+        since_date,
         claude_dir: claude.to_string_lossy().into_owned(),
         sessions: plans,
         workspaces: plan.workspaces,
@@ -177,6 +185,20 @@ pub async fn import(
         releases,
         warnings,
     })
+}
+
+/// The start of a day here, `YYYY-MM-DD`.
+fn midnight(date: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    let refused = || {
+        Error::BadRequest(format!(
+            "{date} is no date: `--since` takes a number of days or a date, YYYY-MM-DD"
+        ))
+    };
+    let day = chrono::NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").map_err(|_| refused())?;
+    day.and_hms_opt(0, 0, 0)
+        .and_then(|at| at.and_local_timezone(chrono::Local).earliest())
+        .map(|at| at.with_timezone(&chrono::Utc))
+        .ok_or_else(refused)
 }
 
 /// A checkout a session wrote in or ran from, and the repo it belongs to.
@@ -309,11 +331,7 @@ impl<'a> Repos<'a> {
 
     /// The branches a session wrote on (its file tools' paths, each in the checkout holding it, on
     /// the branch checked out there then) or created, by repo, each with whether it is live.
-    async fn branches(
-        &mut self,
-        session: &sessions::Session,
-        warnings: &mut Vec<String>,
-    ) -> Vec<ClaudeCodeBranch> {
+    async fn branches(&mut self, session: &sessions::Session) -> Vec<ClaudeCodeBranch> {
         let mut found: Vec<(String, PathBuf, String)> = Vec::new();
         let mut gone = BTreeSet::new();
         for write in &session.writes {
@@ -359,7 +377,7 @@ impl<'a> Repos<'a> {
                 1 => String::new(),
                 n => format!(" and {} other folders", n - 1),
             };
-            warnings.push(format!(
+            self.warnings.push(format!(
                 "“{}” wrote in {}{more}, gone since: what it wrote there is left out.",
                 session.title,
                 first.display()
@@ -464,10 +482,6 @@ impl<'a> Repos<'a> {
         Some(heads.get(branch).cloned().unwrap_or_default())
     }
 
-    async fn default_branch(&mut self, clone: &Path) -> String {
-        self.refs(clone).await.base.clone()
-    }
-
     /// A clone's branches, read once: its default branch, each branch's tip, those merged into
     /// the default branch (their tip in `origin`'s, else the local one), its worktrees.
     async fn refs(&mut self, clone: &Path) -> &Refs {
@@ -494,37 +508,38 @@ impl<'a> Repos<'a> {
         } else {
             format!("refs/heads/{base}")
         };
-        let list = |args: Vec<&str>| {
-            let git = &self.git;
-            let args: Vec<String> = args.into_iter().map(String::from).collect();
-            async move {
-                let args: Vec<&str> = args.iter().map(String::as_str).collect();
-                git.run(clone, &args).await.unwrap_or_default()
-            }
-        };
-        let tips = list(vec![
+
+        let heads = [
             "for-each-ref",
             "--format=%(refname:short) %(objectname)",
             "refs/heads",
-        ])
-        .await
-        .lines()
-        .filter_map(|l| {
-            l.rsplit_once(' ')
-                .map(|(name, oid)| (name.to_string(), oid.to_string()))
-        })
-        .collect();
-        let merged = list(vec![
+        ];
+        let tips = self
+            .git
+            .run(clone, &heads)
+            .await
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| {
+                l.rsplit_once(' ')
+                    .map(|(name, oid)| (name.to_string(), oid.to_string()))
+            })
+            .collect();
+        let in_base = [
             "for-each-ref",
             "--format=%(refname:short)",
             "--merged",
             &target,
             "refs/heads",
-        ])
-        .await
-        .lines()
-        .map(String::from)
-        .collect();
+        ];
+        let merged = self
+            .git
+            .run(clone, &in_base)
+            .await
+            .unwrap_or_default()
+            .lines()
+            .map(String::from)
+            .collect();
         let worktrees = self.git.worktree_list(clone).await.unwrap_or_default();
         Refs {
             base,

@@ -11,6 +11,9 @@ pub struct ClaudeCodeImportParams {
     /// Sessions active in the last `since_days` days (60 by default).
     #[serde(default)]
     pub since_days: Option<u32>,
+    /// Sessions active since this day (`YYYY-MM-DD`, from its midnight here), over `since_days`.
+    #[serde(default)]
+    pub since_date: Option<String>,
     /// Every session, whatever its age.
     #[serde(default)]
     pub all: bool,
@@ -26,8 +29,10 @@ pub struct ClaudeCodeImportParams {
 #[ts(export)]
 pub struct ClaudeCodeImportResult {
     pub dry_run: bool,
-    /// The window read, in days; none with `all`.
+    /// The window read, in days; none with `all` or `since_date`.
     pub since_days: Option<u32>,
+    /// The day the window starts, when asked by date.
+    pub since_date: Option<String>,
     /// Claude Code's folder read.
     pub claude_dir: String,
     /// The sessions found, the most recent first.

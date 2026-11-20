@@ -665,7 +665,6 @@ has "E2E work  ($CC/web)  → feat/cc" < "$T/cc-plan"
 has -x "  branch   feat/cc   feat/cc, e2e/web, 1 chat(s)" < "$T/cc-plan"
 has -x "Dry run: nothing changed." < "$T/cc-plan"
 [ "$(cc_files)" = "$cc_before" ] || { echo "the dry run changed Claude Code's files or the clone"; exit 1; }
-refuses "--dry-run" c import claude-code --claude-dir "$CC/claude"
 echo "== conductor. the import plans without changing anything, copies workspaces, and runs once"
 mkdir -p "$T/conductor"
 scripts/conductor-fixture.sh "$T/conductor"

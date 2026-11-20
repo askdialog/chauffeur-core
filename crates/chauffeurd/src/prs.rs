@@ -569,7 +569,7 @@ pub(crate) async fn merged_heads(
     env: &ShellEnv,
     clone: &Path,
     limit: u32,
-) -> Option<std::collections::HashMap<String, Vec<String>>> {
+) -> Option<HashMap<String, Vec<String>>> {
     let limit = limit.to_string();
     let args = [
         "pr",
@@ -581,8 +581,7 @@ pub(crate) async fn merged_heads(
         "--json",
         "headRefName,headRefOid",
     ];
-    let mut heads: std::collections::HashMap<String, Vec<String>> =
-        std::collections::HashMap::new();
+    let mut heads: HashMap<String, Vec<String>> = HashMap::new();
     for pr in gh_json(env, clone, &args).await? {
         if let (Some(name), Some(oid)) = (pr["headRefName"].as_str(), pr["headRefOid"].as_str()) {
             heads
