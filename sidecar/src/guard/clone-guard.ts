@@ -409,7 +409,7 @@ class Judge {
     else if (name === "xargs") this.xargs(args, state);
     else if (name === "find") this.find(args, state, fed);
     else if (name === "git") this.git(args, state);
-    else if (READERS.has(name) && onlyReads(name, texts) && (!WRITES_BY_ARGUMENT.has(name) || args.every((arg) => arg.known))) {
+    else if (READERS.has(name) && onlyReads(name, texts) && !runsAProgram(name, args) && (!WRITES_BY_ARGUMENT.has(name) || args.every((arg) => arg.known))) {
       this.reads(args, state);
     }
     else {
@@ -874,11 +874,33 @@ function sedScripts(texts: string[]): string[] {
   return scripts;
 }
 
+/**
+ * `sort` or `tar` told to run a program given by its path or only known as the line runs
+ * (`--compress-program=./x`, `tar -I "$X"`, `--to-command=…`): a program the guard does not know.
+ * One found on the PATH by name (`gzip`, `zstd`) is no code from a clone.
+ */
+function runsAProgram(name: string, args: Value[]): boolean {
+  const options =
+    name === "sort"
+      ? ["--compress-program"]
+      : ["tar", "bsdtar", "gtar"].includes(name)
+        ? ["-I", "-F", "--use-compress-program", "--to-command", "--checkpoint-action", "--info-script", "--new-volume-script"]
+        : [];
+  for (const [i, arg] of args.entries()) {
+    const opt = options.find((option) => arg.text === option || arg.text.startsWith(option.startsWith("--") ? `${option}=` : option));
+    if (!opt) continue;
+    const program = arg.text === opt ? args[i + 1] : after(arg, arg.text.startsWith(`${opt}=`) ? opt.length + 1 : opt.length);
+    if (!program?.known || program.text.includes("/") || program.text.includes("exec=")) return true;
+  }
+  return false;
+}
+
 /** What a writer the guard knows writes, and what it only reads; undefined for other programs. */
 function writeTargets(name: string, args: Value[]): { writes: Value[]; reads: Value[] } | undefined {
   const operands = args.filter((arg) => !arg.known || !arg.text.startsWith("-") || arg.text === "-");
   if (name === "tee") return { writes: operands, reads: [] };
   if (name === "uniq") return { writes: operands.slice(1), reads: operands.slice(0, 1) };
+  if (runsAProgram(name, args)) return undefined;
   if (name === "sort") {
     const output = optionValue(args, ["-o", "--output"]) ?? args.map((arg) => /^-[a-zA-Z]*o(.+)$/.exec(arg.text)?.[1]).find(Boolean);
     const value = typeof output === "string" ? exact(output) : output;
