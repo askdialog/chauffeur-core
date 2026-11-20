@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { SectionInfo, WorkspaceInfo } from "@chauffeur/protocol";
+import type { SectionInfo, WorkspaceInfo, WorktreeInfo } from "@chauffeur/protocol";
 import {
+  canEnterSection,
   dropPlace,
   foldedIndicator,
   reviewIndicator,
@@ -51,6 +52,19 @@ describe("workspace order", () => {
 });
 
 describe("moving workspaces in the sidebar", () => {
+  test("a repository group accepts only the workspace's exact set of active repos", () => {
+    const section = { id: "shop", name: "Shop", folded: false, repos: ["api", "acme/web"] };
+    const repo = (name: string, origin: WorktreeInfo["origin"] = "workspace", removed = false): WorktreeInfo => ({
+      id: name, repo: name, origin, removed, path: "", branch: "", base_commit: null, base_branch: "main", group: null,
+    });
+    const canJoin = (...worktrees: WorktreeInfo[]) => canEnterSection(ws("w", "10:00", { worktrees }), section);
+    expect(canJoin(repo("web"), repo("api"), repo("scratch", "agent"), repo("old", "workspace", true))).toBe(true);
+    expect(canJoin(repo("api"))).toBe(false);
+    expect(canJoin(repo("api"), repo("other"))).toBe(false);
+    expect(canJoin(repo("api"), repo("web"), repo("other"))).toBe(false);
+    expect(canEnterSection(ws("w", "10:00", { state: "creating", worktrees: [repo("api"), repo("web")] }), section)).toBe(false);
+  });
+
   const all = () =>
     byId(
       ws("p", "07:00", { pinned: true, position: 9 }),
