@@ -210,7 +210,7 @@ export class ClaudeSession implements AgentSession {
           },
           new AlwaysAllowed(this.params.always_allow),
         ),
-        hooks: buildHooks(this.host, confinement, folder),
+        hooks: buildHooks(this.host, confinement, folder, { clones: this.params.source_clones ?? [], cwd: this.params.cwd }),
         abortController: this.abortController,
         stderr: (data) => this.host.log.debug(`claude: ${data.trimEnd()}`),
         jevPluginDir: this.deps.jevPluginDir ?? (() => jevPluginDir()),
