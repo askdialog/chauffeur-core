@@ -1,5 +1,6 @@
 //! The import from Claude Code (`claudecode.import`, docs/adr/claude-code-import.md): which
-//! sessions it reads and where each would land. For now it plans only.
+//! sessions it reads and where each lands. Sessions that left no live branch are imported into
+//! their repo's history exploration; the rest is only planned for now.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -50,8 +51,14 @@ pub struct ClaudeCodeImportResult {
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum ClaudeCodeOutcome {
-    /// Will be imported (a dry run).
+    /// Will be imported (a dry run), or left for a later version (a session on a live branch).
     Import,
+    /// Imported: its chat is a closed tab of `lands_in`.
+    Imported,
+    /// Imported by an earlier run: left as it is.
+    AlreadyImported,
+    /// Could not be imported: `reason` says why; the others went on.
+    Failed,
     /// Still running in Claude Code: refused until it is closed.
     Running,
     /// Not imported: `reason` says why.
@@ -71,7 +78,8 @@ pub struct ClaudeCodeSessionPlan {
     pub branches: Vec<ClaudeCodeBranch>,
     pub outcome: ClaudeCodeOutcome,
     pub reason: Option<String>,
-    /// Where it lands: a workspace's name, or `history of <repo>`.
+    /// Where it lands: a workspace's name, or `history of <repo>` (the exploration's name once
+    /// imported).
     pub lands_in: Option<String>,
 }
 
@@ -121,6 +129,9 @@ pub struct ClaudeCodeHistoryPlan {
     pub base: String,
     /// Its sessions, closed tabs resumable read-only.
     pub sessions: Vec<String>,
+    /// The exploration they go to: one an earlier import made, while it is not archived, or the
+    /// one made now; none when a dry run would make one.
+    pub workspace: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]

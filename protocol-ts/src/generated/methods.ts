@@ -20,6 +20,8 @@ import type { AgentLoginStartParams } from "./AgentLoginStartParams";
 import type { AgentModelsParams } from "./AgentModelsParams";
 import type { AgentModelsResult } from "./AgentModelsResult";
 import type { AgentRetitleParams } from "./AgentRetitleParams";
+import type { AgentSessionMessagesParams } from "./AgentSessionMessagesParams";
+import type { AgentSessionMessagesResult } from "./AgentSessionMessagesResult";
 import type { AgentSubagentMessagesParams } from "./AgentSubagentMessagesParams";
 import type { AgentSubagentMessagesResult } from "./AgentSubagentMessagesResult";
 import type { AgentTitleParams } from "./AgentTitleParams";
@@ -780,6 +782,7 @@ export type SidecarMethods = {
   "agent.login_code": [AgentLoginCodeParams, null];
   "agent.login_cancel": [AgentModelsParams, null];
   "agent.subagent_messages": [AgentSubagentMessagesParams, AgentSubagentMessagesResult];
+  "agent.session_messages": [AgentSessionMessagesParams, AgentSessionMessagesResult];
   "agent.fork": [AgentForkParams, AgentForkResult];
   "context.capture": [ContextCaptureParams, ContextCaptureResult];
   "context.restore": [ContextRestoreParams, ContextRestoreResult];

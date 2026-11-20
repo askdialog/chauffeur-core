@@ -158,6 +158,45 @@ test("restores captured sessions into the destination's own homes, adding files 
   await expect(f.dispatch("context.restore", { claude_home: "relative", codex_home, contexts: entries })).rejects.toThrow();
 });
 
+test("a session imported from Claude Code is captured by its project folder, its own folder gone, and restored beside the sessions already there", async () => {
+  const f = fixture();
+  // Claude Code kept it under the folder of a worktree removed since.
+  const gone = join(f.root, "clone", ".wt", "removed");
+  const key = "-clone--wt-removed";
+  const main = line({ type: "user", sessionId: claudeId, cwd: gone, message: { content: "past work" } });
+  const agent = line({ type: "assistant", sessionId: claudeId, message: { content: [] } });
+  f.write(`claude-code/projects/${key}/${claudeId}.jsonl`, main);
+  f.write(`claude-code/projects/${key}/${claudeId}/subagents/agent-a1.jsonl`, agent);
+  f.write(`claude-code/projects/${key}/${claudeId}/tool-results/r1.txt`, "output\n");
+  const output = join(f.out, "imported.json");
+  const result = await f.dispatch("context.capture", params(f, {
+    chat_id: "import", agent: "claude", session_id: claudeId, cwd: gone, project_key: key, output,
+    env: { CLAUDE_CONFIG_DIR: join(f.root, "claude-code") },
+  })) as { outcome: string; sha256: string; bytes: number };
+  expect(result.outcome).toBe("captured");
+  // Without the folder's name, the capture needs the folder.
+  expect(await f.dispatch("context.capture", params(f, {
+    chat_id: "import", agent: "claude", session_id: claudeId, cwd: gone, output: join(f.out, "again.json"),
+    env: { CLAUDE_CONFIG_DIR: join(f.root, "claude-code") },
+  }))).toMatchObject({ outcome: "blocked" });
+  // The exploration's project folder already holds an earlier import's session.
+  const exploration = join(f.root, "exploration"); mkdirSync(exploration);
+  const target = join(f.root, "machine", ".claude", "projects", await claudeProjectKey(exploration));
+  const earlier = line({ type: "user", sessionId: "22222222-2222-4222-8222-222222222222", message: { content: "earlier" } });
+  f.write(`machine/.claude/projects/${await claudeProjectKey(exploration)}/22222222-2222-4222-8222-222222222222.jsonl`, earlier);
+  const added = await f.dispatch("context.restore", {
+    claude_home: join(f.root, "machine", ".claude"), codex_home: join(f.root, "machine", ".codex"),
+    contexts: [{ agent: "claude", session_id: claudeId, cwd: exploration, path: output, sha256: result.sha256, bytes: result.bytes }],
+  }) as { files: string[] };
+  expect(added.files.sort()).toEqual([
+    join(target, `${claudeId}.jsonl`), join(target, claudeId, "subagents", "agent-a1.jsonl"), join(target, claudeId, "tool-results", "r1.txt"),
+  ]);
+  expect(readFileSync(join(target, `${claudeId}.jsonl`), "utf8")).toBe(main);
+  expect(readFileSync(join(target, claudeId, "subagents", "agent-a1.jsonl"), "utf8")).toBe(agent);
+  expect(readFileSync(join(target, "22222222-2222-4222-8222-222222222222.jsonl"), "utf8")).toBe(earlier);
+  expect(readFileSync(join(f.root, "claude-code", "projects", key, `${claudeId}.jsonl`), "utf8")).toBe(main);
+});
+
 test("a backup takes a running chat's transcript up to its last complete line", async () => {
   const f = fixture();
   const key = await claudeProjectKey(f.cwd);

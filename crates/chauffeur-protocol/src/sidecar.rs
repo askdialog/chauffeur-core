@@ -96,6 +96,10 @@ methods! {
         /// agents without such subagents (Codex).
         #[serde(rename = "agent.subagent_messages")]
         AgentSubagentMessages(AgentSubagentMessagesParams) -> AgentSubagentMessagesResult,
+        /// A session's conversation from its transcript, without running it: what resuming it
+        /// carries on from (since its last compaction). Refused by agents that keep none (Codex).
+        #[serde(rename = "agent.session_messages")]
+        AgentSessionMessages(AgentSessionMessagesParams) -> AgentSessionMessagesResult,
         /// Copies an agent session into a new one of its own (Claude Code's `forkSession`, Codex's
         /// `thread/fork`), without running it: the new id resumes it.
         #[serde(rename = "agent.fork")]
@@ -308,6 +312,34 @@ pub struct AgentSubagentMessagesResult {
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, Default)]
 #[ts(export)]
+pub struct AgentSessionMessagesParams {
+    pub agent: AgentKind,
+    pub session_id: String,
+    /// The folder the session is kept for: the agent keeps its transcripts by folder.
+    pub cwd: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct AgentSessionMessagesResult {
+    /// Its transcript was read; false when there is none.
+    pub found: bool,
+    /// Its conversation as chat events, oldest first: the user's prompts, the agent's text,
+    /// thinking, tool calls and results.
+    pub events: Vec<TranscriptEvent>,
+}
+
+/// A chat event read from a transcript, with when its message was written.
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct TranscriptEvent {
+    /// RFC 3339; none when the transcript does not say.
+    pub at: Option<String>,
+    pub event: ChatEvent,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default)]
+#[ts(export)]
 pub struct AgentForkParams {
     pub agent: AgentKind,
     /// The session to copy (a chat's resume id).
@@ -338,6 +370,11 @@ pub struct ContextCaptureParams {
     pub env: BTreeMap<String, String>,
     /// An absolute path, not yet existing, in an existing folder.
     pub output: String,
+    /// Claude's project folder holding the session, by name, read instead of the one `cwd`
+    /// gives: a session imported from Claude Code, whose folder may be gone since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub project_key: Option<String>,
     /// A backup of a running chat: its session may be live, and each transcript is taken up to
     /// its last complete line.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

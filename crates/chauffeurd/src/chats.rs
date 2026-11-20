@@ -3384,6 +3384,64 @@ impl ChatManager {
         Ok(chat)
     }
 
+    /// A Claude Code session imported into `workspace` (an exploration) as a closed tab: its
+    /// agent session copied there under the same id, which it resumes, and its conversation as
+    /// `events`, each at its time. Recorded under `record` with the chat: None when an earlier
+    /// import recorded it, or the workspace is gone. The workspace keeps one open chat.
+    pub(crate) async fn import_closed(
+        &self,
+        workspace: &WorkspaceRow,
+        title: &str,
+        session_id: &str,
+        last_active: &str,
+        events: &[(String, ChatEvent)],
+        record: &str,
+    ) -> Result<Option<ChatInfo>> {
+        let d = self.d();
+        let admission = d.execution.admit(&workspace.id)?;
+        let choice = agent_choice(&d, AgentKind::Claude)?;
+        let created_at = events
+            .first()
+            .map_or_else(|| last_active.to_owned(), |(ts, _)| ts.clone());
+        let chat = ChatInfo {
+            id: uuid::Uuid::now_v7().to_string(),
+            progress: None,
+            tab_position: None,
+            workspace_id: workspace.id.clone(),
+            agent: AgentKind::Claude,
+            model: Some(choice.model).filter(|model| !model.is_empty()),
+            effort: choice.effort,
+            fast: choice.fast,
+            // An exploration's chats plan: they change nothing.
+            permission_mode: PermissionMode::Plan,
+            title: Some(title.to_owned()),
+            status: ChatStatus::Idle,
+            agent_session_id: Some(session_id.to_owned()),
+            created_at,
+            running_tasks: 0,
+            permission_mode_effective: None,
+            closed: true,
+            last_activity_at: Some(last_active.to_owned()),
+            mcp_servers: Vec::new(),
+            kind: ChatKind::Chat,
+            source_chat: None,
+            brief: None,
+            parent_chat: None,
+            parent_tool_use: None,
+            forked_from_agent: None,
+            brand: None,
+        };
+        let Some(inserted) = d.store.insert_imported_chat(&chat, events, record)? else {
+            return Ok(None);
+        };
+        d.events.announce(inserted);
+        d.events
+            .registry(RegistryEvent::ChatUpserted { chat: chat.clone() });
+        d.workspaces.publish(&workspace.id);
+        self.keep_one_open(&workspace.id, &admission).await?;
+        Ok(Some(chat))
+    }
+
     /// Forks a chat into a new tab of its workspace: the same agent, model, effort, speed and
     /// permission mode, a copy of its conversation (its event log here, its agent session in the
     /// agent's own store, which the fork's agent resumes as a session of its own), whole or up to

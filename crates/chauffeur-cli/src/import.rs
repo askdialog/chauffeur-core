@@ -121,11 +121,7 @@ async fn claude_code(
         println!("{}", serde_json::to_string_pretty(&plan)?);
     } else {
         println!("{}", sanitize_terminal(&render_claude_code(&plan)));
-        if plan.dry_run {
-            println!("\nDry run: nothing changed.");
-        } else {
-            println!("\nThe import itself comes in a later version: nothing changed.");
-        }
+        println!("\n{}", claude_code_outcome(&plan));
     }
     Ok(())
 }
@@ -362,9 +358,17 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
     }
     for s in &plan.sessions {
         let day = s.last_active.get(..10).unwrap_or(&s.last_active);
+        let lands_in = s.lands_in.as_deref().unwrap_or("nowhere");
         let state = match s.outcome {
-            ClaudeCodeOutcome::Import => {
-                format!("→ {}", s.lands_in.as_deref().unwrap_or("nowhere"))
+            ClaudeCodeOutcome::Import if plan.dry_run => format!("→ {lands_in}"),
+            ClaudeCodeOutcome::Import => format!("→ {lands_in}, in a later version"),
+            ClaudeCodeOutcome::Imported => format!("imported → {lands_in}"),
+            ClaudeCodeOutcome::AlreadyImported => match &s.lands_in {
+                Some(into) => format!("imported earlier → {into}"),
+                None => "imported earlier".into(),
+            },
+            ClaudeCodeOutcome::Failed => {
+                format!("failed: {}", s.reason.as_deref().unwrap_or_default())
             }
             ClaudeCodeOutcome::Running => {
                 format!("refused: {}", s.reason.as_deref().unwrap_or_default())
@@ -425,8 +429,13 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
         out.push_str(" none");
     }
     for h in &plan.histories {
+        let into = match (&h.workspace, plan.dry_run) {
+            (Some(slug), true) => format!(", into {slug} (made by an earlier import)"),
+            (Some(slug), false) => format!(", in {slug}"),
+            (None, _) => String::new(),
+        };
         out.push_str(&format!(
-            "\n  {} at {}   {} session(s), closed tabs resumable read-only",
+            "\n  {} at {}   {} session(s), closed tabs resumable read-only{into}",
             h.repo,
             h.base,
             h.sessions.len()
@@ -450,6 +459,42 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
         }
     }
     out
+}
+
+/// What the import did, after its plan.
+fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
+    if plan.dry_run {
+        return "Dry run: nothing changed.".into();
+    }
+    let count = |outcome| {
+        plan.sessions
+            .iter()
+            .filter(|s| s.outcome == outcome)
+            .count()
+    };
+    let (imported, failed, later) = (
+        count(ClaudeCodeOutcome::Imported),
+        count(ClaudeCodeOutcome::Failed),
+        count(ClaudeCodeOutcome::Import),
+    );
+    let mut lines = vec![if imported == 0 {
+        "No session imported.".to_string()
+    } else {
+        format!(
+            "{imported} session(s) imported into history explorations. Each is a copy: the session in Claude Code and its chat in Chauffeur no longer sync."
+        )
+    }];
+    if failed > 0 {
+        lines.push(format!(
+            "{failed} could not be imported (see above): run the import again to retry them."
+        ));
+    }
+    if later > 0 {
+        lines.push(format!(
+            "{later} on a live branch or with changes come in a later version: nothing changed for them."
+        ));
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]

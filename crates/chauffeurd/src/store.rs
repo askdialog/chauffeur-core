@@ -1835,6 +1835,55 @@ impl Store {
         Ok(inserted)
     }
 
+    /// Inserts a chat imported from elsewhere with its conversation (each event at its time),
+    /// and records `record` with the chat's id, in one transaction: an import that fails halfway
+    /// leaves nothing, and a recorded one is never imported twice. Returns the events with their
+    /// sequence numbers; None when `record` is there already or the workspace is gone.
+    pub fn insert_imported_chat(
+        &self,
+        chat: &ChatInfo,
+        events: &[(String, ChatEvent)],
+        record: &str,
+    ) -> Result<Option<Vec<EventEnvelope>>> {
+        self.with(|c| {
+            let tx = c.unchecked_transaction()?;
+            let recorded: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM kv WHERE key = ?1)",
+                params![record],
+                |row| row.get(0),
+            )?;
+            if recorded || insert_chat_row(&tx, chat)? != 1 {
+                return Ok(None);
+            }
+            let mut inserted = Vec::new();
+            for (ts, event) in events {
+                let mut envelope = EventEnvelope {
+                    seq: None,
+                    ts: ts.clone(),
+                    event: Event::Chat {
+                        workspace_id: chat.workspace_id.clone(),
+                        chat_id: chat.id.clone(),
+                        event: event.clone(),
+                    },
+                };
+                let payload = serde_json::to_string(&envelope)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                tx.execute(
+                    "INSERT INTO events (ts, workspace_id, chat_id, registry, payload) VALUES (?1, ?2, ?3, 0, ?4)",
+                    params![ts, chat.workspace_id, chat.id, payload],
+                )?;
+                envelope.seq = Some(tx.last_insert_rowid());
+                inserted.push(envelope);
+            }
+            tx.execute(
+                "INSERT INTO kv (key, value) VALUES (?1, ?2)",
+                params![record, chat.id],
+            )?;
+            tx.commit()?;
+            Ok(Some(inserted))
+        })
+    }
+
     /// A share carries readable history, never a native session, pending request or task.
     pub fn import_shared_history(
         &self,

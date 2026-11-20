@@ -82,6 +82,11 @@ struct Fixture {
 /// - `running` (its process lives), `sdk` (Chauffeur's own, on the Agent SDK), `notes` (no git
 ///   repo), and `old` (90 days ago).
 fn fixture() -> Fixture {
+    fixture_with(|_| String::new())
+}
+
+/// The fixture, its settings ending with `extra(root)`.
+fn fixture_with(extra: impl Fn(&Path) -> String) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     for name in ["web", "api", "docs"] {
@@ -481,7 +486,7 @@ fn fixture() -> Fixture {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::write(
         home.join("settings.toml"),
-        "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46950\nlinear_enabled = false\n",
+        format!("github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46950\nlinear_enabled = false\n{}", extra(&root)),
     )
     .unwrap();
     // Chauffeur's workspaces folder named through a symlink, as a user may set it.
@@ -490,6 +495,11 @@ fn fixture() -> Fixture {
     let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
     let path = format!("{}:{}", bin.display(), vars["PATH"]);
     vars.insert("PATH".into(), path);
+    // The agents' own Claude folder, where imported sessions are copied: never the user's.
+    vars.insert(
+        "CLAUDE_CONFIG_DIR".into(),
+        root.join("agents-claude").to_string_lossy().into_owned(),
+    );
     daemon.shell_env.set_vars(vars);
     Fixture {
         _dir: dir,
@@ -869,8 +879,12 @@ async fn the_window_widens_with_since_a_day_and_all() {
     );
 }
 
+/// Held by the tests that read or set the switch: it is the process's environment.
+static SWITCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test(flavor = "multi_thread")]
 async fn without_a_dry_run_the_import_is_refused() {
+    let _switch = SWITCH.lock().await;
     let f = fixture();
     let error = chauffeurd::claudecode::import(
         &f.daemon,
@@ -882,4 +896,288 @@ async fn without_a_dry_run_the_import_is_refused() {
     .await
     .unwrap_err();
     assert!(error.to_string().contains("--dry-run"), "{error}");
+}
+
+/// A stand-in for the agent sidecar, in TypeScript as the real one: `context.capture` bundles a
+/// session's files from the project folder it names (blocking ids starting with `unreadable`),
+/// `context.restore` adds them to the agents' Claude folder under the project of `cwd`, never
+/// replacing a different file, and `agent.session_messages` reads the copy's prompts and texts,
+/// each at its time. Every request is logged.
+fn history_sidecar(root: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let script = root.join("history-sidecar.ts");
+    let source = "#!/usr/bin/env bun\nconst ROOT = ".to_owned()
+        + &serde_json::to_string(root.to_str().unwrap()).unwrap()
+        + r#";
+import { createHash } from "node:crypto";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { createInterface } from "node:readline";
+const key = (cwd) => cwd.replace(/[^a-zA-Z0-9]/g, "-");
+const walk = (dir) => readdirSync(dir).flatMap((name) => statSync(join(dir, name)).isDirectory() ? walk(join(dir, name)) : [join(dir, name)]);
+for await (const line of createInterface({ input: process.stdin })) {
+  const request = JSON.parse(line), p = request.params ?? {};
+  if (request.id === undefined) continue;
+  appendFileSync(ROOT + "/sidecar.log", line + "\n");
+  let result = {};
+  if (request.method === "context.capture") {
+    const dir = join(p.env.CLAUDE_CONFIG_DIR, "projects", p.project_key);
+    if (p.session_id.startsWith("unreadable")) result = { outcome: "blocked", reason: "Claude context is incomplete or unsupported" };
+    else {
+      const files = [join(dir, p.session_id + ".jsonl"), ...(existsSync(join(dir, p.session_id)) ? walk(join(dir, p.session_id)) : [])]
+        .map((path) => ({ path: relative(dir, path), content: readFileSync(path).toString("base64") }));
+      const bytes = Buffer.from(JSON.stringify({ sessionId: p.session_id, files }));
+      writeFileSync(p.output, bytes, { flag: "wx", mode: 0o600 });
+      result = { outcome: "captured", sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length };
+    }
+  } else if (request.method === "context.restore") {
+    const added = [];
+    for (const entry of p.contexts) {
+      const bundle = JSON.parse(readFileSync(entry.path, "utf8"));
+      for (const file of bundle.files) {
+        const to = join(p.claude_home, "projects", key(entry.cwd), file.path), bytes = Buffer.from(file.content, "base64");
+        if (existsSync(to)) { if (!readFileSync(to).equals(bytes)) throw new Error("a different file is there"); continue; }
+        mkdirSync(dirname(to), { recursive: true });
+        writeFileSync(to, bytes, { flag: "wx" });
+        added.push(to);
+      }
+    }
+    result = { files: added, folders: [] };
+  } else if (request.method === "agent.session_messages") {
+    const file = join(ROOT, "agents-claude", "projects", key(p.cwd), p.session_id + ".jsonl");
+    const events = existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l)).flatMap((row) =>
+      row.type === "user" && typeof row.message?.content === "string" ? [{ at: row.timestamp, event: { type: "user_message", text: row.message.content, queued: false } }]
+      : row.type === "assistant" && Array.isArray(row.message?.content) ? row.message.content.filter((b) => b.type === "text").map((b) => ({ at: row.timestamp, event: { type: "assistant_text", text: b.text, message_id: row.message.id + ":0" } }))
+      : []) : [];
+    result = { found: existsSync(file), events };
+  }
+  console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
+}
+"#;
+    std::fs::write(&script, source).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    script
+}
+
+/// The fixture with `web` known to Chauffeur, so that it can make its history exploration, and
+/// the stand-in sidecar.
+fn importing() -> Fixture {
+    let f = fixture_with(|root| {
+        format!(
+            "\n[repos.web]\npath = \"{}\"\ndefault_branch = \"main\"\n",
+            root.join("clones/web").display()
+        )
+    });
+    f.daemon.chats.sidecar.use_binary(history_sidecar(&f.root));
+    f
+}
+
+async fn import(f: &Fixture, dry_run: bool) -> ClaudeCodeImportResult {
+    chauffeurd::claudecode::import(
+        &f.daemon,
+        ClaudeCodeImportParams {
+            dry_run,
+            claude_dir: Some(f.claude.to_string_lossy().into_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+}
+
+fn outcome(plan: &ClaudeCodeImportResult, id: &str) -> (ClaudeCodeOutcome, Option<String>) {
+    let session = plan.sessions.iter().find(|s| s.id == id).unwrap();
+    (session.outcome, session.lands_in.clone())
+}
+
+/// A session with no live branch, its prompt and answer at `at`.
+fn past_session(f: &Fixture, id: &str, at: &str) {
+    let web = f.root.join("clones/web");
+    let text = [
+        format!(
+            r#"{{"type":"user","cwd":"{}","entrypoint":"cli","timestamp":"{at}","message":{{"role":"user","content":"What does {id} change?"}}}}"#,
+            web.display()
+        ),
+        line(
+            &web,
+            "main",
+            at,
+            r#""message":{"id":"msg_1","content":[{"type":"text","text":"It changes nothing now."}]}"#,
+        ),
+    ]
+    .join("\n");
+    std::fs::write(
+        f.claude.join(format!("projects/-code/{id}.jsonl")),
+        text + "\n",
+    )
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_closed_tabs_once() {
+    let _switch = SWITCH.lock().await;
+    // SAFETY: the tests reading the switch hold `SWITCH`; no other thread reads it meanwhile.
+    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    let f = importing();
+    let d = &f.daemon;
+    // "history" carries a subagent's transcript and a tool's output, and a prompt with its answer.
+    let at = ago(10);
+    let transcript = f.claude.join("projects/-code/history.jsonl");
+    let mut text = std::fs::read_to_string(&transcript).unwrap();
+    text.push_str(&format!(
+        "{{\"type\":\"user\",\"timestamp\":\"{at}\",\"message\":{{\"role\":\"user\",\"content\":\"Clean up the old branches\"}}}}\n"
+    ));
+    std::fs::write(&transcript, &text).unwrap();
+    let carried = f.claude.join("projects/-code/history");
+    std::fs::create_dir_all(carried.join("subagents")).unwrap();
+    std::fs::create_dir_all(carried.join("tool-results")).unwrap();
+    std::fs::write(
+        carried.join("subagents/agent-a1.jsonl"),
+        "{\"type\":\"assistant\"}\n",
+    )
+    .unwrap();
+    std::fs::write(carried.join("tool-results/r1.txt"), "output\n").unwrap();
+    past_session(&f, "unreadable", &ago(9));
+    let planned = import(&f, true).await;
+    assert_eq!(planned.histories[0].workspace, None);
+
+    let plan = import(&f, false).await;
+    assert_eq!(plan.histories.len(), 1);
+    assert_eq!(plan.histories[0].workspace.as_deref(), Some("web-history"));
+    for id in ["history", "in-chauffeur", "in-chauffeur-2"] {
+        assert_eq!(
+            outcome(&plan, id),
+            (ClaudeCodeOutcome::Imported, Some("web-history".into())),
+            "{id}"
+        );
+    }
+    // One that cannot be read is said, the others imported all the same.
+    let unreadable = plan.sessions.iter().find(|s| s.id == "unreadable").unwrap();
+    assert_eq!(unreadable.outcome, ClaudeCodeOutcome::Failed);
+    assert!(
+        unreadable
+            .reason
+            .as_deref()
+            .is_some_and(|r| r.contains("incomplete")),
+        "{unreadable:?}"
+    );
+    // Sessions on live branches wait for a later version.
+    assert_eq!(outcome(&plan, "simple-web").0, ClaudeCodeOutcome::Import);
+
+    let ws = d.workspaces.get("web-history").unwrap();
+    assert!(ws.explore);
+    assert_eq!(ws.state, chauffeur_protocol::model::WorkspaceState::Ready);
+    // At the base branch: origin's main.
+    let checkout = Path::new(&ws.path).join("web");
+    assert_eq!(
+        git(&checkout, &["rev-parse", "HEAD"]),
+        git(&f.root.join("origin/web.git"), &["rev-parse", "main"])
+    );
+    let chats = d.store.chats_of(&ws.id).unwrap();
+    let imported: Vec<_> = chats.iter().filter(|c| c.closed).collect();
+    assert_eq!(imported.len(), 3, "{chats:?}");
+    assert!(
+        chats.iter().any(|c| !c.closed),
+        "the exploration keeps a chat open"
+    );
+    let history = imported
+        .iter()
+        .find(|c| c.agent_session_id.as_deref() == Some("history"))
+        .unwrap();
+    assert_eq!(history.title.as_deref(), Some("Old work"));
+    assert_eq!(
+        history.permission_mode,
+        chauffeur_protocol::model::PermissionMode::Plan
+    );
+    assert_eq!(history.status, chauffeur_protocol::model::ChatStatus::Idle);
+
+    // Copied with the same id under the exploration's Claude project, bytes, subagents and tool
+    // results included; the originals untouched.
+    let project = f
+        .root
+        .join("agents-claude/projects")
+        .join(ws.path.replace(|c: char| !c.is_ascii_alphanumeric(), "-"));
+    assert_eq!(
+        std::fs::read_to_string(project.join("history.jsonl")).unwrap(),
+        text
+    );
+    assert!(project.join("history/subagents/agent-a1.jsonl").is_file());
+    assert!(project.join("history/tool-results/r1.txt").is_file());
+    assert_eq!(std::fs::read_to_string(&transcript).unwrap(), text);
+    // Captured from the folder Claude Code keeps it in, under the folder read.
+    let log = std::fs::read_to_string(f.root.join("sidecar.log")).unwrap();
+    let capture = log
+        .lines()
+        .find(|l| l.contains("\"context.capture\"") && l.contains("\"session_id\":\"history\""))
+        .unwrap();
+    assert!(capture.contains("\"project_key\":\"-code\""), "{capture}");
+    assert!(
+        capture.contains(&format!("\"CLAUDE_CONFIG_DIR\":\"{}\"", f.claude.display())),
+        "{capture}"
+    );
+
+    // The conversation, each message at its time.
+    let events = d.store.events_of_chat(&history.id).unwrap();
+    let prompt = events
+        .iter()
+        .find_map(|e| match &e.event {
+            chauffeur_protocol::events::Event::Chat {
+                event: chauffeur_protocol::events::ChatEvent::UserMessage { text, .. },
+                ..
+            } => Some((text.clone(), e.ts.clone())),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        prompt,
+        ("Clean up the old branches".to_string(), at.clone())
+    );
+
+    // Again: none twice; the one that failed is tried again.
+    let again = import(&f, false).await;
+    for id in ["history", "in-chauffeur", "in-chauffeur-2"] {
+        assert_eq!(
+            outcome(&again, id),
+            (
+                ClaudeCodeOutcome::AlreadyImported,
+                Some("web-history".into())
+            ),
+            "{id}"
+        );
+    }
+    assert_eq!(outcome(&again, "unreadable").0, ClaudeCodeOutcome::Failed);
+    assert_eq!(d.store.chats_of(&ws.id).unwrap().len(), chats.len());
+
+    // A session since: added to the same exploration, its project folder holding the others.
+    past_session(&f, "later", &ago(8));
+    let planned = import(&f, true).await;
+    assert_eq!(
+        planned.histories[0].workspace.as_deref(),
+        Some("web-history")
+    );
+    assert_eq!(planned.histories[0].sessions, ["unreadable", "later"]);
+    let added = import(&f, false).await;
+    assert_eq!(
+        outcome(&added, "later"),
+        (ClaudeCodeOutcome::Imported, Some("web-history".into()))
+    );
+    assert_eq!(d.store.chats_of(&ws.id).unwrap().len(), chats.len() + 1);
+    assert!(project.join("later.jsonl").is_file() && project.join("history.jsonl").is_file());
+
+    // Archived, the exploration still holds its sessions; one since gets a new exploration.
+    d.workspaces.archive(&ws.id, false).await.unwrap();
+    past_session(&f, "after-archive", &ago(7));
+    let after = import(&f, false).await;
+    assert_eq!(
+        outcome(&after, "after-archive"),
+        (ClaudeCodeOutcome::Imported, Some("web-history-2".into()))
+    );
+    assert_eq!(
+        outcome(&after, "history"),
+        (
+            ClaudeCodeOutcome::AlreadyImported,
+            Some("web-history".into())
+        )
+    );
+    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }

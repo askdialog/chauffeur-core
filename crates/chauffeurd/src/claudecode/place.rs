@@ -154,6 +154,7 @@ pub fn place(sessions: &[Session], changes: &[String], bases: &HashMap<String, S
             base: bases.get(&repo).cloned().unwrap_or_else(|| "main".into()),
             repo,
             sessions,
+            workspace: None,
         })
         .collect();
     plan

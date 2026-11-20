@@ -1000,6 +1000,7 @@ async fn capture_contexts(
                 cwd: cwd.to_string_lossy().into_owned(),
                 env: env.clone(),
                 output: output.join(&path).to_string_lossy().into_owned(),
+                project_key: None,
                 live,
             }))
             .await?;

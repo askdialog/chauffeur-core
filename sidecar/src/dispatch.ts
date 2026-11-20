@@ -148,6 +148,10 @@ export function createDispatcher(
         ...(result !== undefined ? { result } : {}),
       });
     },
+    "agent.session_messages": (params) => {
+      const p = object(params);
+      return sessions.sessionMessages({ agent: agentKind(p.agent), session_id: string(p, "session_id"), cwd: string(p, "cwd") });
+    },
     "agent.fork": (params) => {
       const p = object(params);
       const upTo = optionalString(p, "up_to");
@@ -177,9 +181,11 @@ export function createDispatcher(
       const chat = string(p, "chat_id");
       const live = p.live === true;
       if (!live && sessions.has(chat)) throw new RpcError(ErrorCode.CONFLICT, `chat ${chat} has a running session; stop it before capturing its conversation`);
+      const projectKey = optionalString(p, "project_key");
       return captureContext({
         chat_id: chat, agent: agentKind(p.agent), session_id: string(p, "session_id"),
         cwd: string(p, "cwd"), env: stringMap(p.env ?? {}), output: string(p, "output"), live,
+        ...(projectKey !== undefined ? { project_key: projectKey } : {}),
       }, environment);
     },
     "sidecar.ping": (): PingResult => ({ sidecar_version: SIDECAR_VERSION, agents: sessions.versions() }),

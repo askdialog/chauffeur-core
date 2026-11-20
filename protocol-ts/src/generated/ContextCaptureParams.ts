@@ -19,6 +19,11 @@ env: { [key in string]: string },
  */
 output: string, 
 /**
+ * Claude's project folder holding the session, by name, read instead of the one `cwd`
+ * gives: a session imported from Claude Code, whose folder may be gone since.
+ */
+project_key?: string, 
+/**
  * A backup of a running chat: its session may be live, and each transcript is taken up to
  * its last complete line.
  */

@@ -16,6 +16,7 @@ last_active: string,
  */
 branches: Array<ClaudeCodeBranch>, outcome: ClaudeCodeOutcome, reason: string | null, 
 /**
- * Where it lands: a workspace's name, or `history of <repo>`.
+ * Where it lands: a workspace's name, or `history of <repo>` (the exploration's name once
+ * imported).
  */
 lands_in: string | null, };

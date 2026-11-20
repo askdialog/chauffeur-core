@@ -1,9 +1,12 @@
 //! `claudecode.import` (docs/adr/claude-code-import.md): Claude Code's sessions into Chauffeur.
-//! For now it plans: which sessions it reads, the branches each wrote on or created, and where
-//! each lands (a workspace on a live branch, a parent with its children, a workspace carrying a
-//! clone's uncommitted default-branch changes, or its repo's history exploration). It reads
-//! Claude Code's transcripts and the repos with git, writing nothing anywhere.
+//! It plans which sessions it reads, the branches each wrote on or created, and where each lands
+//! (a workspace on a live branch, a parent with its children, a workspace carrying a clone's
+//! uncommitted default-branch changes, or its repo's history exploration), reading Claude Code's
+//! transcripts and the repos with git. Without a dry run, it imports the history explorations'
+//! sessions (`history`); the rest is planned only, for now. Neither touches Claude Code's files
+//! or the repos.
 
+mod history;
 mod place;
 mod sessions;
 
@@ -40,6 +43,17 @@ pub async fn import(
             "The import from Claude Code is not ready yet: `chauffeur import claude-code --dry-run` shows its plan".into(),
         ));
     }
+    // One import at a time: two would each find a session not yet imported.
+    static IMPORTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _importing = if params.dry_run {
+        None
+    } else {
+        Some(IMPORTING.try_lock().map_err(|_| {
+            Error::Conflict(
+                "An import from Claude Code is already running: wait for it to end".into(),
+            )
+        })?)
+    };
     let claude = match params
         .claude_dir
         .as_deref()
@@ -102,6 +116,7 @@ pub async fn import(
     }
     let mut plans = Vec::new();
     let mut placed = Vec::new();
+    let mut found = HashMap::new();
     for session in read {
         let Some(folder) = session.folder.clone() else {
             continue;
@@ -151,6 +166,12 @@ pub async fn import(
             continue;
         };
         plan.branches = repos.branches(&session).await;
+        if let Some(into) = history::imported_into(d, &session.id) {
+            plan.outcome = ClaudeCodeOutcome::AlreadyImported;
+            plan.lands_in = into;
+            plans.push(plan);
+            continue;
+        }
         placed.push(place::Session {
             id: session.id.clone(),
             title: session.title.clone(),
@@ -164,6 +185,7 @@ pub async fn import(
                 .collect(),
         });
         plans.push(plan);
+        found.insert(session.id.clone(), session);
     }
     // Every repo the sessions ran in or wrote on, live branch or not: their clones' default-branch
     // changes come too.
@@ -187,9 +209,11 @@ pub async fn import(
             bases.entry(repo.clone()).or_insert(base);
         }
     }
-    let plan = place::place(&placed, &changes, &bases);
+    let mut plan = place::place(&placed, &changes, &bases);
     for session in &mut plans {
-        session.lands_in = plan.lands_in.get(&session.id).cloned();
+        if let Some(lands_in) = plan.lands_in.get(&session.id) {
+            session.lands_in = Some(lands_in.clone());
+        }
     }
     let mut releases = Vec::new();
     for workspace in &plan.workspaces {
@@ -201,6 +225,21 @@ pub async fn import(
         }
     }
     warnings.extend(repos.warnings);
+    if params.dry_run {
+        for history in &mut plan.histories {
+            history.workspace = history::exploration(d, &history.repo).map(|row| row.slug);
+        }
+    } else {
+        history::import(
+            d,
+            &claude,
+            &mut plan.histories,
+            &mut plans,
+            &found,
+            &mut warnings,
+        )
+        .await?;
+    }
     let mut said = BTreeSet::new();
     warnings.retain(|w| said.insert(w.clone()));
     Ok(ClaudeCodeImportResult {

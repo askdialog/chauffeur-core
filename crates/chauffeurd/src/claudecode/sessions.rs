@@ -31,6 +31,8 @@ const FILE_TOOLS: &[(&str, &str)] = &[
 #[derive(Debug, Clone, PartialEq)]
 pub struct Session {
     pub id: String,
+    /// The folder of Claude Code's `projects` it is kept in, by name.
+    pub project: String,
     pub title: String,
     /// The folder it ran in: its first message's.
     pub folder: Option<PathBuf>,
@@ -138,6 +140,11 @@ pub fn read(transcript: &Path) -> Option<Session> {
         .unwrap_or_else(|| id.chars().take(8).collect());
     Some(Session {
         id,
+        project: transcript
+            .parent()
+            .and_then(Path::file_name)
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
         title,
         folder: read.folder,
         entrypoint: read.entrypoint,

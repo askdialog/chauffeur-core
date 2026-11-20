@@ -8,4 +8,9 @@ base: string,
 /**
  * Its sessions, closed tabs resumable read-only.
  */
-sessions: Array<string>, };
+sessions: Array<string>, 
+/**
+ * The exploration they go to: one an earlier import made, while it is not archived, or the
+ * one made now; none when a dry run would make one.
+ */
+workspace: string | null, };
