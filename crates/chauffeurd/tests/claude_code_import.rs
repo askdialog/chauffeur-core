@@ -1085,6 +1085,10 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
             .replace(|c: char| !c.is_ascii_alphanumeric(), "-"),
     );
     assert!(copies.join("history.jsonl").is_file());
+    assert!(
+        !copies.join("lost.jsonl").exists(),
+        "a failed import's copy goes"
+    );
     std::fs::copy(
         copies.join("history.jsonl"),
         copies.join("fork-of-history.jsonl"),
@@ -1099,8 +1103,24 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
     )
     .unwrap();
 
+    // A folder of the user's named like Chauffeur's workspaces folder is the user's.
+    let beside = f.root.join("workspaces-old/app");
+    let beside_key = beside
+        .to_string_lossy()
+        .replace(|c: char| !c.is_ascii_alphanumeric(), "-");
+    std::fs::create_dir_all(f.claude.join("projects").join(&beside_key)).unwrap();
+    std::fs::write(
+        f.claude
+            .join("projects")
+            .join(&beside_key)
+            .join("beside.jsonl"),
+        line(&beside, "main", &ago(9), &edit(&beside.join("a.ts"))) + "\n",
+    )
+    .unwrap();
+
     // Again: none twice, each listed once; those that failed are tried again.
     let again = import(&f, false).await;
+    assert_eq!(outcome(&again, "beside").0, ClaudeCodeOutcome::Skipped);
     let mut ids: Vec<_> = again.sessions.iter().map(|s| s.id.as_str()).collect();
     ids.sort_unstable();
     let count = ids.len();

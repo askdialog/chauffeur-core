@@ -8,7 +8,7 @@ import { constants } from "node:fs";
 import { lstat, mkdir, open, readdir, realpath, type FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { ContextCopyParams, ContextRestoreResult } from "../../protocol.ts";
-import { canonicalDirectory, undoContextFiles, type Added } from "../context-files.ts";
+import { undoContextFiles, type Added } from "../context-files.ts";
 import { claudeProjectKey, isClaudeProjectKey } from "./context-bundle.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -16,14 +16,15 @@ const CHUNK = 1024 * 1024;
 const refused = (why: string) => new Error(`The session could not be copied: ${why}`);
 
 export async function copyClaudeSession(params: ContextCopyParams): Promise<ContextRestoreResult> {
-  for (const home of [params.source_home, params.claude_home]) {
-    if (!isAbsolute(home) || resolve(home) !== home) throw refused("a Claude folder is not named from the root");
+  if (!isAbsolute(params.source_home) || !isAbsolute(params.claude_home) || resolve(params.claude_home) !== params.claude_home) {
+    throw refused("a Claude folder is not named from the root");
   }
   if (!UUID.test(params.session_id)) throw refused("its id is not a Claude Code session id");
   if (!isClaudeProjectKey(params.project_key)) throw refused("its project folder's name is not one Claude Code writes");
-  const home = await realpath(params.source_home).catch(() => { throw refused(`${params.source_home} is missing`); });
-  const source = join(home, "projects", params.project_key);
-  await canonicalDirectory(source).catch(() => { throw refused(`${source} is missing or goes through a link`); });
+  // The user's own folder, read only: wherever its links lead (a `projects` kept on another disk).
+  const named = join(params.source_home, "projects", params.project_key);
+  const source = await realpath(named).catch(() => { throw refused(`${named} is missing`); });
+  if (!(await lstat(source)).isDirectory()) throw refused(`${named} is not a folder`);
   const files = await sessionFiles(source, params.session_id);
   const target = join(params.claude_home, "projects", await claudeProjectKey(params.cwd));
   const added: Added = [];
@@ -46,9 +47,11 @@ async function sessionFiles(source: string, sessionId: string): Promise<string[]
   if (!stat?.isFile()) throw refused("its transcript is missing");
   const paths = [main];
   async function scan(dir: string): Promise<void> {
-    let entries;
-    try { entries = await readdir(join(source, dir), { withFileTypes: true }); }
-    catch (error) { if (dir === sessionId && (error as NodeJS.ErrnoException).code === "ENOENT") return; throw error; }
+    // The session's folder itself may be a link: refused as any inside it.
+    const stat = await lstat(join(source, dir)).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
+    if (!stat && dir === sessionId) return;
+    if (!stat?.isDirectory()) throw refused(`${dir} is a link or not a folder`);
+    const entries = await readdir(join(source, dir), { withFileTypes: true });
     for (const entry of entries) {
       const path = `${dir}/${entry.name}`;
       if (entry.isDirectory()) await scan(path);
@@ -93,7 +96,9 @@ async function copyFile(from: string, target: string, path: string, added: Added
         const { bytesRead } = await input.read(buffer, 0, Math.min(CHUNK, before.size - at), at);
         if (!bytesRead) throw refused(`${path} changed while it was copied: is the session still running?`);
         for (let written = 0; written < bytesRead;) {
-          written += (await output.write(buffer, written, bytesRead - written, at + written)).bytesWritten;
+          const { bytesWritten } = await output.write(buffer, written, bytesRead - written, at + written);
+          if (!bytesWritten) throw refused(`${path} could not be written`);
+          written += bytesWritten;
         }
         at += bytesRead;
       }

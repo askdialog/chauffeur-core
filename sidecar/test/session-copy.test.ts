@@ -63,16 +63,17 @@ test("never replaces a different file, and a refused copy takes back what it add
   f.write(`${SESSION}/subagents/agent-a1.jsonl`, "agent\n");
   const target = join(f.root, "agents-claude", "projects", await claudeProjectKey(f.exploration));
   mkdirSync(target, { recursive: true });
-  // Sorted, the transcript comes after the subagent's: the subagent is added, then taken back.
-  writeFileSync(join(target, `${SESSION}.jsonl`), "another conversation\n");
-  await expect(f.copy()).rejects.toThrow(`another file is where ${SESSION}.jsonl goes`);
-  expect(readFileSync(join(target, `${SESSION}.jsonl`), "utf8")).toBe("another conversation\n");
-  expect(existsSync(join(target, SESSION))).toBe(false);
+  // Sorted, the transcript comes first: added, then taken back when the subagent's is refused.
+  mkdirSync(join(target, SESSION, "subagents"), { recursive: true });
+  writeFileSync(join(target, SESSION, "subagents", "agent-a1.jsonl"), "another agent\n");
+  await expect(f.copy()).rejects.toThrow(`another file is where ${SESSION}/subagents/agent-a1.jsonl goes`);
+  expect(readFileSync(join(target, SESSION, "subagents", "agent-a1.jsonl"), "utf8")).toBe("another agent\n");
+  expect(existsSync(join(target, `${SESSION}.jsonl`))).toBe(false);
 });
 
 test("refuses a link in the session, a missing transcript and an id that is no session's", async () => {
   const f = fixture();
-  await expect(f.copy()).rejects.toThrow("claude-code is missing");
+  await expect(f.copy()).rejects.toThrow("-clone--wt-removed is missing");
   mkdirSync(f.source, { recursive: true });
   await expect(f.copy()).rejects.toThrow("its transcript is missing");
   f.write(`${SESSION}.jsonl`, "{}\n");
@@ -80,6 +81,12 @@ test("refuses a link in the session, a missing transcript and an id that is no s
   mkdirSync(join(f.source, SESSION), { recursive: true });
   symlinkSync(join(f.source, "elsewhere.txt"), join(f.source, SESSION, "link.txt"));
   await expect(f.copy()).rejects.toThrow("is a link or not a file");
+  // The session's folder itself a link.
+  rmSync(join(f.source, SESSION), { recursive: true });
+  mkdirSync(join(f.root, "elsewhere"));
+  writeFileSync(join(f.root, "elsewhere", "secret.txt"), "secret");
+  symlinkSync(join(f.root, "elsewhere"), join(f.source, SESSION));
+  await expect(f.copy()).rejects.toThrow("is a link or not a folder");
   const dispatch = createDispatcher({ has: () => false } as unknown as SessionManager, {});
   await expect(dispatch("context.copy", {
     session_id: "../x", source_home: join(f.root, "claude-code"), project_key: "-clone--wt-removed",

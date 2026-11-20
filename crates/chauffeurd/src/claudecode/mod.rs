@@ -117,15 +117,17 @@ pub async fn import(
     let mut plans = Vec::new();
     let mut placed = Vec::new();
     let mut found = HashMap::new();
-    // The transcripts Claude keeps for Chauffeur's workspaces: its chats', and the sessions an
-    // import copied there, which still name the folder they first ran in.
-    let workspaces: Vec<String> = [
-        d.paths.workspaces_dir.clone(),
-        real(&d.paths.workspaces_dir),
-    ]
-    .iter()
-    .map(|dir| format!("{}-", project_key(dir)))
-    .collect();
+    // The transcripts Claude keeps for Chauffeur's workspaces (archived ones too): its chats', and
+    // the sessions an import copied there, which still name the folder they first ran in.
+    let workspaces: Vec<String> = d
+        .store
+        .list_workspaces()?
+        .iter()
+        .flat_map(|row| {
+            let path = Path::new(&row.path);
+            [project_key(path), project_key(&real(path))]
+        })
+        .collect();
     let mut seen = BTreeSet::new();
     for session in read {
         let Some(folder) = session.folder.clone() else {
@@ -135,9 +137,12 @@ pub async fn import(
         // apps' are): only sessions of Claude Code itself, in a terminal or an editor, come; the
         // most recent of a session kept in several folders.
         if real(&folder).starts_with(real(&d.paths.workspaces_dir))
-            || workspaces
-                .iter()
-                .any(|key| session.project.starts_with(key))
+            || workspaces.iter().any(|key| {
+                session
+                    .project
+                    .strip_prefix(key.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('-'))
+            })
             || session
                 .entrypoint
                 .as_deref()

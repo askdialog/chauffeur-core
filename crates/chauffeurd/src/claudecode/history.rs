@@ -13,7 +13,8 @@ use chauffeur_protocol::claudecode::{
 use chauffeur_protocol::client::CreateWorkspaceParams;
 use chauffeur_protocol::model::{AgentKind, WorkspaceState};
 use chauffeur_protocol::sidecar::{
-    AgentSessionMessagesParams, AgentSessionMessagesResult, ContextCopyParams, SidecarCall,
+    AgentSessionMessagesParams, AgentSessionMessagesResult, ContextCopyParams,
+    ContextRestoreResult, SidecarCall,
 };
 
 use super::sessions::Session;
@@ -148,16 +149,39 @@ async fn import_session(
         .into_owned();
     let homes = crate::cloud_workspace_restore::native_homes(d, Vec::new())
         .context("no Claude folder for the exploration's agents")?;
+    let added: ContextRestoreResult = serde_json::from_value(
+        d.chats
+            .sidecar
+            .call(SidecarCall::ContextCopy(ContextCopyParams {
+                session_id: session.id.clone(),
+                source_home: claude.to_string_lossy().into_owned(),
+                project_key: session.project.clone(),
+                claude_home: homes.claude_home.clone(),
+                cwd: cwd.clone(),
+            }))
+            .await?,
+    )
+    .context("unexpected answer from the sidecar to a copy")?;
+    let opened = open_copy(d, workspace, session, cwd, &record).await;
+    if opened.is_err() {
+        // Not imported: the copy goes, the files it made only.
+        let copy = crate::cloud_workspace_discard::NativeFiles::new(vec![homes.claude_home], added);
+        if let Err(error) = copy.remove() {
+            tracing::warn!(%error, session = session.id, "an import's copy stayed");
+        }
+    }
+    opened
+}
+
+/// The copy of `session` in `cwd`'s project folder, opened as a closed tab of `workspace`.
+async fn open_copy(
+    d: &Arc<Daemon>,
+    workspace: &WorkspaceRow,
+    session: &Session,
+    cwd: String,
+    record: &str,
+) -> Result<bool> {
     let sidecar = &d.chats.sidecar;
-    sidecar
-        .call(SidecarCall::ContextCopy(ContextCopyParams {
-            session_id: session.id.clone(),
-            source_home: claude.to_string_lossy().into_owned(),
-            project_key: session.project.clone(),
-            claude_home: homes.claude_home,
-            cwd: cwd.clone(),
-        }))
-        .await?;
     let conversation: AgentSessionMessagesResult = serde_json::from_value(
         sidecar
             .call(SidecarCall::AgentSessionMessages(
@@ -189,12 +213,12 @@ async fn import_session(
             &session.id,
             &session.last_active,
             &events,
-            &record,
+            record,
         )
         .await?;
     match imported {
         Some(_) => Ok(true),
-        None if d.store.kv_get(&record)?.is_some() => Ok(false),
+        None if d.store.kv_get(record)?.is_some() => Ok(false),
         None => Err(Error::not_found(format!("workspace {}", workspace.slug))),
     }
 }
