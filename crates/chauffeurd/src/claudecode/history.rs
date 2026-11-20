@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::Context;
 use chauffeur_protocol::claudecode::{
     ClaudeCodeHistoryPlan, ClaudeCodeOutcome, ClaudeCodeSessionPlan,
 };
@@ -24,29 +25,32 @@ use crate::{Daemon, Error, Result};
 const EXPLORATION: &str = "claudecode_history:";
 
 /// `<prefix><session id>` → the id of the chat it was imported as: never imported twice.
-pub(super) const IMPORTED: &str = "claudecode_import:";
+const IMPORTED: &str = "claudecode_import:";
 
 /// The history exploration an earlier import made for `repo`, while it is ready: one archived
 /// since gets a new one.
-pub(super) fn exploration(d: &Daemon, repo: &str) -> Option<WorkspaceRow> {
-    let id = d.store.kv_get(&format!("{EXPLORATION}{repo}")).ok()??;
-    d.workspaces
-        .row(&id)
-        .ok()
-        .filter(|row| row.state == WorkspaceState::Ready)
+pub(super) fn exploration(d: &Daemon, repo: &str) -> Result<Option<WorkspaceRow>> {
+    let Some(id) = d.store.kv_get(&format!("{EXPLORATION}{repo}"))? else {
+        return Ok(None);
+    };
+    Ok(d.store
+        .find_workspace(&id)?
+        .filter(|row| row.state == WorkspaceState::Ready))
 }
 
-/// The workspace a recorded session was imported into, by name; none when it is gone.
-pub(super) fn imported_into(d: &Daemon, session: &str) -> Option<Option<String>> {
-    let chat = d.store.kv_get(&format!("{IMPORTED}{session}")).ok()??;
-    Some(
-        d.store
-            .chat(&chat)
-            .ok()
-            .flatten()
-            .and_then(|chat| d.workspaces.row(&chat.workspace_id).ok())
-            .map(|row| row.slug),
-    )
+/// The chat an earlier import made of `session`, by id.
+pub(super) fn imported(d: &Daemon, session: &str) -> Result<Option<String>> {
+    d.store.kv_get(&format!("{IMPORTED}{session}"))
+}
+
+/// The workspace holding `chat`, by name, while both exist.
+pub(super) fn workspace_of(d: &Daemon, chat: &str) -> Result<Option<String>> {
+    let Some(chat) = d.store.chat(chat)? else {
+        return Ok(None);
+    };
+    Ok(d.store
+        .find_workspace(&chat.workspace_id)?
+        .map(|row| row.slug))
 }
 
 /// Imports each history's sessions into its exploration, made when the repo has none ready, and
@@ -56,7 +60,7 @@ pub(super) async fn import(
     claude: &Path,
     histories: &mut [ClaudeCodeHistoryPlan],
     plans: &mut [ClaudeCodeSessionPlan],
-    read: &HashMap<String, Session>,
+    sessions: &HashMap<String, Session>,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
     let scratch = Scratch::new(d)?;
@@ -66,7 +70,7 @@ pub(super) async fn import(
         .map(|(i, plan)| (plan.id.clone(), i))
         .collect();
     for history in histories.iter_mut() {
-        let workspace = match exploration(d, &history.repo) {
+        let workspace = match exploration(d, &history.repo)? {
             Some(row) => row,
             None => match make_exploration(d, &history.repo).await {
                 Ok(row) => row,
@@ -87,7 +91,7 @@ pub(super) async fn import(
         };
         history.workspace = Some(workspace.slug.clone());
         for id in &history.sessions {
-            let (Some(&i), Some(session)) = (index.get(id), read.get(id)) else {
+            let (Some(&i), Some(session)) = (index.get(id), sessions.get(id)) else {
                 continue;
             };
             let plan = &mut plans[i];
@@ -161,7 +165,9 @@ async fn import_session(
             live: false,
         }))
         .await?;
-    let (sha256, bytes) = match serde_json::from_value(captured)? {
+    let (sha256, bytes) = match serde_json::from_value(captured)
+        .context("unexpected answer from the sidecar to a capture")?
+    {
         ContextCaptureResult::Captured { sha256, bytes } => (sha256, bytes),
         ContextCaptureResult::Blocked { reason } => return Err(Error::BadRequest(reason)),
     };
@@ -176,9 +182,9 @@ async fn import_session(
             bytes,
         }],
     )
-    .map_err(Error::Internal)?;
+    .context("no Claude folder for the exploration's agents")?;
     sidecar.call(SidecarCall::ContextRestore(homes)).await?;
-    let read: AgentSessionMessagesResult = serde_json::from_value(
+    let conversation: AgentSessionMessagesResult = serde_json::from_value(
         sidecar
             .call(SidecarCall::AgentSessionMessages(
                 AgentSessionMessagesParams {
@@ -188,8 +194,9 @@ async fn import_session(
                 },
             ))
             .await?,
-    )?;
-    let events: Vec<_> = read
+    )
+    .context("unexpected answer from the sidecar to a conversation's reading")?;
+    let events: Vec<_> = conversation
         .events
         .into_iter()
         .map(|e| (e.at.unwrap_or_else(|| session.last_active.clone()), e.event))
@@ -208,7 +215,7 @@ async fn import_session(
     match imported {
         Some(_) => Ok(true),
         None if d.store.kv_get(&record)?.is_some() => Ok(false),
-        None => Err(Error::Conflict(format!("{} is gone", workspace.slug))),
+        None => Err(Error::not_found(format!("workspace {}", workspace.slug))),
     }
 }
 
@@ -221,10 +228,12 @@ impl Scratch {
         let dir = d
             .paths
             .home
-            .canonicalize()?
+            .canonicalize()
+            .context("Chauffeur's folder is unreadable")?
             .join(format!("claude-code-import-{}", uuid::Uuid::now_v7()));
         std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700)
-            .create(&dir)?;
+            .create(&dir)
+            .with_context(|| format!("could not make {}", dir.display()))?;
         Ok(Scratch(dir))
     }
 }

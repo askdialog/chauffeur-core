@@ -166,9 +166,9 @@ pub async fn import(
             continue;
         };
         plan.branches = repos.branches(&session).await;
-        if let Some(into) = history::imported_into(d, &session.id) {
+        if let Some(chat) = history::imported(d, &session.id)? {
             plan.outcome = ClaudeCodeOutcome::AlreadyImported;
-            plan.lands_in = into;
+            plan.lands_in = history::workspace_of(d, &chat)?;
             plans.push(plan);
             continue;
         }
@@ -227,7 +227,7 @@ pub async fn import(
     warnings.extend(repos.warnings);
     if params.dry_run {
         for history in &mut plan.histories {
-            history.workspace = history::exploration(d, &history.repo).map(|row| row.slug);
+            history.workspace = history::exploration(d, &history.repo)?.map(|row| row.slug);
         }
     } else {
         history::import(
