@@ -300,8 +300,11 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::ConductorImport(params) => {
             to_value(crate::conductor::import(daemon, params).await?)
         }
+        // Boxed: in a debug build `handle`'s frame holds every branch's locals, and a transfer
+        // calls `handle` from inside itself (runtime.rs); the import's, inlined, overflowed a
+        // 2 MiB test thread.
         ClientCall::ClaudeCodeImport(params) => {
-            to_value(crate::claudecode::import(daemon, params).await?)
+            to_value(Box::pin(crate::claudecode::import(daemon, params)).await?)
         }
         ClientCall::WorkspaceWait(params) => to_value(
             daemon
