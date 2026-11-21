@@ -130,7 +130,7 @@ async fn claude_code(
                 ..params.clone()
             }))
             .await?;
-        if planned.releases.iter().any(|r| released_now(&planned, r)) {
+        if !planned.releases.is_empty() {
             if !json {
                 println!("{}", sanitize_terminal(&render_claude_code(&planned)));
             }
@@ -555,6 +555,17 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
             ));
         }
     }
+    // Gone or half deleted: their commits came, whatever changes they still hold stay there.
+    for r in plan
+        .releases
+        .iter()
+        .filter(|r| r.commits_only && released_in(plan, r))
+    {
+        lines.push(format!(
+            "{} {} came with its commits only: whatever {} still holds stays there.",
+            r.repo, r.branch, r.folder
+        ));
+    }
     if failed > 0 {
         lines.push(format!(
             "{failed} could not be imported (see above). Once that is fixed, run the import again: it takes them."
@@ -577,27 +588,16 @@ fn released_in(plan: &ClaudeCodeImportResult, release: &ClaudeCodeRelease) -> bo
     })
 }
 
-/// A release this version makes: of a branch's own workspace (not an orchestration's).
-fn released_now(plan: &ClaudeCodeImportResult, release: &ClaudeCodeRelease) -> bool {
-    plan.workspaces.iter().any(|w| {
-        w.kind == ClaudeCodeWorkspaceKind::Branch
-            && w.parent.is_none()
-            && w.workspace.is_none()
-            && w.branch.as_deref() == Some(release.branch.as_str())
-            && w.repos.contains(&release.repo)
-    })
-}
-
 /// The warning the user answers before any branch is released.
 fn claude_code_release_warning(plan: &ClaudeCodeImportResult) -> String {
     let mut out = String::from(
         "These branches will be released where they are checked out, for their workspaces:\n",
     );
-    for r in plan.releases.iter().filter(|r| released_now(plan, r)) {
+    for r in &plan.releases {
         out.push_str(&format!("  {} {}   in {}\n", r.repo, r.branch, r.folder));
     }
     out.push_str(
-        "Those checkouts keep their files and uncommitted changes, on a detached HEAD on the same commit; the changes are copied into the workspace.",
+        "Those checkouts keep their files and uncommitted changes, on a detached HEAD on the same commit; the changes are copied into the workspace (not those of a checkout gone or half deleted).",
     );
     out
 }
@@ -605,6 +605,75 @@ fn claude_code_release_warning(plan: &ClaudeCodeImportResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chauffeur_protocol::claudecode::ClaudeCodeWorkspacePlan;
+
+    fn claude_code_plan(dry_run: bool, outcome: ClaudeCodeOutcome) -> ClaudeCodeImportResult {
+        let release = |branch: &str, folder: &str, commits_only| ClaudeCodeRelease {
+            repo: "shop".into(),
+            branch: branch.into(),
+            folder: folder.into(),
+            commits_only,
+        };
+        let workspace = |branch: &str| ClaudeCodeWorkspacePlan {
+            name: branch.into(),
+            kind: ClaudeCodeWorkspaceKind::Branch,
+            branch: Some(branch.into()),
+            repos: vec!["shop".into()],
+            parent: None,
+            sessions: vec!["s".into()],
+            changes_from: Vec::new(),
+            outcome,
+            reason: None,
+            workspace: (outcome == ClaudeCodeOutcome::Imported).then(|| branch.replace('/', "-")),
+        };
+        ClaudeCodeImportResult {
+            dry_run,
+            since_days: Some(60),
+            since_date: None,
+            claude_dir: "/c".into(),
+            sessions: Vec::new(),
+            workspaces: vec![workspace("feat/a"), workspace("feat/gone")],
+            histories: Vec::new(),
+            releases: vec![
+                release("feat/a", "/code/shop", false),
+                release("feat/gone", "/tmp/gone", true),
+            ],
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_claude_code_warning_names_each_release_and_what_its_checkout_keeps() {
+        let warning =
+            claude_code_release_warning(&claude_code_plan(true, ClaudeCodeOutcome::Import));
+        assert!(warning.contains("shop feat/a   in /code/shop"), "{warning}");
+        assert!(
+            warning.contains("shop feat/gone   in /tmp/gone"),
+            "{warning}"
+        );
+        assert!(
+            warning.contains("detached HEAD on the same commit"),
+            "{warning}"
+        );
+    }
+
+    #[test]
+    fn after_a_claude_code_import_each_released_checkout_says_how_to_clean_it() {
+        let done = claude_code_outcome(&claude_code_plan(false, ClaudeCodeOutcome::Imported));
+        assert!(
+            done.contains("git -C /code/shop stash --include-untracked   (shop feat/a)"),
+            "{done}"
+        );
+        assert!(!done.contains("git -C /tmp/gone"), "{done}");
+        assert!(
+            done.contains("shop feat/gone came with its commits only: whatever /tmp/gone still holds stays there."),
+            "{done}"
+        );
+        // A workspace that failed released nothing: no line for it.
+        let failed = claude_code_outcome(&claude_code_plan(false, ClaudeCodeOutcome::Failed));
+        assert!(!failed.contains("git -C"), "{failed}");
+        assert!(!failed.contains("commits only"), "{failed}");
+    }
 
     fn workspace(
         name: &str,

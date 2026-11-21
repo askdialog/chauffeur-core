@@ -3380,17 +3380,19 @@ impl ChatManager {
     /// agent session copied there under the same id, which it resumes, and its conversation as
     /// `events`, each at its time. Recorded under `record` with the chat: None when an earlier
     /// import recorded it, or the workspace is gone. The workspace keeps one open chat.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn import_chat(
         &self,
         workspace: &WorkspaceRow,
-        title: &str,
-        session_id: &str,
-        last_active: &str,
-        events: &[(String, ChatEvent)],
-        record: &str,
-        closed: bool,
+        imported: ImportedSession<'_>,
     ) -> Result<Option<ChatInfo>> {
+        let ImportedSession {
+            title,
+            session_id,
+            last_active,
+            events,
+            record,
+            closed,
+        } = imported;
         let d = self.d();
         let admission = d.execution.admit(&workspace.id)?;
         let choice = agent_choice(&d, AgentKind::Claude)?;
@@ -4461,6 +4463,20 @@ async fn source_clones(
         });
     }
     clones
+}
+
+/// A Claude Code session to import as a chat (`ChatManager::import_chat`).
+pub(crate) struct ImportedSession<'a> {
+    pub(crate) title: &'a str,
+    pub(crate) session_id: &'a str,
+    /// Its last message, RFC 3339.
+    pub(crate) last_active: &'a str,
+    /// Its conversation, each event at its time.
+    pub(crate) events: &'a [(String, ChatEvent)],
+    /// The key recording it, written with the chat.
+    pub(crate) record: &'a str,
+    /// A closed tab (a history exploration's).
+    pub(crate) closed: bool,
 }
 
 /// What a chat of `agent` gets when the user picked no model (a design chat, a fork into the other

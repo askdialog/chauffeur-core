@@ -250,7 +250,7 @@ impl Git {
         start: &str,
     ) -> anyhow::Result<()> {
         let path_str = path.to_string_lossy();
-        if self.branch_exists(clone, branch).await {
+        let added = if self.branch_exists(clone, branch).await {
             self.run(
                 clone,
                 &[
@@ -262,7 +262,7 @@ impl Git {
                     branch,
                 ],
             )
-            .await?;
+            .await
         } else {
             self.run(
                 clone,
@@ -278,12 +278,22 @@ impl Git {
                     start,
                 ],
             )
-            .await?;
+            .await
+        };
+        if let Err(error) = added {
+            // An add that failed past its registration (a hook of the clone's): taken back, or
+            // the next add at that path is refused.
+            let _ = self
+                .run(
+                    clone,
+                    &["worktree", "remove", "--force", "--force", &path_str],
+                )
+                .await;
+            return Err(error);
         }
         Ok(())
     }
 
-    /// A worktree with no branch, checked out at `start` (an exploration's).
     pub async fn worktree_add_detached(
         &self,
         clone: &Path,

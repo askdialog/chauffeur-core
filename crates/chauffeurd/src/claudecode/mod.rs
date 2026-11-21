@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use chauffeur_protocol::claudecode::{
     ClaudeCodeBranch, ClaudeCodeImportParams, ClaudeCodeImportResult, ClaudeCodeOutcome,
-    ClaudeCodeRelease, ClaudeCodeSessionPlan,
+    ClaudeCodeRelease, ClaudeCodeSessionPlan, ClaudeCodeWorkspaceKind,
 };
 
 use crate::conductor::{reference, remote_of};
@@ -119,6 +119,7 @@ pub async fn import(
     let mut plans = Vec::new();
     let mut placed = Vec::new();
     let mut found = HashMap::new();
+    let mut running_folders = Vec::new();
     // The transcripts Claude keeps for a Chauffeur workspace's own folder (archived ones too): its
     // chats', and the sessions an import copied there, which still name the folder they first ran
     // in. A session run in a folder inside a workspace is left out by its folder, below.
@@ -159,6 +160,10 @@ pub async fn import(
             reason: None,
             lands_in: None,
         };
+        // Where Claude Code still runs: no branch is released from under it.
+        if running.contains(&session.id) {
+            running_folders.push(real(&folder));
+        }
         if let Some(chat) = copy::imported(d, &session.id)? {
             plan.outcome = ClaudeCodeOutcome::AlreadyImported;
             plan.lands_in = copy::workspace_of(d, &chat)?;
@@ -233,31 +238,54 @@ pub async fn import(
             session.lands_in = Some(lands_in.clone());
         }
     }
+    // The branches this version makes workspaces of: each one's own, not yet made by an earlier
+    // import. Each repo's clone is chosen now, once for the whole run: Chauffeur's, else the
+    // user's holding the branch (its folder then joins the clone folders), so that adding a clone
+    // folder for one repo changes no other's.
     let mut releases = Vec::new();
     let mut sources = HashMap::new();
-    for workspace in &plan.workspaces {
+    for workspace in plan
+        .workspaces
+        .iter()
+        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Branch && w.parent.is_none())
+    {
         let Some(branch) = &workspace.branch else {
             continue;
         };
+        if branches::existing(d, workspace, branch)?.is_some() {
+            continue;
+        }
         for repo in &workspace.repos {
-            let holders = repos.holders(repo, branch).await;
-            // Released only in the clone Chauffeur uses (or will, having none): with a clone of its
-            // own, the branch is fetched there and the user's checkouts keep it.
-            let chauffeur = d.repos.existing_clone(repo);
-            releases.extend(
-                holders
-                    .iter()
-                    .filter(|h| {
-                        chauffeur
-                            .as_ref()
-                            .is_none_or(|c| crate::conductor::same_folder(c, &h.clone))
-                    })
-                    .map(|h| h.release.clone()),
-            );
             let clone = repos.source(repo, branch).await;
+            let chauffeur = d.repos.existing_clone(repo);
+            // Its checkouts in the user's clone holding it: their changes are copied, and they are
+            // released only when Chauffeur uses that clone (it has none, or it is the same);
+            // with a clone of its own, the branch is fetched there and they keep it.
+            let holders: Vec<Holder> = repos
+                .holders(repo, branch)
+                .await
+                .into_iter()
+                .filter(|h| {
+                    clone
+                        .as_ref()
+                        .is_some_and(|c| crate::conductor::same_folder(c, &h.clone))
+                })
+                .collect();
+            let released = chauffeur.as_ref().is_none_or(|c| {
+                clone
+                    .as_ref()
+                    .is_some_and(|u| crate::conductor::same_folder(c, u))
+            });
+            if released {
+                releases.extend(holders.iter().map(|h| h.release.clone()));
+            }
             sources.insert(
-                (repo.clone(), branch.clone()),
-                branches::Source { clone, holders },
+                branches::RepoBranch::new(repo, branch),
+                branches::Source {
+                    chauffeur,
+                    clone,
+                    holders,
+                },
             );
         }
     }
@@ -273,25 +301,14 @@ pub async fn import(
             }
         }
     } else {
-        branches::import(
-            d,
-            &claude,
-            &mut plan.workspaces,
-            &sources,
-            &mut plans,
-            &found,
-            &mut warnings,
-        )
-        .await?;
-        history::import(
-            d,
-            &claude,
-            &mut plan.histories,
-            &mut plans,
-            &found,
-            &mut warnings,
-        )
-        .await?;
+        let mut report = copy::Report::new(&mut plans, &mut warnings);
+        let found = branches::Found {
+            sources: &sources,
+            sessions: &found,
+            running: &running_folders,
+        };
+        branches::import(d, &claude, &mut plan.workspaces, &found, &mut report).await?;
+        history::import(d, &claude, &mut plan.histories, found.sessions, &mut report).await?;
     }
     let mut said = BTreeSet::new();
     warnings.retain(|w| said.insert(w.clone()));
@@ -676,8 +693,11 @@ impl<'a> Repos<'a> {
             .unwrap_or_else(|| vec![clone.to_path_buf()]);
         for sibling in siblings {
             let held =
+                // A worktree a failed creation left (its folder removed) holds nothing.
                 self.refs(&sibling).await.worktrees.iter().any(|e| {
-                    e.branch.as_deref() == Some(branch) && e.path.starts_with(&workspaces)
+                    e.branch.as_deref() == Some(branch)
+                        && !e.prunable
+                        && e.path.starts_with(&workspaces)
                 });
             if held {
                 self.warnings.push(format!(
@@ -930,8 +950,6 @@ impl<'a> Repos<'a> {
             .is_ok_and(|out| !out.trim().is_empty())
     }
 
-    /// Where a live branch is checked out: one of the repo's clones or the user's worktrees,
-    /// not Chauffeur's.
     /// The checkouts of `branch` in the user's clones of `repo` (the clone itself or one of its
     /// worktrees, gone or not), outside Chauffeur's workspaces: released to make its workspace.
     async fn holders(&mut self, repo: &str, branch: &str) -> Vec<Holder> {
@@ -981,24 +999,18 @@ impl<'a> Repos<'a> {
         has
     }
 
-    /// A checkout under a temporary folder whose cleanup was cut short: half its tracked files
-    /// or more are gone. Its diff would delete them: it carries its commits only.
+    /// A checkout under a temporary folder whose cleanup was cut short: a tracked file of it is
+    /// gone. Its diff would delete them: it carries its commits only, its changes staying there.
     async fn half_deleted(&self, folder: &Path) -> bool {
         if !under_temporary_folder(folder) {
             return false;
         }
-        let count = |args: &'static [&'static str]| async move {
-            self.git
-                .run_bytes(folder, args)
-                .await
-                .map(|out| out.split(|b| *b == 0).filter(|p| !p.is_empty()).count())
-        };
-        let (Ok(missing), Ok(tracked)) = (
-            count(&["--no-optional-locks", "ls-files", "--deleted", "-z"]).await,
-            count(&["--no-optional-locks", "ls-files", "-z"]).await,
-        ) else {
-            return false;
-        };
-        missing > 0 && missing * 2 >= tracked
+        self.git
+            .run_bytes(
+                folder,
+                &["--no-optional-locks", "ls-files", "--deleted", "-z"],
+            )
+            .await
+            .is_ok_and(|missing| missing.iter().any(|b| *b != 0))
     }
 }
