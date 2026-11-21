@@ -578,3 +578,111 @@ describe("cloneCommandRefusal", () => {
     expect(refuses(`${"( ".repeat(100000)}ls${" )".repeat(100000)}`)).toContain("could not read this command line");
   });
 });
+
+describe("git from a workspace's worktree, which shares its clone's branches and settings", () => {
+  const SHARED: SourceClone[] = [
+    { clone: "/code/web", worktree: "/ws/feat/web", branch: "fix/typo", default_branch: "main" },
+    { clone: "/code/api", worktree: "/ws/feat/api" },
+  ];
+  const refuses = (command: string, cwd = "/ws/feat/web") => cloneCommandRefusal(command, cwd, SHARED);
+  const table = (title: string, commands: string[], refused: boolean) => {
+    for (const command of commands) {
+      test(`${title}: ${JSON.stringify(command)}`, () => {
+        if (refused) expect(refuses(command)).toContain("git shares /code/web's branches and settings");
+        else expect(refuses(command)).toBeUndefined();
+      });
+    }
+  };
+
+  table("refused", [
+    // The clone's checked-out branch and its default branch.
+    "git branch -D main",
+    "git branch -d fix/typo",
+    "git branch --delete other main",
+    "git branch -m main old-main",
+    "git branch -M feat/x main",
+    "git branch -C feat/x main",
+    "git branch -f main HEAD",
+    "git branch --force fix/typo origin/fix/typo",
+    "git branch -D refs/heads/main",
+    'git branch -D "$B"',
+    "git checkout -B main origin/main",
+    "git switch -C fix/typo",
+    "git switch --force-create main",
+    "git fetch origin main:main",
+    "git fetch origin +refs/heads/main:refs/heads/main",
+    "git pull origin main:main",
+    "git push . HEAD:main",
+    "git -C /ws/feat/web branch -D main",
+    // The repo's settings, remotes, refs, reflogs and worktrees.
+    "git config user.email agent@example.com",
+    "git config --unset core.hooksPath",
+    "git config core.hooksPath .githooks",
+    "git remote add fork git@github.com:me/web.git",
+    "git remote set-url origin https://example.com/web.git",
+    "git remote remove origin",
+    "git remote rename origin upstream",
+    "git update-ref refs/heads/feat/x HEAD",
+    "git gc --prune=now",
+    "git prune",
+    "git worktree prune",
+    "git worktree remove /code/web/.wt/other",
+    "git reflog expire --expire=now --all",
+    "git reflog delete HEAD@{1}",
+  ], true);
+
+  table("allowed", [
+    "git commit -am 'fix'",
+    "git checkout -b feat/new",
+    "git switch -c feat/new main",
+    "git branch feat/new",
+    "git branch -D feat/new",
+    "git branch -m feat/new feat/renamed",
+    "git branch -f feat/new HEAD~1",
+    "git branch -d -r origin/main",
+    "git branch -u origin/feat/x",
+    "git branch --set-upstream-to origin/main",
+    "git rebase origin/main",
+    "git rebase -i HEAD~3",
+    "git reset --hard origin/main",
+    "git merge main",
+    "git push -u origin feat/new",
+    "git push --force-with-lease origin HEAD:feat/new",
+    "git push origin main:main",
+    "git fetch origin",
+    "git fetch origin main",
+    "git fetch origin main:refs/remotes/origin/main",
+    "git pull --rebase",
+    "git stash",
+    "git stash pop",
+    "git tag v1.2.3",
+    "git tag -d v1.2.3",
+    "git config --get user.email",
+    "git config user.email",
+    "git config --global user.name 'Me'",
+    "git config -f .gitmodules submodule.x.url https://example.com/x.git",
+    "git remote -v",
+    "git remote update",
+    "git worktree list",
+    "git worktree add ../other feat/other",
+    "git reflog",
+    "git log main..HEAD",
+  ], false);
+
+  test("the refusal names what it protects", () => {
+    expect(refuses("git branch -D main")).toContain("deletes main, the default branch of /code/web");
+    expect(refuses("git branch -f fix/typo HEAD")).toContain("resets fix/typo, the branch checked out in /code/web");
+    expect(refuses("git fetch origin main:main")).toContain("moves main, the default branch of /code/web");
+    expect(refuses("git config user.email x")).toContain("changes the settings of /code/web");
+  });
+
+  test("a clone whose branches are not known still keeps its settings, refs and worktrees", () => {
+    expect(refuses("git branch -D main", "/ws/feat/api")).toBeUndefined();
+    expect(cloneCommandRefusal("git remote set-url origin x", "/ws/feat/api", SHARED)).toContain("changes the remotes of /code/api");
+  });
+
+  test("outside the worktrees, git works on another repository", () => {
+    expect(refuses("git branch -D main", "/tmp/elsewhere")).toBeUndefined();
+    expect(refuses("git config user.email x", "/ws/feat")).toBeUndefined();
+  });
+});
