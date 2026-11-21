@@ -1176,6 +1176,7 @@ mod tests {
             removed: false,
             snapshot_ref: None,
             created_at: String::new(),
+            created_branch: true,
         }
     }
 

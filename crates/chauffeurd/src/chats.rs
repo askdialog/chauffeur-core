@@ -3384,19 +3384,23 @@ impl ChatManager {
         Ok(chat)
     }
 
-    /// A Claude Code session imported into `workspace` (an exploration) as a closed tab: its
+    /// A Claude Code session imported into `workspace` as a chat, a closed tab with `closed`: its
     /// agent session copied there under the same id, which it resumes, and its conversation as
     /// `events`, each at its time. Recorded under `record` with the chat: None when an earlier
     /// import recorded it, or the workspace is gone. The workspace keeps one open chat.
-    pub(crate) async fn import_closed(
+    pub(crate) async fn import_chat(
         &self,
         workspace: &WorkspaceRow,
-        title: &str,
-        session_id: &str,
-        last_active: &str,
-        events: &[(String, ChatEvent)],
-        record: &str,
+        imported: ImportedSession<'_>,
     ) -> Result<Option<ChatInfo>> {
+        let ImportedSession {
+            title,
+            session_id,
+            last_active,
+            events,
+            record,
+            closed,
+        } = imported;
         let d = self.d();
         let admission = d.execution.admit(&workspace.id)?;
         let choice = agent_choice(&d, AgentKind::Claude)?;
@@ -3413,14 +3417,18 @@ impl ChatManager {
             effort: choice.effort,
             fast: choice.fast,
             // An exploration's chats plan: they change nothing.
-            permission_mode: PermissionMode::Plan,
+            permission_mode: if workspace.explore {
+                PermissionMode::Plan
+            } else {
+                PermissionMode::default()
+            },
             title: Some(title.to_owned()),
             status: ChatStatus::Idle,
             agent_session_id: Some(session_id.to_owned()),
             created_at,
             running_tasks: 0,
             permission_mode_effective: None,
-            closed: true,
+            closed,
             last_activity_at: Some(last_active.to_owned()),
             mcp_servers: Vec::new(),
             kind: ChatKind::Chat,
@@ -4436,6 +4444,20 @@ pub(crate) fn default_choice(d: &Daemon) -> Result<LoadoutEntry> {
             effort: None,
             fast: false,
         }))
+}
+
+/// A Claude Code session to import as a chat (`ChatManager::import_chat`).
+pub(crate) struct ImportedSession<'a> {
+    pub(crate) title: &'a str,
+    pub(crate) session_id: &'a str,
+    /// Its last message, RFC 3339.
+    pub(crate) last_active: &'a str,
+    /// Its conversation, each event at its time.
+    pub(crate) events: &'a [(String, ChatEvent)],
+    /// The key recording it, written with the chat.
+    pub(crate) record: &'a str,
+    /// A closed tab (a history exploration's).
+    pub(crate) closed: bool,
 }
 
 /// What a chat of `agent` gets when the user picked no model (a design chat, a fork into the other

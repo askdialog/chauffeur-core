@@ -6,6 +6,8 @@
 //! sessions (`history`); the rest is planned only, for now. Neither touches Claude Code's files
 //! or the repos.
 
+mod branches;
+mod copy;
 mod history;
 mod place;
 mod sessions;
@@ -16,7 +18,7 @@ use std::sync::Arc;
 
 use chauffeur_protocol::claudecode::{
     ClaudeCodeBranch, ClaudeCodeImportParams, ClaudeCodeImportResult, ClaudeCodeOutcome,
-    ClaudeCodeRelease, ClaudeCodeSessionPlan,
+    ClaudeCodeRelease, ClaudeCodeSessionPlan, ClaudeCodeWorkspaceKind,
 };
 
 use crate::conductor::{reference, remote_of};
@@ -117,6 +119,7 @@ pub async fn import(
     let mut plans = Vec::new();
     let mut placed = Vec::new();
     let mut found = HashMap::new();
+    let mut running_folders = Vec::new();
     // The transcripts Claude keeps for a Chauffeur workspace's own folder (archived ones too): its
     // chats', and the sessions an import copied there, which still name the folder they first ran
     // in. A session run in a folder inside a workspace is left out by its folder, below.
@@ -157,9 +160,13 @@ pub async fn import(
             reason: None,
             lands_in: None,
         };
-        if let Some(chat) = history::imported(d, &session.id)? {
+        // Where Claude Code still runs: no branch is released from under it.
+        if running.contains(&session.id) {
+            running_folders.push(real(&folder));
+        }
+        if let Some(chat) = copy::imported(d, &session.id)? {
             plan.outcome = ClaudeCodeOutcome::AlreadyImported;
-            plan.lands_in = history::workspace_of(d, &chat)?;
+            plan.lands_in = copy::workspace_of(d, &chat)?;
             plans.push(plan);
             continue;
         }
@@ -231,13 +238,54 @@ pub async fn import(
             session.lands_in = Some(lands_in.clone());
         }
     }
+    // The branches this version makes workspaces of: each one's own, not yet made by an earlier
+    // import. Each repo's clone is chosen now, once for the whole run: Chauffeur's, else the
+    // user's holding the branch, which becomes Chauffeur's (`branches::adopt`).
     let mut releases = Vec::new();
-    for workspace in &plan.workspaces {
+    let mut sources = HashMap::new();
+    for workspace in plan
+        .workspaces
+        .iter()
+        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Branch && w.parent.is_none())
+    {
         let Some(branch) = &workspace.branch else {
             continue;
         };
+        if branches::existing(d, workspace, branch)?.is_some() {
+            continue;
+        }
         for repo in &workspace.repos {
-            releases.extend(repos.holders(repo, branch).await);
+            let clone = repos.source(repo, branch).await;
+            let chauffeur = d.repos.existing_clone(repo);
+            // Its checkouts in the user's clone holding it: their changes are copied, and they are
+            // released only when Chauffeur uses that clone (it has none, or it is the same);
+            // with a clone of its own, the branch is fetched there and they keep it.
+            let holders: Vec<Holder> = repos
+                .holders(repo, branch)
+                .await
+                .into_iter()
+                .filter(|h| {
+                    clone
+                        .as_ref()
+                        .is_some_and(|c| crate::conductor::same_folder(c, &h.clone))
+                })
+                .collect();
+            let released = chauffeur.as_ref().is_none_or(|c| {
+                clone
+                    .as_ref()
+                    .is_some_and(|u| crate::conductor::same_folder(c, u))
+            });
+            if released {
+                releases.extend(holders.iter().map(|h| h.release.clone()));
+            }
+            sources.insert(
+                branches::RepoBranch::new(repo, branch),
+                branches::Source {
+                    chauffeur,
+                    clone,
+                    holders,
+                },
+            );
         }
     }
     warnings.extend(repos.warnings);
@@ -245,16 +293,21 @@ pub async fn import(
         for history in &mut plan.histories {
             history.workspace = history::exploration(d, &history.repo)?.map(|row| row.slug);
         }
+        for workspace in &mut plan.workspaces {
+            if let Some(branch) = workspace.branch.clone() {
+                workspace.workspace =
+                    branches::existing(d, workspace, &branch)?.map(|row| row.slug);
+            }
+        }
     } else {
-        history::import(
-            d,
-            &claude,
-            &mut plan.histories,
-            &mut plans,
-            &found,
-            &mut warnings,
-        )
-        .await?;
+        let mut report = copy::Report::new(&mut plans, &mut warnings);
+        let found = branches::Found {
+            sources: &sources,
+            sessions: &found,
+            running: &running_folders,
+        };
+        branches::import(d, &claude, &mut plan.workspaces, &found, &mut report).await?;
+        history::import(d, &claude, &mut plan.histories, found.sessions, &mut report).await?;
     }
     let mut said = BTreeSet::new();
     warnings.retain(|w| said.insert(w.clone()));
@@ -269,6 +322,28 @@ pub async fn import(
         releases,
         warnings,
     })
+}
+
+/// A checkout of a branch to release, with the clone it belongs to.
+pub(super) struct Holder {
+    pub(super) release: ClaudeCodeRelease,
+    pub(super) clone: PathBuf,
+    /// Its folder is gone: git keeps it only in the clone's `.git`.
+    pub(super) gone: bool,
+}
+
+/// Under the system's temporary folders (`/tmp`, `$TMPDIR`), where cleanups delete files.
+fn under_temporary_folder(folder: &Path) -> bool {
+    let folder = real(folder);
+    [
+        PathBuf::from("/tmp"),
+        PathBuf::from("/private/tmp"),
+        PathBuf::from("/var/folders"),
+        PathBuf::from("/private/var/folders"),
+        real(&std::env::temp_dir()),
+    ]
+    .iter()
+    .any(|temporary| folder.starts_with(temporary))
 }
 
 /// The start of a day here, `YYYY-MM-DD`.
@@ -598,6 +673,15 @@ impl<'a> Repos<'a> {
     }
 
     async fn read_live(&mut self, clone: &Path, branch: &str) -> bool {
+        // A branch an earlier import made a workspace on: its sessions since go there.
+        if let Some(repo) = self.names.get(clone)
+            && branches::recorded(self.d, repo, branch)
+                .ok()
+                .flatten()
+                .is_some()
+        {
+            return true;
+        }
         let workspaces = self.workspaces.clone();
         // In a Chauffeur workspace already, made from this clone or another of the repo.
         let siblings = self
@@ -862,25 +946,67 @@ impl<'a> Repos<'a> {
             .is_ok_and(|out| !out.trim().is_empty())
     }
 
-    /// Where a live branch is checked out: one of the repo's clones or the user's worktrees,
-    /// not Chauffeur's.
-    async fn holders(&mut self, repo: &str, branch: &str) -> Vec<ClaudeCodeRelease> {
+    /// The checkouts of `branch` in the user's clones of `repo` (the clone itself or one of its
+    /// worktrees, gone or not), outside Chauffeur's workspaces: released to make its workspace.
+    async fn holders(&mut self, repo: &str, branch: &str) -> Vec<Holder> {
         let workspaces = self.workspaces.clone();
-        let mut releases = Vec::new();
+        let mut holders = Vec::new();
         for clone in self.clones.get(repo).cloned().unwrap_or_default() {
-            for e in &self.refs(&clone).await.worktrees {
-                if e.branch.as_deref() == Some(branch)
-                    && !e.prunable
-                    && !e.path.starts_with(&workspaces)
-                {
-                    releases.push(ClaudeCodeRelease {
+            let entries = self.refs(&clone).await.worktrees.clone();
+            for e in entries {
+                if e.branch.as_deref() != Some(branch) || e.path.starts_with(&workspaces) {
+                    continue;
+                }
+                let commits_only = e.prunable || self.half_deleted(&e.path).await;
+                holders.push(Holder {
+                    release: ClaudeCodeRelease {
                         repo: repo.to_string(),
                         branch: branch.to_string(),
                         folder: e.path.to_string_lossy().into_owned(),
-                    });
-                }
+                        commits_only,
+                    },
+                    clone: clone.clone(),
+                    gone: e.prunable,
+                });
             }
         }
-        releases
+        holders
+    }
+
+    /// The user's clone of `repo` holding `branch`: the one it is checked out in, else the first
+    /// one that has it.
+    async fn source(&mut self, repo: &str, branch: &str) -> Option<PathBuf> {
+        let clones = self.clones.get(repo).cloned().unwrap_or_default();
+        let mut has = None;
+        for clone in clones {
+            let refs = self.refs(&clone).await;
+            if !refs.tips.contains_key(branch) {
+                continue;
+            }
+            if refs
+                .worktrees
+                .iter()
+                .any(|e| e.branch.as_deref() == Some(branch))
+            {
+                return Some(clone);
+            }
+            has.get_or_insert(clone);
+        }
+        has
+    }
+
+    /// A checkout under a temporary folder whose cleanup was cut short: a tracked file of it is
+    /// gone. Its diff would delete them: it carries its commits only, its changes staying there.
+    async fn half_deleted(&self, folder: &Path) -> bool {
+        if !under_temporary_folder(folder) {
+            return false;
+        }
+        self.git
+            .run_bytes(
+                folder,
+                &["--no-optional-locks", "ls-files", "--deleted", "-z"],
+            )
+            .await
+            .is_ok_and(|missing| missing.iter().any(|b| *b != 0))
     }
 }
