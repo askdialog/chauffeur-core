@@ -240,8 +240,7 @@ pub async fn import(
     }
     // The branches this version makes workspaces of: each one's own, not yet made by an earlier
     // import. Each repo's clone is chosen now, once for the whole run: Chauffeur's, else the
-    // user's holding the branch (its folder then joins the clone folders), so that adding a clone
-    // folder for one repo changes no other's.
+    // user's holding the branch, which becomes Chauffeur's (`branches::adopt`).
     let mut releases = Vec::new();
     let mut sources = HashMap::new();
     for workspace in plan
@@ -693,11 +692,8 @@ impl<'a> Repos<'a> {
             .unwrap_or_else(|| vec![clone.to_path_buf()]);
         for sibling in siblings {
             let held =
-                // A worktree a failed creation left (its folder removed) holds nothing.
                 self.refs(&sibling).await.worktrees.iter().any(|e| {
-                    e.branch.as_deref() == Some(branch)
-                        && !e.prunable
-                        && e.path.starts_with(&workspaces)
+                    e.branch.as_deref() == Some(branch) && e.path.starts_with(&workspaces)
                 });
             if held {
                 self.warnings.push(format!(

@@ -680,7 +680,10 @@ fn write_repo_settings(d: &Daemon, repos: &[Repo]) -> Result<()> {
         .map_err(|e| Error::Internal(e.context("writing the imported repos' settings")))
 }
 
-fn implicit_table<'a>(table: &'a mut toml_edit::Table, key: &str) -> &'a mut toml_edit::Table {
+pub(crate) fn implicit_table<'a>(
+    table: &'a mut toml_edit::Table,
+    key: &str,
+) -> &'a mut toml_edit::Table {
     let item = table.entry(key).or_insert_with(|| {
         let mut new = toml_edit::Table::new();
         new.set_implicit(true);
