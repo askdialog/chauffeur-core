@@ -4,4 +4,9 @@ export type ClaudeCodeRelease = { repo: string, branch: string,
 /**
  * The checkout holding it: the clone or one of the user's worktrees.
  */
-folder: string, };
+folder: string, 
+/**
+ * Its folder is gone, or half deleted under a temporary folder (a cleanup cut short): the
+ * branch's commits come, never its changes.
+ */
+commits_only: boolean, };

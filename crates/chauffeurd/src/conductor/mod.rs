@@ -184,7 +184,7 @@ pub(crate) fn reference(d: &Daemon, owner: &str, name: &str) -> String {
     }
 }
 
-fn same_folder(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
@@ -570,21 +570,21 @@ fn branch_ticket(branch: &str) -> Option<String> {
 }
 
 /// A worktree's uncommitted work: tracked changes against HEAD and untracked files.
-struct Changes {
+pub(crate) struct Changes {
     patch: Vec<u8>,
     untracked: Vec<String>,
     tracked: usize,
 }
 
 impl Changes {
-    fn files(&self) -> usize {
+    pub(crate) fn files(&self) -> usize {
         self.tracked + self.untracked.len()
     }
 }
 
 /// Reads the uncommitted work of Conductor's worktree, writing nothing there: no optional locks
 /// (git would otherwise refresh its index).
-async fn changes(git: &Git, folder: &Path) -> anyhow::Result<Changes> {
+pub(crate) async fn changes(git: &Git, folder: &Path) -> anyhow::Result<Changes> {
     let patch = git
         .run_bytes(folder, &["--no-optional-locks", "diff", "--binary", "HEAD"])
         .await?;
@@ -802,7 +802,7 @@ async fn import_active(
 
 /// After a failed creation: the branch back in Conductor's worktree, made again at its commit if
 /// the creation's rollback deleted it.
-async fn put_back(git: &Git, clone: &Path, folder: &Path, branch: &str, head: &str) {
+pub(crate) async fn put_back(git: &Git, clone: &Path, folder: &Path, branch: &str, head: &str) {
     let reference = format!("refs/heads/{branch}");
     if !git
         .ok(clone, &["rev-parse", "-q", "--verify", &reference])
@@ -819,7 +819,12 @@ async fn put_back(git: &Git, clone: &Path, folder: &Path, branch: &str, head: &s
 }
 
 /// Applies the tracked changes and copies the untracked files into the new worktree.
-async fn reapply(git: &Git, changes: &Changes, from: &Path, to: &Path) -> anyhow::Result<()> {
+pub(crate) async fn reapply(
+    git: &Git,
+    changes: &Changes,
+    from: &Path,
+    to: &Path,
+) -> anyhow::Result<()> {
     if !changes.patch.is_empty() {
         let patch = tempfile::NamedTempFile::new()?;
         std::fs::write(patch.path(), &changes.patch)?;

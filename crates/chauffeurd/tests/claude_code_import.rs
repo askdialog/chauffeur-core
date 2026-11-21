@@ -760,16 +760,20 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
 
     // A live branch checked out in one of the user's worktrees, or another clone of the repo,
     // is released there.
-    let release = |branch: &str, folder: &str| ClaudeCodeRelease {
+    // One whose folder is gone carries its commits only.
+    let release = |branch: &str, folder: &str, commits_only: bool| ClaudeCodeRelease {
         repo: "web".into(),
         branch: branch.into(),
         folder: f.root.join(folder).to_string_lossy().into_owned(),
+        commits_only,
     };
     assert_eq!(
         plan.releases,
         [
-            release("feat/held", "wt/held"),
-            release("feat/two", "clones/web-2")
+            release("feat/held", "wt/held", false),
+            release("feat/y", "clones/web/.wt/y", true),
+            release("feat/two", "clones/web-2", false),
+            release("feat/ext", "scratch/ext", true),
         ]
     );
 }
@@ -1018,8 +1022,9 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
             .is_some_and(|r| r.contains("could not be copied")),
         "{unreadable:?}"
     );
-    // Sessions on live branches wait for a later version.
-    assert_eq!(outcome(&plan, "simple-web").0, ClaudeCodeOutcome::Import);
+    // A session on a live branch goes to its workspace; an orchestration's waits for a later version.
+    assert_eq!(outcome(&plan, "simple-web").0, ClaudeCodeOutcome::Imported);
+    assert_eq!(outcome(&plan, "orchestrator").0, ClaudeCodeOutcome::Import);
 
     let ws = d.workspaces.get("web-history").unwrap();
     assert!(ws.explore);
@@ -1194,5 +1199,314 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
         })
         .collect();
     assert!(left.is_empty(), "{left:?}");
+    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
+}
+
+/// Two repos whose clones hold live branches in every place a branch can be:
+/// - shop's clone itself on `feat/held`, a file changed and one untracked;
+/// - `feat/wt` in a worktree of the user's, an untracked file there;
+/// - `feat/free` checked out nowhere;
+/// - `feat/tmp` in a worktree whose files a cleanup deleted, `feat/gone` in one removed whole;
+/// - `feat/both` in shop (a worktree) and in docs (its clone), docs' clone for Chauffeur (another
+///   one, set in the settings) holding a `feat/both` of its own, which no fetch can move.
+/// One session per branch, and a stand-in sidecar.
+struct Branches {
+    f: Fixture,
+    shop: PathBuf,
+    tips: std::collections::HashMap<String, String>,
+}
+
+fn branches_fixture() -> Branches {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let mut clones = std::collections::HashMap::new();
+    for name in ["shop", "docs"] {
+        let seed = root.join("seed").join(name);
+        std::fs::create_dir_all(&seed).unwrap();
+        git(&seed, &["init", "-q", "-b", "main"]);
+        commit(&seed, "README.md", &format!("{name}\n"));
+        commit(&seed, "src.txt", "source\n");
+        let origin = root.join("origin").join(format!("{name}.git"));
+        git(
+            &root,
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                seed.to_str().unwrap(),
+                origin.to_str().unwrap(),
+            ],
+        );
+        let clone = root.join("clones").join(name);
+        git(
+            &root,
+            &[
+                "clone",
+                "-q",
+                origin.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
+        let url = format!("https://github.com/fixture/{name}.git");
+        git(&clone, &["remote", "set-url", "origin", &url]);
+        git(
+            &clone,
+            &[
+                "config",
+                &format!("url.{}.insteadOf", origin.display()),
+                &url,
+            ],
+        );
+        clones.insert(name, clone);
+    }
+    let (shop, docs) = (clones["shop"].clone(), clones["docs"].clone());
+    let mut tips = std::collections::HashMap::new();
+    let mut branch = |clone: &Path, name: &str| {
+        git(clone, &["switch", "-q", "-c", name, "main"]);
+        let tip = commit(clone, &format!("{}.txt", name.replace('/', "-")), "work\n");
+        git(clone, &["switch", "-q", "main"]);
+        tips.insert(name.to_string(), tip);
+    };
+    for name in [
+        "feat/held",
+        "feat/wt",
+        "feat/free",
+        "feat/tmp",
+        "feat/gone",
+        "feat/both",
+    ] {
+        branch(&shop, name);
+    }
+    branch(&docs, "feat/both");
+    // Docs' clone for Chauffeur: another clone, whose feat/both went another way.
+    let chauffeur_docs = root.join("chauffeur").join("docs");
+    git(
+        &root,
+        &[
+            "clone",
+            "-q",
+            root.join("origin/docs.git").to_str().unwrap(),
+            chauffeur_docs.to_str().unwrap(),
+        ],
+    );
+    git(&chauffeur_docs, &["switch", "-q", "-c", "feat/both"]);
+    commit(&chauffeur_docs, "other.txt", "another way\n");
+    git(&chauffeur_docs, &["switch", "-q", "main"]);
+    git(&docs, &["switch", "-q", "feat/both"]);
+    // The clone on feat/held, changed.
+    git(&shop, &["switch", "-q", "feat/held"]);
+    std::fs::write(shop.join("README.md"), "shop, changed on feat/held\n").unwrap();
+    std::fs::write(shop.join("notes.txt"), "untracked\n").unwrap();
+    let worktree = |name: &str, folder: &Path| {
+        git(
+            &shop,
+            &["worktree", "add", "-q", folder.to_str().unwrap(), name],
+        );
+    };
+    let wt = root.join("wt/feat-wt");
+    worktree("feat/wt", &wt);
+    std::fs::write(wt.join("todo.txt"), "untracked in a worktree\n").unwrap();
+    let both = root.join("wt/both");
+    worktree("feat/both", &both);
+    // A cleanup cut short: every tracked file gone, the worktree still listed.
+    let tmp = root.join("tmp/feat-tmp");
+    worktree("feat/tmp", &tmp);
+    for entry in std::fs::read_dir(&tmp).unwrap().flatten() {
+        if entry.file_name() != ".git" {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+    }
+    let gone = root.join("tmp/feat-gone");
+    worktree("feat/gone", &gone);
+    std::fs::remove_dir_all(&gone).unwrap();
+
+    let claude = root.join("claude");
+    let projects = claude.join("projects").join("-code");
+    std::fs::create_dir_all(&projects).unwrap();
+    let session = |id: &str, cwd: &Path, branch: &str, file: &Path| {
+        let text = [
+            format!(r#"{{"type":"ai-title","aiTitle":"Work on {branch}"}}"#),
+            format!(
+                r#"{{"type":"user","cwd":"{}","entrypoint":"cli","timestamp":"{}","message":{{"role":"user","content":"Change {branch}"}}}}"#,
+                cwd.display(),
+                ago(3)
+            ),
+            line(cwd, branch, &ago(3), &edit(file)),
+        ]
+        .join("\n");
+        std::fs::write(projects.join(format!("{id}.jsonl")), text + "\n").unwrap();
+    };
+    session("s-held", &shop, "feat/held", &shop.join("README.md"));
+    session("s-wt", &wt, "feat/wt", &wt.join("todo.txt"));
+    session("s-free", &shop, "feat/free", &shop.join("free.txt"));
+    session("s-tmp", &shop, "main", &tmp.join("src.txt"));
+    session("s-gone", &shop, "main", &gone.join("src.txt"));
+    let text = [
+        r#"{"type":"ai-title","aiTitle":"Both repos"}"#.to_string(),
+        line(&both, "feat/both", &ago(2), &edit(&both.join("a.txt"))),
+        line(&docs, "feat/both", &ago(2), &edit(&docs.join("b.txt"))),
+    ]
+    .join("\n");
+    std::fs::write(projects.join("s-both.jsonl"), text + "\n").unwrap();
+
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("settings.toml"),
+        format!(
+            "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = [\"{}\"]\nport_range_start = 46970\nlinear_enabled = false\n\n[repos.docs]\npath = \"{}\"\ndefault_branch = \"main\"\n",
+            root.join("clones").display(),
+            chauffeur_docs.display()
+        ),
+    )
+    .unwrap();
+    let daemon = Daemon::open(Paths::new(
+        home,
+        root.join("workspaces"),
+        root.join("repos"),
+    ))
+    .unwrap();
+    let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    vars.insert(
+        "CLAUDE_CONFIG_DIR".into(),
+        claude.to_string_lossy().into_owned(),
+    );
+    daemon.shell_env.set_vars(vars);
+    daemon.chats.sidecar.use_binary(history_sidecar());
+    Branches {
+        f: Fixture {
+            _dir: dir,
+            root,
+            claude,
+            daemon,
+        },
+        shop,
+        tips,
+    }
+}
+
+fn is_branch(dir: &Path, name: &str) -> bool {
+    let head = Command::new("git")
+        .args(["symbolic-ref", "-q", "--short", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&head.stdout).trim() == name
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
+    let _switch = SWITCH.lock().await;
+    let b = branches_fixture();
+    let (f, shop) = (&b.f, &b.shop);
+    let d = &f.daemon;
+    let planned = import(f, true).await;
+    // Docs' feat/both is fetched into Chauffeur's own clone: the user's checkout keeps it.
+    let released: Vec<_> = planned
+        .releases
+        .iter()
+        .map(|r| (r.repo.as_str(), r.branch.as_str(), r.commits_only))
+        .collect();
+    assert_eq!(
+        released,
+        [
+            ("shop", "feat/both", false),
+            ("shop", "feat/gone", true),
+            ("shop", "feat/held", false),
+            ("shop", "feat/tmp", true),
+            ("shop", "feat/wt", false),
+        ],
+        "{:?}",
+        planned.releases
+    );
+
+    // SAFETY: the tests reading the switch hold `SWITCH`.
+    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    let plan = import(f, false).await;
+    let made = |branch: &str| {
+        let w = plan
+            .workspaces
+            .iter()
+            .find(|w| w.branch.as_deref() == Some(branch))
+            .unwrap();
+        (w.outcome, w.workspace.clone())
+    };
+    for branch in ["feat/held", "feat/wt", "feat/free", "feat/tmp", "feat/gone"] {
+        let (outcome, slug) = made(branch);
+        assert_eq!(outcome, ClaudeCodeOutcome::Imported, "{branch}: {plan:?}");
+        let ws = d.workspaces.get(slug.as_deref().unwrap()).unwrap();
+        let checkout = Path::new(&ws.path).join("shop");
+        assert!(is_branch(&checkout, branch), "{branch}");
+        assert_eq!(
+            git(&checkout, &["rev-parse", "HEAD"]),
+            b.tips[branch],
+            "{branch}"
+        );
+        // Its session, a resumable chat, open.
+        let chats = d.store.chats_of(&ws.id).unwrap();
+        assert!(
+            chats
+                .iter()
+                .any(|c| !c.closed && c.agent_session_id.is_some()),
+            "{branch}: {chats:?}"
+        );
+    }
+    let path = |branch: &str| {
+        PathBuf::from(
+            d.workspaces
+                .get(made(branch).1.as_deref().unwrap())
+                .unwrap()
+                .path,
+        )
+        .join("shop")
+    };
+
+    // Released in the clone: HEAD detached on the same commit, its changes kept there and copied.
+    assert!(!is_branch(shop, "feat/held"));
+    assert_eq!(git(shop, &["rev-parse", "HEAD"]), b.tips["feat/held"]);
+    assert_eq!(
+        std::fs::read_to_string(shop.join("README.md")).unwrap(),
+        "shop, changed on feat/held\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path("feat/held").join("README.md")).unwrap(),
+        "shop, changed on feat/held\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(path("feat/held").join("notes.txt")).unwrap(),
+        "untracked\n"
+    );
+    // In the user's worktree too.
+    assert!(!is_branch(&f.root.join("wt/feat-wt"), "feat/wt"));
+    assert!(path("feat/wt").join("todo.txt").is_file());
+    // A half-deleted checkout carries its commits, not its deletions; a gone one its commits.
+    assert!(
+        path("feat/tmp").join("src.txt").is_file() && path("feat/tmp").join("README.md").is_file()
+    );
+    assert!(path("feat/gone").join("feat-gone.txt").is_file());
+
+    // The workspace that failed (docs' branch went another way in Chauffeur's clone) puts back
+    // what it released; the others went on.
+    assert_eq!(made("feat/both").0, ClaudeCodeOutcome::Failed, "{plan:?}");
+    assert!(is_branch(&f.root.join("wt/both"), "feat/both"));
+    let both = plan.sessions.iter().find(|s| s.id == "s-both").unwrap();
+    assert_eq!(both.outcome, ClaudeCodeOutcome::Failed);
+    assert!(
+        both.reason
+            .as_deref()
+            .is_some_and(|r| r.contains("could not be made")),
+        "{both:?}"
+    );
+
+    // Again: nothing twice; the failed one is tried again, and fails again.
+    let again = import(f, false).await;
+    for id in ["s-held", "s-wt", "s-free", "s-tmp", "s-gone"] {
+        assert_eq!(
+            outcome(&again, id).0,
+            ClaudeCodeOutcome::AlreadyImported,
+            "{id}"
+        );
+    }
+    assert_eq!(outcome(&again, "s-both").0, ClaudeCodeOutcome::Failed);
     unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }

@@ -119,6 +119,12 @@ pub struct ClaudeCodeWorkspacePlan {
     pub sessions: Vec<String>,
     /// Repos whose uncommitted default-branch changes it carries.
     pub changes_from: Vec<String>,
+    /// `import` in a plan; `imported` or `failed` once run, `reason` saying why it failed.
+    /// Workspaces of the kinds a later version imports stay `import`.
+    pub outcome: ClaudeCodeOutcome,
+    pub reason: Option<String>,
+    /// The workspace made, or the one an earlier import made on that branch, by name.
+    pub workspace: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
@@ -141,4 +147,7 @@ pub struct ClaudeCodeRelease {
     pub branch: String,
     /// The checkout holding it: the clone or one of the user's worktrees.
     pub folder: String,
+    /// Its folder is gone, or half deleted under a temporary folder (a cleanup cut short): the
+    /// branch's commits come, never its changes.
+    pub commits_only: bool,
 }
