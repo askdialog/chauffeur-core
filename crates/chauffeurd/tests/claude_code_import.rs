@@ -1220,6 +1220,8 @@ fn branches_fixture() -> Branches {
     let shop = clone_repo(&root, "shop", &["src.txt"]);
     let docs = clone_repo(&root, "docs", &["src.txt"]);
     let lab = clone_repo(&root, "lab", &["src.txt"]);
+    // feat/gone in a repo of its own, which no failing workspace prunes.
+    let tools = clone_repo(&root, "tools", &["src.txt"]);
 
     let mut tips = std::collections::HashMap::new();
     let mut branch = |clone: &Path, name: &str| {
@@ -1233,7 +1235,6 @@ fn branches_fixture() -> Branches {
         "feat/wt",
         "feat/free",
         "feat/tmp",
-        "feat/gone",
         "feat/both",
         "feat/multi",
         "feat/busy",
@@ -1296,9 +1297,21 @@ fn branches_fixture() -> Branches {
     // A worktree where Claude Code still runs.
     let busy = root.join("wt/busy");
     worktree("feat/busy", &busy);
+    git(&tools, &["switch", "-q", "-c", "feat/gone", "main"]);
+    tips.insert(
+        "feat/gone".into(),
+        commit(&tools, "feat-gone.txt", "work\n"),
+    );
+    git(&tools, &["switch", "-q", "main"]);
     let gone = root.join("tmp/feat-gone");
-    worktree("feat/gone", &gone);
+    git(
+        &tools,
+        &["worktree", "add", "-q", gone.to_str().unwrap(), "feat/gone"],
+    );
     std::fs::remove_dir_all(&gone).unwrap();
+    // feat/multi held in a worktree of shop's: released, then put back when lab fails.
+    let multi = root.join("wt/multi");
+    worktree("feat/multi", &multi);
 
     let claude = root.join("claude");
     let projects = claude.join("projects").join("-code");
@@ -1320,7 +1333,7 @@ fn branches_fixture() -> Branches {
     session("s-wt", &wt, "feat/wt", &wt.join("todo.txt"));
     session("s-free", &shop, "feat/free", &shop.join("free.txt"));
     session("s-tmp", &shop, "main", &tmp.join("src.txt"));
-    session("s-gone", &shop, "main", &gone.join("src.txt"));
+    session("s-gone", &tools, "main", &gone.join("src.txt"));
     let text = [
         r#"{"type":"ai-title","aiTitle":"Both repos"}"#.to_string(),
         line(&both, "feat/both", &ago(2), &edit(&both.join("a.txt"))),
@@ -1410,10 +1423,11 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
         [
             ("shop", "feat/both", false),
             ("shop", "feat/busy", false),
-            ("shop", "feat/gone", true),
             ("shop", "feat/held", false),
+            ("shop", "feat/multi", false),
             ("shop", "feat/tmp", true),
             ("shop", "feat/wt", false),
+            ("tools", "feat/gone", true),
         ],
         "{:?}",
         planned.releases
@@ -1430,11 +1444,18 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
             .unwrap();
         (w.outcome, w.workspace.clone())
     };
+    let repo_of = |branch: &str| {
+        if branch == "feat/gone" {
+            "tools"
+        } else {
+            "shop"
+        }
+    };
     for branch in ["feat/held", "feat/wt", "feat/free", "feat/tmp", "feat/gone"] {
         let (outcome, slug) = made(branch);
         assert_eq!(outcome, ClaudeCodeOutcome::Imported, "{branch}: {plan:?}");
         let ws = d.workspaces.get(slug.as_deref().unwrap()).unwrap();
-        let checkout = Path::new(&ws.path).join("shop");
+        let checkout = Path::new(&ws.path).join(repo_of(branch));
         assert!(is_branch(&checkout, branch), "{branch}");
         assert_eq!(
             git(&checkout, &["rev-parse", "HEAD"]),
@@ -1457,7 +1478,7 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
                 .unwrap()
                 .path,
         )
-        .join("shop")
+        .join(repo_of(branch))
     };
 
     // Released in the clone: HEAD detached on the same commit, its changes kept there and copied.
@@ -1502,6 +1523,10 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
     // A branch of two repos whose second worktree cannot be made: the user's branch stays, with
     // its settings, though the creation had made a worktree on it.
     assert_eq!(made("feat/multi").0, ClaudeCodeOutcome::Failed, "{plan:?}");
+    assert!(
+        is_branch(&f.root.join("wt/multi"), "feat/multi"),
+        "put back"
+    );
     assert_eq!(
         git(shop, &["rev-parse", "refs/heads/feat/multi"]),
         b.tips["feat/multi"]
