@@ -1103,8 +1103,9 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
     )
     .unwrap();
 
-    // A folder of the user's named like Chauffeur's workspaces folder is the user's.
-    let beside = f.root.join("workspaces-old/app");
+    // A folder of the user's whose name Claude writes as a workspace's, followed by more, is the
+    // user's.
+    let beside = f.root.join("workspaces-web-history2");
     let beside_key = beside
         .to_string_lossy()
         .replace(|c: char| !c.is_ascii_alphanumeric(), "-");
