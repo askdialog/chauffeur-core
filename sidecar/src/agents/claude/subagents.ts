@@ -3,6 +3,7 @@
 // or without a session. The same mapping as live messages, so that the app merges both by id.
 
 import {
+  getSessionMessages,
   getSubagentMessages,
   listSubagents,
   type SDKAssistantMessage,
@@ -19,15 +20,18 @@ export interface TranscriptReader {
   messages(sessionId: string, agentId: string, dir: string, limit?: number): Promise<SessionMessage[]>;
   /** The ids of a session's subagents that have a transcript. */
   list(sessionId: string, dir: string): Promise<string[]>;
+  /** A session's own messages, oldest first, since its last compaction; empty when it has no transcript. */
+  session(sessionId: string, dir: string): Promise<SessionMessage[]>;
 }
 
 export const sdkTranscripts: TranscriptReader = {
   messages: (sessionId, agentId, dir, limit) => getSubagentMessages(sessionId, agentId, limit ? { dir, limit } : { dir }),
   list: (sessionId, dir) => listSubagents(sessionId, { dir }),
+  session: (sessionId, dir) => getSessionMessages(sessionId, { dir }),
 };
 
 /** Ids become file names: nothing that could leave the subagents folder. */
-const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
+export const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
 /** The events a transcript gives the subagent view. */
 const SHOWN = new Set<ChatEvent["type"]>(["assistant_text", "thinking", "tool_call", "tool_result"]);
@@ -81,42 +85,45 @@ async function agentByPrompt(reader: TranscriptReader, params: AgentSubagentMess
  */
 export function transcriptEvents(messages: SessionMessage[]): ChatEvent[] {
   const mapper = new ClaudeEventMapper();
+  return messages.flatMap((message) => shownEvents(mapper, message));
+}
+
+/** One transcript message's events, as `transcriptEvents` keeps them. */
+export function shownEvents(mapper: ClaudeEventMapper, message: SessionMessage): ChatEvent[] {
+  const body = message.message;
+  if (typeof body !== "object" || body === null) return [];
+  let mapped: ChatEvent[] = [];
+  if (message.type === "assistant" && Array.isArray((body as { content?: unknown }).content)) {
+    mapped = mapper.map({
+      type: "assistant",
+      message: body as SDKAssistantMessage["message"],
+      parent_tool_use_id: null,
+      uuid: message.uuid,
+      session_id: message.session_id,
+    } as SDKAssistantMessage);
+  } else if (message.type === "user") {
+    mapped = mapper.map({
+      type: "user",
+      message: body as SDKUserMessage["message"],
+      parent_tool_use_id: null,
+      session_id: message.session_id,
+    } as SDKUserMessage);
+  }
   const events: ChatEvent[] = [];
-  for (const message of messages) {
-    const body = message.message;
-    if (typeof body !== "object" || body === null) continue;
-    let mapped: ChatEvent[] = [];
-    if (message.type === "assistant" && Array.isArray((body as { content?: unknown }).content)) {
-      mapped = mapper.map({
-        type: "assistant",
-        message: body as SDKAssistantMessage["message"],
-        parent_tool_use_id: null,
-        uuid: message.uuid,
-        session_id: message.session_id,
-      } as SDKAssistantMessage);
-    } else if (message.type === "user") {
-      mapped = mapper.map({
-        type: "user",
-        message: body as SDKUserMessage["message"],
-        parent_tool_use_id: null,
-        session_id: message.session_id,
-      } as SDKUserMessage);
-    }
-    for (const event of mapped) {
-      if (!SHOWN.has(event.type)) continue;
-      if (event.type === "tool_result" && event.images) {
-        const { images: _images, ...rest } = event;
-        events.push(rest);
-      } else {
-        events.push(event);
-      }
+  for (const event of mapped) {
+    if (!SHOWN.has(event.type)) continue;
+    if (event.type === "tool_result" && event.images) {
+      const { images: _images, ...rest } = event;
+      events.push(rest);
+    } else {
+      events.push(event);
     }
   }
   return events;
 }
 
 /** A message's text: its string content, or its text blocks. */
-function messageText(message: unknown): string {
+export function messageText(message: unknown): string {
   const content = typeof message === "object" && message !== null ? (message as { content?: unknown }).content : undefined;
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";

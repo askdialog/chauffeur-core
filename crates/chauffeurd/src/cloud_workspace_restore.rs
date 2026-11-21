@@ -473,7 +473,7 @@ fn path_text(path: &Path) -> anyhow::Result<String> {
 /// `~/.claude`; `~/.codex`, since the scrub drops every `CODEX_` variable, `CODEX_HOME`
 /// included (looked up anyway, should that change); `VIBE_HOME` when set, else `~/.vibe`. The
 /// user logs in there once per machine.
-fn native_homes(
+pub(crate) fn native_homes(
     daemon: &Daemon,
     contexts: Vec<ContextRestoreEntry>,
 ) -> anyhow::Result<ContextRestoreParams> {

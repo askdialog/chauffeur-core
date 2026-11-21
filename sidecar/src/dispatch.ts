@@ -21,6 +21,7 @@ import {
 import { RpcError } from "./rpc/peer.ts";
 import { restoreContexts } from "./agents/context-restore.ts";
 import { captureContext } from "./agents/context-capture.ts";
+import { copyClaudeSession } from "./agents/claude/session-copy.ts";
 import { openPackage, sealPackage } from "./package-crypto.ts";
 import type { SessionManager } from "./sessions.ts";
 import { SIDECAR_VERSION } from "./version.ts";
@@ -148,6 +149,10 @@ export function createDispatcher(
         ...(result !== undefined ? { result } : {}),
       });
     },
+    "agent.session_messages": (params) => {
+      const p = object(params);
+      return sessions.sessionMessages({ agent: agentKind(p.agent), session_id: string(p, "session_id"), cwd: string(p, "cwd") });
+    },
     "agent.fork": (params) => {
       const p = object(params);
       const upTo = optionalString(p, "up_to");
@@ -169,6 +174,13 @@ export function createDispatcher(
         return { agent: agentKind(entry.agent), session_id: string(entry, "session_id"), cwd: string(entry, "cwd"),
           path: string(entry, "path"), sha256: string(entry, "sha256"), bytes: entry.bytes };
       }) });
+    },
+    "context.copy": (params) => {
+      const p = object(params);
+      return copyClaudeSession({
+        session_id: string(p, "session_id"), source_home: string(p, "source_home"), project_key: string(p, "project_key"),
+        claude_home: string(p, "claude_home"), cwd: string(p, "cwd"),
+      });
     },
     "package.seal": (params) => sealPackage(packageCryptParams(params)),
     "package.open": (params) => openPackage(packageCryptParams(params)),

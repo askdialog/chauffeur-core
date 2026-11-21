@@ -1,9 +1,12 @@
 //! `claudecode.import` (docs/adr/claude-code-import.md): Claude Code's sessions into Chauffeur.
-//! For now it plans: which sessions it reads, the branches each wrote on or created, and where
-//! each lands (a workspace on a live branch, a parent with its children, a workspace carrying a
-//! clone's uncommitted default-branch changes, or its repo's history exploration). It reads
-//! Claude Code's transcripts and the repos with git, writing nothing anywhere.
+//! It plans which sessions it reads, the branches each wrote on or created, and where each lands
+//! (a workspace on a live branch, a parent with its children, a workspace carrying a clone's
+//! uncommitted default-branch changes, or its repo's history exploration), reading Claude Code's
+//! transcripts and the repos with git. Without a dry run, it imports the history explorations'
+//! sessions (`history`); the rest is planned only, for now. Neither touches Claude Code's files
+//! or the repos.
 
+mod history;
 mod place;
 mod sessions;
 
@@ -40,6 +43,17 @@ pub async fn import(
             "The import from Claude Code is not ready yet: `chauffeur import claude-code --dry-run` shows its plan".into(),
         ));
     }
+    // One import at a time: two would each find a session not yet imported.
+    static IMPORTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _importing = if params.dry_run {
+        None
+    } else {
+        Some(IMPORTING.try_lock().map_err(|_| {
+            Error::Conflict(
+                "An import from Claude Code is already running: wait for it to end".into(),
+            )
+        })?)
+    };
     let claude = match params
         .claude_dir
         .as_deref()
@@ -102,17 +116,34 @@ pub async fn import(
     }
     let mut plans = Vec::new();
     let mut placed = Vec::new();
+    let mut found = HashMap::new();
+    // The transcripts Claude keeps for a Chauffeur workspace's own folder (archived ones too): its
+    // chats', and the sessions an import copied there, which still name the folder they first ran
+    // in. A session run in a folder inside a workspace is left out by its folder, below.
+    let workspaces: BTreeSet<String> = d
+        .store
+        .list_workspaces()?
+        .iter()
+        .flat_map(|row| {
+            let path = Path::new(&row.path);
+            [project_key(path), project_key(&real(path))]
+        })
+        .collect();
+    let mut seen = BTreeSet::new();
     for session in read {
         let Some(folder) = session.folder.clone() else {
             continue;
         };
         // Chauffeur's own chats are Claude Code sessions too, run through the Agent SDK (as other
-        // apps' are): only sessions of Claude Code itself, in a terminal or an editor, come.
+        // apps' are): only sessions of Claude Code itself, in a terminal or an editor, come; the
+        // most recent of a session kept in several folders.
         if real(&folder).starts_with(real(&d.paths.workspaces_dir))
+            || workspaces.contains(&session.project)
             || session
                 .entrypoint
                 .as_deref()
                 .is_some_and(|e| e.starts_with("sdk"))
+            || !seen.insert(session.id.clone())
         {
             continue;
         }
@@ -126,6 +157,12 @@ pub async fn import(
             reason: None,
             lands_in: None,
         };
+        if let Some(chat) = history::imported(d, &session.id)? {
+            plan.outcome = ClaudeCodeOutcome::AlreadyImported;
+            plan.lands_in = history::workspace_of(d, &chat)?;
+            plans.push(plan);
+            continue;
+        }
         if running.contains(&session.id) {
             plan.outcome = ClaudeCodeOutcome::Running;
             plan.reason =
@@ -164,6 +201,7 @@ pub async fn import(
                 .collect(),
         });
         plans.push(plan);
+        found.insert(session.id.clone(), session);
     }
     // Every repo the sessions ran in or wrote on, live branch or not: their clones' default-branch
     // changes come too.
@@ -187,9 +225,11 @@ pub async fn import(
             bases.entry(repo.clone()).or_insert(base);
         }
     }
-    let plan = place::place(&placed, &changes, &bases);
+    let mut plan = place::place(&placed, &changes, &bases);
     for session in &mut plans {
-        session.lands_in = plan.lands_in.get(&session.id).cloned();
+        if let Some(lands_in) = plan.lands_in.get(&session.id) {
+            session.lands_in = Some(lands_in.clone());
+        }
     }
     let mut releases = Vec::new();
     for workspace in &plan.workspaces {
@@ -201,6 +241,21 @@ pub async fn import(
         }
     }
     warnings.extend(repos.warnings);
+    if params.dry_run {
+        for history in &mut plan.histories {
+            history.workspace = history::exploration(d, &history.repo)?.map(|row| row.slug);
+        }
+    } else {
+        history::import(
+            d,
+            &claude,
+            &mut plan.histories,
+            &mut plans,
+            &found,
+            &mut warnings,
+        )
+        .await?;
+    }
     let mut said = BTreeSet::new();
     warnings.retain(|w| said.insert(w.clone()));
     Ok(ClaudeCodeImportResult {
@@ -244,6 +299,15 @@ fn real(path: &Path) -> PathBuf {
         }
     }
     path.to_path_buf()
+}
+
+/// The name Claude gives the folder it keeps `dir`'s sessions in: every character but an ASCII
+/// letter or digit as `-`.
+fn project_key(dir: &Path) -> String {
+    dir.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// A folder name worktrees are kept under (`.wt`, `.worktrees`, `.claude/worktrees`): a path

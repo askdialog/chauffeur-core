@@ -14,6 +14,8 @@ import {
   type AgentModel,
   type AgentSubagentMessagesParams,
   type AgentSubagentMessagesResult,
+  type AgentSessionMessagesParams,
+  type AgentSessionMessagesResult,
   type NativeAccountInfo,
   type AgentUsageResult,
   type Attachment,
@@ -174,6 +176,13 @@ export class SessionManager {
       throw new RpcError(ErrorCode.UNAVAILABLE, `${params.agent} runs no subagents with a conversation of their own`);
     }
     return agent.subagentMessages(params);
+  }
+
+  /** A session's conversation from its transcript (an imported one): no session needed. */
+  sessionMessages(params: AgentSessionMessagesParams): Promise<AgentSessionMessagesResult> {
+    const agent = this.agents.get(params.agent);
+    if (!agent?.sessionMessages) throw new RpcError(ErrorCode.UNAVAILABLE, `${params.agent} keeps no transcripts this sidecar reads`);
+    return agent.sessionMessages(params);
   }
 
   /** Copies an agent session into a new one (a chat forked into a new tab): no session needed. */

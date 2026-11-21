@@ -11,6 +11,8 @@ import type {
   AgentModel,
   AgentSubagentMessagesParams,
   AgentSubagentMessagesResult,
+  AgentSessionMessagesParams,
+  AgentSessionMessagesResult,
   AgentLoginResult,
   NativeAccountInfo,
   AgentUsageResult,
@@ -161,6 +163,8 @@ export interface Agent {
    * without subagents of their own (Codex).
    */
   subagentMessages?(params: AgentSubagentMessagesParams): Promise<AgentSubagentMessagesResult>;
+  /** A session's conversation from its transcript, without running it; absent from agents whose transcripts are not read (Codex, Vibe). */
+  sessionMessages?(params: AgentSessionMessagesParams): Promise<AgentSessionMessagesResult>;
   /**
    * Copies a session into a new one of its own, without running it; resolves with the new id,
    * which `session.start` resumes. Absent from agents that cannot fork their sessions.

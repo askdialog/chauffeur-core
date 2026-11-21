@@ -9,6 +9,8 @@ import type {
   AgentRetitleParams,
   AgentSubagentMessagesParams,
   AgentSubagentMessagesResult,
+  AgentSessionMessagesParams,
+  AgentSessionMessagesResult,
   AgentUsageResult,
   SessionStartParams,
   SlashCommand,
@@ -20,6 +22,7 @@ import { resolveClaudeExecutable } from "./executable.ts";
 import { listClaudeCommands } from "./commands.ts";
 import { listClaudeModels } from "./models.ts";
 import { ClaudeSession, type ClaudeSessionDeps } from "./session.ts";
+import { claudeSessionMessages } from "./session-messages.ts";
 import { claudeSubagentMessages, sdkTranscripts, type TranscriptReader } from "./subagents.ts";
 import { claudeAsk } from "./ask.ts";
 import { claudeBrief } from "./brief.ts";
@@ -102,6 +105,10 @@ export class ClaudeAgent implements Agent {
 
   subagentMessages(params: AgentSubagentMessagesParams): Promise<AgentSubagentMessagesResult> {
     return claudeSubagentMessages(this.transcripts, params);
+  }
+
+  sessionMessages(params: AgentSessionMessagesParams): Promise<AgentSessionMessagesResult> {
+    return claudeSessionMessages(this.transcripts, params);
   }
 
   /** The session copied into a new one (see claudeFork). */

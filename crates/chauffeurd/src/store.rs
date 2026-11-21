@@ -838,6 +838,25 @@ fn envelopes(rows: Vec<(i64, String)>) -> Result<Vec<EventEnvelope>> {
         .collect()
 }
 
+/// Inserts a chat's event at `ts`, `envelope.seq` set to the sequence number it gets.
+fn insert_chat_event(
+    c: &Connection,
+    ts: &str,
+    workspace_id: Option<&str>,
+    chat_id: &str,
+    envelope: &mut EventEnvelope,
+) -> rusqlite::Result<()> {
+    envelope.seq = None;
+    let payload = serde_json::to_string(&*envelope)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    c.execute(
+        "INSERT INTO events (ts, workspace_id, chat_id, registry, payload) VALUES (?1, ?2, ?3, 0, ?4)",
+        params![ts, workspace_id, chat_id, payload],
+    )?;
+    envelope.seq = Some(c.last_insert_rowid());
+    Ok(())
+}
+
 /// Inserts a chat into a workspace that still exists: 1 row, or 0 when the workspace is gone.
 pub(crate) fn insert_chat_row(c: &Connection, chat: &ChatInfo) -> rusqlite::Result<usize> {
     c.execute(
@@ -1805,9 +1824,6 @@ impl Store {
                     Ok((row.get(0)?, row.get(1)?, row.get(2)?))
                 })?
                 .collect::<rusqlite::Result<_>>()?;
-            let mut insert = tx.prepare(
-                "INSERT INTO events (ts, workspace_id, chat_id, registry, payload) VALUES (?1, ?2, ?3, 0, ?4)",
-            )?;
             let mut copied = Vec::new();
             for (ts, workspace_id, payload) in rows {
                 let Ok(mut envelope) = serde_json::from_str::<EventEnvelope>(&payload) else {
@@ -1821,18 +1837,56 @@ impl Store {
                 if !fork_points && let ChatEvent::TurnEnded { fork_point, .. } = event {
                     *fork_point = None;
                 }
-                envelope.seq = None;
-                let payload = serde_json::to_string(&envelope)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-                insert.execute(params![ts, workspace_id, chat.id, payload])?;
-                envelope.seq = Some(tx.last_insert_rowid());
+                insert_chat_event(&tx, &ts, workspace_id.as_deref(), &chat.id, &mut envelope)?;
                 copied.push(envelope);
             }
-            drop(insert);
             tx.commit()?;
             Ok(Some(copied))
         })?;
         Ok(inserted)
+    }
+
+    /// Inserts a chat imported from elsewhere with its conversation (each event at its time),
+    /// and records `record` with the chat's id, in one transaction: an import that fails halfway
+    /// leaves nothing, and a recorded one is never imported twice. Returns the events with their
+    /// sequence numbers; None when `record` is there already or the workspace is gone.
+    pub fn insert_imported_chat(
+        &self,
+        chat: &ChatInfo,
+        events: &[(String, ChatEvent)],
+        record: &str,
+    ) -> Result<Option<Vec<EventEnvelope>>> {
+        self.with(|c| {
+            let tx = c.unchecked_transaction()?;
+            let recorded: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM kv WHERE key = ?1)",
+                params![record],
+                |row| row.get(0),
+            )?;
+            if recorded || insert_chat_row(&tx, chat)? != 1 {
+                return Ok(None);
+            }
+            let mut inserted = Vec::new();
+            for (ts, event) in events {
+                let mut envelope = EventEnvelope {
+                    seq: None,
+                    ts: ts.clone(),
+                    event: Event::Chat {
+                        workspace_id: chat.workspace_id.clone(),
+                        chat_id: chat.id.clone(),
+                        event: event.clone(),
+                    },
+                };
+                insert_chat_event(&tx, ts, Some(&chat.workspace_id), &chat.id, &mut envelope)?;
+                inserted.push(envelope);
+            }
+            tx.execute(
+                "INSERT INTO kv (key, value) VALUES (?1, ?2)",
+                params![record, chat.id],
+            )?;
+            tx.commit()?;
+            Ok(Some(inserted))
+        })
     }
 
     /// A share carries readable history, never a native session, pending request or task.
@@ -1844,25 +1898,48 @@ impl Store {
         let copied = self.with(|conn| {
             let mut copied_events = Vec::new();
             let tx = conn.unchecked_transaction()?;
-            tx.execute("UPDATE chats SET forked_from_agent = ?2 WHERE id = ?1", params![chat.id, chat.agent.as_str()])?;
+            tx.execute(
+                "UPDATE chats SET forked_from_agent = ?2 WHERE id = ?1",
+                params![chat.id, chat.agent.as_str()],
+            )?;
             for envelope in history {
-                let Event::Chat { event, .. } = &envelope.event else { continue };
+                let Event::Chat { event, .. } = &envelope.event else {
+                    continue;
+                };
                 let event = match event {
                     ChatEvent::UserMessage { text, .. } => ChatEvent::UserMessage {
-                        text: text.clone(), attachments: None, queued: false,
-                        message_id: None, suggested_by: None, delegated_answer: None,
+                        text: text.clone(),
+                        attachments: None,
+                        queued: false,
+                        message_id: None,
+                        suggested_by: None,
+                        delegated_answer: None,
                     },
-                    ChatEvent::AssistantText { text, message_id, .. } => ChatEvent::AssistantText {
-                        text: text.clone(), message_id: message_id.clone(), parent_tool_use_id: None,
+                    ChatEvent::AssistantText {
+                        text, message_id, ..
+                    } => ChatEvent::AssistantText {
+                        text: text.clone(),
+                        message_id: message_id.clone(),
+                        parent_tool_use_id: None,
                     },
                     _ => continue,
                 };
-                let mut copied = EventEnvelope { seq: None, ts: envelope.ts.clone(), event: Event::Chat {
-                    workspace_id: chat.workspace_id.clone(), chat_id: chat.id.clone(), event,
-                }};
-                let payload = serde_json::to_string(&copied).expect("events serialize");
-                tx.execute("INSERT INTO events (ts, workspace_id, chat_id, registry, payload) VALUES (?1, ?2, ?3, 0, ?4)", params![copied.ts, chat.workspace_id, chat.id, payload])?;
-                copied.seq = Some(tx.last_insert_rowid());
+                let mut copied = EventEnvelope {
+                    seq: None,
+                    ts: envelope.ts.clone(),
+                    event: Event::Chat {
+                        workspace_id: chat.workspace_id.clone(),
+                        chat_id: chat.id.clone(),
+                        event,
+                    },
+                };
+                insert_chat_event(
+                    &tx,
+                    &envelope.ts,
+                    Some(&chat.workspace_id),
+                    &chat.id,
+                    &mut copied,
+                )?;
                 copied_events.push(copied);
             }
             tx.commit()?;
@@ -3008,6 +3085,62 @@ mod tests {
             })
             .unwrap();
         assert_eq!(workspace_events, 1);
+    }
+
+    #[test]
+    fn an_imported_chat_comes_with_its_conversation_and_its_record_once() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .with(|c| {
+                c.execute_batch(
+                    "INSERT INTO workspaces(id,slug,path,branch,state,created_at) VALUES ('w','w','/tmp/w','','ready','old');
+                     INSERT INTO chats(id,workspace_id,agent,permission_mode,status,created_at) VALUES ('seed','w','claude','plan','idle','old');",
+                )
+            })
+            .unwrap();
+        let mut chat = store.chat("seed").unwrap().unwrap();
+        chat.id = "imported".into();
+        let said = [(
+            "2026-10-01T10:00:00.000Z".to_string(),
+            ChatEvent::UserMessage {
+                text: "hi".into(),
+                queued: false,
+                attachments: None,
+                message_id: None,
+                suggested_by: None,
+                delegated_answer: None,
+            },
+        )];
+        let inserted = store
+            .insert_imported_chat(&chat, &said, "claudecode_import:s")
+            .unwrap()
+            .unwrap();
+        assert_eq!(inserted.len(), 1);
+        assert_eq!(inserted[0].ts, said[0].0);
+        assert_eq!(store.events_of_chat("imported").unwrap().len(), 1);
+        assert_eq!(
+            store.kv_get("claudecode_import:s").unwrap().as_deref(),
+            Some("imported")
+        );
+        // Recorded: never twice, whatever the chat's id.
+        chat.id = "again".into();
+        assert!(
+            store
+                .insert_imported_chat(&chat, &said, "claudecode_import:s")
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.chat("again").unwrap().is_none());
+        // Its workspace gone: nothing, the record neither.
+        chat.id = "orphan".into();
+        chat.workspace_id = "gone".into();
+        assert!(
+            store
+                .insert_imported_chat(&chat, &said, "claudecode_import:t")
+                .unwrap()
+                .is_none()
+        );
+        assert!(store.kv_get("claudecode_import:t").unwrap().is_none());
     }
 
     #[test]

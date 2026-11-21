@@ -49,6 +49,9 @@ function reader(transcripts: Record<string, SessionMessage[]>): TranscriptReader
     async list() {
       return Object.keys(transcripts);
     },
+    async session() {
+      return [];
+    },
   };
 }
 

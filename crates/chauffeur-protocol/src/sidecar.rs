@@ -96,6 +96,10 @@ methods! {
         /// agents without such subagents (Codex).
         #[serde(rename = "agent.subagent_messages")]
         AgentSubagentMessages(AgentSubagentMessagesParams) -> AgentSubagentMessagesResult,
+        /// A session's conversation from its transcript, without running it: what resuming it
+        /// carries on from (since its last compaction). Refused by agents that keep none (Codex).
+        #[serde(rename = "agent.session_messages")]
+        AgentSessionMessages(AgentSessionMessagesParams) -> AgentSessionMessagesResult,
         /// Copies an agent session into a new one of its own (Claude Code's `forkSession`, Codex's
         /// `thread/fork`), without running it: the new id resumes it.
         #[serde(rename = "agent.fork")]
@@ -108,6 +112,12 @@ methods! {
         /// Restores selected native bundles into a new, daemon-selected private home, never running them.
         #[serde(rename = "context.restore")]
         ContextRestore(ContextRestoreParams) -> ContextRestoreResult,
+        /// Copies a Claude Code session (its transcript and its folder: subagents, tool outputs…)
+        /// from a project folder of one Claude home into the project folder of `cwd` in another,
+        /// streamed whatever its size, never replacing a different file: an import from Claude
+        /// Code. Returns what it added.
+        #[serde(rename = "context.copy")]
+        ContextCopy(ContextCopyParams) -> ContextRestoreResult,
         /// Endpoint-only encryption/decryption of a package; keys never enter argv or artifacts.
         #[serde(rename = "package.seal")]
         PackageSeal(PackageCryptParams) -> PackageCryptResult,
@@ -304,6 +314,48 @@ pub struct AgentSubagentMessagesResult {
     /// Its transcript was read; false when there is none (yet).
     pub found: bool,
     pub events: Vec<ChatEvent>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default)]
+#[ts(export)]
+pub struct ContextCopyParams {
+    pub session_id: String,
+    /// The Claude folder the session is kept in (Claude Code's).
+    pub source_home: String,
+    /// Its project folder there, by name.
+    pub project_key: String,
+    /// The Claude folder it is copied into (the agents').
+    pub claude_home: String,
+    /// The folder the copy is kept for, as the file system names it.
+    pub cwd: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default)]
+#[ts(export)]
+pub struct AgentSessionMessagesParams {
+    pub agent: AgentKind,
+    pub session_id: String,
+    /// The folder the session is kept for: the agent keeps its transcripts by folder.
+    pub cwd: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct AgentSessionMessagesResult {
+    /// Its transcript was read; false when there is none.
+    pub found: bool,
+    /// Its conversation as chat events, oldest first: the user's prompts, the agent's text,
+    /// thinking, tool calls and results.
+    pub events: Vec<TranscriptEvent>,
+}
+
+/// A chat event read from a transcript, with when its message was written.
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct TranscriptEvent {
+    /// RFC 3339; none when the transcript does not say.
+    pub at: Option<String>,
+    pub event: ChatEvent,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, Default)]
