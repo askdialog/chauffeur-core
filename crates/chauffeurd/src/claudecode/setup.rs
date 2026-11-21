@@ -1,9 +1,10 @@
-//! A setup script guessed for each repo the import makes workspaces of that has none (committed,
+//! A setup script guessed for each repo the import makes workspaces in that has none (committed,
 //! or in the user's settings), from the lockfiles at its root: written to the user's settings
 //! (`[repos.<name>.scripts] setup`) before any worktree exists, never into the repo. Lockfiles
 //! only in subfolders are listed, nothing proposed.
 
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use chauffeur_protocol::claudecode::ClaudeCodeSetup;
 
@@ -12,67 +13,120 @@ use crate::repos::repo_folder;
 use crate::settings::RepoSettings;
 use crate::{Daemon, Error, Result};
 
-/// The lockfiles read, with the command each gives and whether it is JavaScript's: one JavaScript
-/// package manager at most, the first found in this order.
-const LOCKFILES: [(&str, &str, bool); 8] = [
-    ("pnpm-lock.yaml", "pnpm install", true),
-    ("bun.lock", "bun install", true),
-    ("bun.lockb", "bun install", true),
-    ("yarn.lock", "yarn install", true),
-    ("package-lock.json", "npm install", true),
-    ("uv.lock", "uv sync", false),
-    ("poetry.lock", "poetry install", false),
-    ("Gemfile.lock", "bundle install", false),
+struct Lockfile {
+    file: &'static str,
+    command: &'static str,
+    /// One JavaScript package manager at most: the first found, in this list's order.
+    javascript: bool,
+}
+
+const LOCKFILES: [Lockfile; 8] = [
+    Lockfile {
+        file: "pnpm-lock.yaml",
+        command: "pnpm install",
+        javascript: true,
+    },
+    Lockfile {
+        file: "bun.lock",
+        command: "bun install",
+        javascript: true,
+    },
+    Lockfile {
+        file: "bun.lockb",
+        command: "bun install",
+        javascript: true,
+    },
+    Lockfile {
+        file: "yarn.lock",
+        command: "yarn install",
+        javascript: true,
+    },
+    Lockfile {
+        file: "package-lock.json",
+        command: "npm install",
+        javascript: true,
+    },
+    Lockfile {
+        file: "uv.lock",
+        command: "uv sync",
+        javascript: false,
+    },
+    Lockfile {
+        file: "poetry.lock",
+        command: "poetry install",
+        javascript: false,
+    },
+    Lockfile {
+        file: "Gemfile.lock",
+        command: "bundle install",
+        javascript: false,
+    },
 ];
 
-/// The setup of `repo`, whose clone is `clone`, when it has none: guessed from its root
-/// lockfiles, else its lockfiles in subfolders listed; none when it has a setup or no lockfile.
-pub(super) async fn guess(
+/// The setups guessed for the repos in `clones` (each repo's clone the import reads it from) that
+/// have none.
+pub(super) async fn guess_all(
     d: &Daemon,
     git: &Git,
-    repo: &str,
-    clone: &Path,
-) -> Option<ClaudeCodeSetup> {
+    clones: &BTreeMap<String, PathBuf>,
+) -> Vec<ClaudeCodeSetup> {
+    let mut setups = Vec::new();
+    for (repo, clone) in clones {
+        if has_setup(d, repo, clone) {
+            continue;
+        }
+        match git.run_bytes(clone, &["ls-files", "-z"]).await {
+            Ok(tracked) => {
+                let files = tracked
+                    .split(|b| *b == 0)
+                    .filter(|f| !f.is_empty())
+                    .map(|f| String::from_utf8_lossy(f).into_owned());
+                setups.extend(from_lockfiles(repo, files));
+            }
+            Err(error) => {
+                tracing::warn!(%error, repo, "could not list the repo's files to guess its setup")
+            }
+        }
+    }
+    setups
+}
+
+/// A setup committed in the clone's checkout or in the user's settings; one unreadable counts as
+/// one, left as it is.
+fn has_setup(d: &Daemon, repo: &str, clone: &Path) -> bool {
     let settings = d.settings.get();
     let user = settings
         .repos
         .get(repo_folder(repo))
         .and_then(|r| r.scripts.as_ref());
-    // Committed (in the clone's checkout) or the user's: theirs stays.
-    let has = RepoSettings::load(clone, clone, user).map_or(true, |s| s.setup.is_some());
-    if has {
-        return None;
-    }
-    let tracked = git.run_bytes(clone, &["ls-files", "-z"]).await.ok()?;
-    let files: Vec<String> = tracked
-        .split(|b| *b == 0)
-        .map(|f| String::from_utf8_lossy(f).into_owned())
-        .filter(|f| {
-            let name = f.rsplit('/').next().unwrap_or(f);
-            LOCKFILES.iter().any(|(lockfile, _, _)| *lockfile == name)
-        })
-        .collect();
-    let root: Vec<&String> = files.iter().filter(|f| !f.contains('/')).collect();
-    if root.is_empty() {
-        return (!files.is_empty()).then(|| ClaudeCodeSetup {
-            repo: repo.to_owned(),
-            command: None,
-            lockfiles: files,
-        });
-    }
-    // In the order of `LOCKFILES`: the first JavaScript one alone, then each other ecosystem's.
+    RepoSettings::load(clone, clone, user).map_or(true, |s| s.setup.is_some())
+}
+
+/// `repo`'s setup from its tracked `files`: its root lockfiles' commands, else its lockfiles in
+/// subfolders listed with none; none without a lockfile.
+fn from_lockfiles(repo: &str, files: impl Iterator<Item = String>) -> Option<ClaudeCodeSetup> {
+    let named = |f: &str| {
+        let name = f.rsplit('/').next().unwrap_or(f);
+        LOCKFILES.iter().any(|l| l.file == name)
+    };
+    let found: Vec<String> = files.filter(|f| named(f)).collect();
     let mut commands: Vec<&str> = Vec::new();
     let mut used = Vec::new();
     let mut javascript = false;
-    for (lockfile, command, js) in LOCKFILES {
-        if !root.iter().any(|f| f.as_str() == lockfile) || (js && javascript) {
+    for lockfile in &LOCKFILES {
+        if (lockfile.javascript && javascript) || !found.iter().any(|f| f == lockfile.file) {
             continue;
         }
-        javascript |= js;
-        used.push(lockfile.to_owned());
-        if !commands.contains(&command) {
-            commands.push(command);
-        }
+        javascript |= lockfile.javascript;
+        commands.push(lockfile.command);
+        used.push(lockfile.file.to_owned());
+    }
+    if commands.is_empty() {
+        return (!found.is_empty()).then(|| ClaudeCodeSetup {
+            repo: repo.to_owned(),
+            command: None,
+            lockfiles: found,
+        });
     }
     Some(ClaudeCodeSetup {
         repo: repo.to_owned(),
@@ -100,4 +154,70 @@ pub(super) fn write(d: &Daemon, setups: &[ClaudeCodeSetup]) -> Result<()> {
             }
         })
         .map_err(|e| Error::Internal(e.context("writing the guessed setup scripts")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn guess(files: &[&str]) -> Option<(Option<String>, Vec<String>)> {
+        from_lockfiles("r", files.iter().map(|f| f.to_string())).map(|s| (s.command, s.lockfiles))
+    }
+
+    #[test]
+    fn the_root_lockfiles_give_the_setup() {
+        let some = |command: &str, lockfiles: &[&str]| {
+            Some((
+                Some(command.to_string()),
+                lockfiles.iter().map(|f| f.to_string()).collect(),
+            ))
+        };
+        assert_eq!(
+            guess(&["README.md", "pnpm-lock.yaml"]),
+            some("pnpm install", &["pnpm-lock.yaml"])
+        );
+        assert_eq!(
+            guess(&["package-lock.json"]),
+            some("npm install", &["package-lock.json"])
+        );
+        assert_eq!(guess(&["bun.lockb"]), some("bun install", &["bun.lockb"]));
+        assert_eq!(
+            guess(&["Gemfile.lock"]),
+            some("bundle install", &["Gemfile.lock"])
+        );
+        // One JavaScript package manager, the first in pnpm, bun, yarn, npm; then uv, poetry and
+        // bundle, each.
+        assert_eq!(
+            guess(&["package-lock.json", "yarn.lock", "bun.lock", "bun.lockb"]),
+            some("bun install", &["bun.lock"])
+        );
+        assert_eq!(
+            guess(&["uv.lock", "yarn.lock", "poetry.lock", "Gemfile.lock"]),
+            some(
+                "yarn install && uv sync && poetry install && bundle install",
+                &["yarn.lock", "uv.lock", "poetry.lock", "Gemfile.lock"]
+            )
+        );
+        // A root lockfile wins over those in subfolders.
+        assert_eq!(
+            guess(&["web/yarn.lock", "uv.lock"]),
+            some("uv sync", &["uv.lock"])
+        );
+    }
+
+    #[test]
+    fn lockfiles_only_in_subfolders_are_listed_without_a_setup() {
+        assert_eq!(
+            guess(&["app/package-lock.json", "api/uv.lock", "api/main.py"]),
+            Some((
+                None,
+                vec!["app/package-lock.json".into(), "api/uv.lock".into()]
+            ))
+        );
+        // A name that only ends like a lockfile is none.
+        assert_eq!(
+            guess(&["README.md", "my-yarn.lock", "src/uv.lock.bak"]),
+            None
+        );
+    }
 }
