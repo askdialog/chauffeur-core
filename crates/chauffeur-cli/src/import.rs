@@ -123,6 +123,14 @@ async fn claude_code(
         println!("{}", sanitize_terminal(&render_claude_code(&plan)));
         println!("\n{}", claude_code_outcome(&plan));
     }
+    let failed = plan
+        .sessions
+        .iter()
+        .filter(|s| s.outcome == ClaudeCodeOutcome::Failed)
+        .count();
+    if failed > 0 {
+        bail!("{failed} Claude Code session(s) could not be imported");
+    }
     Ok(())
 }
 

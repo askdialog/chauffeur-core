@@ -105,8 +105,11 @@ async function copyFile(from: string, target: string, path: string, added: Added
       }
       await output.sync();
     } finally { await output.close(); }
+    // The file the name gives now: the one copied, unchanged (not replaced by another meanwhile).
     const after = await input.stat();
-    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+    const named = await lstat(from);
+    if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs
+      || named.ino !== before.ino || named.dev !== before.dev) {
       throw refused(`${path} changed while it was copied: is the session still running?`);
     }
   } finally { await input.close(); }
