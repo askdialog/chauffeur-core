@@ -678,6 +678,12 @@ describe("git from a workspace's worktree, which shares its clone's branches and
     "git replace HEAD~1 HEAD",
     "git replace -d abc123",
     'git "$GIT_SUBCOMMAND" main',
+    "git push -o ci.skip . HEAD:main",
+    "git push --repo . HEAD:main",
+    "git fetch origin 'refs/heads/*:refs/heads/*'",
+    "git fetch origin '+refs/heads/ma*:refs/heads/ma*'",
+    "git push . main",
+    'git config --file "$CONFIG" user.email x',
   ], true);
 
   table("allowed", [
@@ -721,6 +727,10 @@ describe("git from a workspace's worktree, which shares its clone's branches and
     "git replace -l",
     "git bisect start",
     "git bisect good",
+    "git push -o ci.skip origin HEAD:main",
+    "git fetch origin 'refs/heads/*:refs/remotes/origin/*'",
+    "git push . feat/x",
+    'git config --file "$CONFIG" --get user.email',
     "git checkout main -- README.md",
     "git checkout -- README.md",
     "git checkout -- main",

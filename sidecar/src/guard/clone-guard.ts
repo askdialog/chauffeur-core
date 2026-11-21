@@ -693,6 +693,17 @@ class Judge {
     clone ??= sub.text === "clone" || sub.text === "init" ? undefined : state.env;
     // From a worktree of the workspace, git shares its clone's branches and settings.
     const sharing = file ? undefined : first(repos, (repo) => worktreeOf(repo, this.clones));
+    // `git config --file "$F" key value` from a worktree: the file may be the clone's settings.
+    if (file && !isExact(file) && !configReads(texts)) {
+      const holder = first([where, ...given], (repo) => worktreeOf(repo, this.clones));
+      if (holder) {
+        this.verdict.shared ??= {
+          clone: holder,
+          what: `changes a settings file only known as the line runs, which may be ${holder.clone}'s`,
+          instead: ONE_COMMAND,
+        };
+      }
+    }
     // A subcommand only known as the line runs may change what the worktree shares.
     if (sharing && !sub.known) {
       this.verdict.shared ??= {
@@ -1044,6 +1055,11 @@ function optionValue(args: Value[], names: string[]): Value | undefined {
 
 /** `git branch` options taking the next word as their value. */
 const BRANCH_VALUES = new Set(["--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"]);
+/** `fetch`, `pull` and `push` options taking the next word as their value. */
+const REFSPEC_VALUES = new Set([
+  ...["-o", "--push-option", "--receive-pack", "--exec", "--upload-pack", "-j", "--jobs", "--depth", "--deepen"],
+  ...["--shallow-since", "--shallow-exclude", "--negotiation-tip", "--refmap", "--server-option", "--filter"],
+]);
 /** Subcommands that rewrite what git keeps for the whole repository. */
 const HOUSEKEEPING = new Set(["gc", "prune", "repack", "pack-refs", "maintenance"]);
 /** `git remote` subcommands that change the repository's remotes (`prune` drops only stale copies, as `fetch --prune`). */
@@ -1070,8 +1086,13 @@ function protectedBranch(value: Value | undefined, clone: GuardedClone): string 
   if (!value) return undefined;
   if (!value.known) return `a branch of ${clone.clone} whose name is only known as the line runs`;
   const name = value.text.replace(/^\+/, "").replace(/^(?:refs\/)?heads\//, "");
-  if (name && name === clone.branch) return `${name}, the branch checked out in ${clone.clone}`;
-  if (name && name === clone.default_branch) return `${name}, the default branch of ${clone.clone}`;
+  // A refspec's wildcard (`refs/heads/*`) stands for every branch it matches.
+  const pattern = name.includes("*")
+    ? new RegExp(`^${name.split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`)
+    : undefined;
+  const is = (branch: string | undefined) => !!name && !!branch && (pattern ? pattern.test(branch) : name === branch);
+  if (is(clone.branch)) return `${clone.branch}, the branch checked out in ${clone.clone}`;
+  if (is(clone.default_branch)) return `${clone.default_branch}, the default branch of ${clone.clone}`;
   return undefined;
 }
 
@@ -1274,7 +1295,18 @@ function refspecChange(
   where: string | undefined,
 ): string | undefined {
   const deleting = args.some((arg) => arg.known && (arg.text === "-d" || arg.text === "--delete"));
-  const operands = args.filter((arg) => !arg.known || !arg.text.startsWith("-"));
+  // Options with their value in the next word: neither the remote nor a refspec.
+  const operands: Value[] = [];
+  let repo: Value | undefined;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg) continue;
+    const [opt, attached] = option(arg.text);
+    if (!arg.known || !opt.startsWith("-")) operands.push(arg);
+    else if (opt === "--repo") repo = attached !== undefined ? after(arg, opt.length + 1) : args[++i];
+    else if (REFSPEC_VALUES.has(opt) && attached === undefined) i++;
+  }
+  if (repo) operands.unshift(repo);
   if (sub === "push") {
     // Pushing to the repository itself (`.`, its folder) moves its branches; to a remote, the remote's.
     const remote = operands[0];
@@ -1287,8 +1319,9 @@ function refspecChange(
     if (!spec.known) return `may move ${branch(spec)}`;
     const colon = spec.text.lastIndexOf(":");
     if (colon < 0) {
-      const deleted = sub === "push" && deleting ? branch(spec) : undefined;
-      if (deleted) return `deletes ${deleted}`;
+      // Pushed to the repository itself, a branch goes to the one of its name.
+      const named = sub === "push" ? branch(spec) : undefined;
+      if (named) return `${deleting ? "deletes" : "moves"} ${named}`;
       continue;
     }
     const moved = branch({ ...spec, text: spec.text.slice(colon + 1) });
