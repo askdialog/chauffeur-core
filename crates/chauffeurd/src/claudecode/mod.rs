@@ -11,8 +11,9 @@ mod copy;
 mod history;
 mod place;
 mod sessions;
+mod setup;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -311,6 +312,28 @@ pub async fn import(
             );
         }
     }
+    // The repos the run makes a workspace in, with the clone it reads them from: a branch's, and a
+    // history's whose exploration is not ready. Those without a setup get one guessed.
+    let mut made: BTreeMap<String, Option<PathBuf>> = BTreeMap::new();
+    for (key, source) in &sources {
+        let clone = source.chauffeur.clone().or_else(|| source.clone.clone());
+        made.entry(key.repo.clone()).or_insert(clone);
+    }
+    for history in &plan.histories {
+        if history::exploration(d, &history.repo)?.is_none() {
+            let clone = d
+                .repos
+                .existing_clone(&history.repo)
+                .or_else(|| repos.clones.get(&history.repo)?.first().cloned());
+            made.entry(history.repo.clone()).or_insert(clone);
+        }
+    }
+    let mut setups = Vec::new();
+    for (repo, clone) in &made {
+        if let Some(clone) = clone {
+            setups.extend(setup::guess(d, &repos.git, repo, clone).await);
+        }
+    }
     warnings.extend(repos.warnings);
     if params.dry_run {
         for history in &mut plan.histories {
@@ -323,6 +346,8 @@ pub async fn import(
             }
         }
     } else {
+        // Before any worktree: the workspaces made below run them.
+        setup::write(d, &setups)?;
         let mut report = copy::Report::new(&mut plans, &mut warnings);
         let found = branches::Found {
             sources: &sources,
@@ -343,6 +368,7 @@ pub async fn import(
         workspaces: plan.workspaces,
         histories: plan.histories,
         releases,
+        setups,
         warnings,
     })
 }
