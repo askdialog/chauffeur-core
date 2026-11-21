@@ -49,6 +49,7 @@ impl<'a> Report<'a> {
             if let Some(&i) = self.index.get(id) {
                 self.plans[i].outcome = ClaudeCodeOutcome::Failed;
                 self.plans[i].reason = Some(reason.to_owned());
+                self.plans[i].lands_in = None;
             }
         }
     }
@@ -69,15 +70,22 @@ impl<'a> Report<'a> {
                 continue;
             };
             let plan = &mut self.plans[i];
-            plan.lands_in = Some(workspace.slug.clone());
             match import_session(d, claude, workspace, session, closed).await {
-                Ok(true) => plan.outcome = ClaudeCodeOutcome::Imported,
-                Ok(false) => plan.outcome = ClaudeCodeOutcome::AlreadyImported,
+                Ok(imported) => {
+                    plan.outcome = if imported {
+                        ClaudeCodeOutcome::Imported
+                    } else {
+                        ClaudeCodeOutcome::AlreadyImported
+                    };
+                    plan.lands_in = Some(workspace.slug.clone());
+                }
                 Err(error) => {
                     self.warnings
                         .push(format!("“{}” could not be imported: {error}", plan.title));
                     plan.outcome = ClaudeCodeOutcome::Failed;
                     plan.reason = Some(error.to_string());
+                    // It landed nowhere.
+                    plan.lands_in = None;
                 }
             }
         }

@@ -21,7 +21,8 @@ sessions: Array<string>,
 changes_from: Array<string>, 
 /**
  * `import` in a plan; `imported` or `failed` once run, `reason` saying why it failed.
- * Workspaces of the kinds a later version imports stay `import`.
+ * Workspaces of the kinds a later version imports stay `import`. (Defaults: a daemon from
+ * before plans only.)
  */
 outcome: ClaudeCodeOutcome, reason: string | null, 
 /**

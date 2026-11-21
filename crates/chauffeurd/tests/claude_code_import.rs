@@ -1013,6 +1013,8 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
     // One that cannot be read is said, the others imported all the same.
     let unreadable = plan.sessions.iter().find(|s| s.id == "unreadable").unwrap();
     assert_eq!(unreadable.outcome, ClaudeCodeOutcome::Failed);
+    // It landed nowhere.
+    assert_eq!(unreadable.lands_in, None);
     assert!(
         unreadable
             .reason
@@ -1279,6 +1281,7 @@ fn branches_fixture() -> Branches {
     std::fs::create_dir_all(&vendored).unwrap();
     git(&vendored, &["init", "-q"]);
     std::fs::write(vendored.join("lib.txt"), "vendored\n").unwrap();
+    std::os::unix::fs::symlink("lib.txt", vendored.join("link.txt")).unwrap();
     let worktree = |name: &str, folder: &Path| {
         git(
             &shop,
@@ -1422,7 +1425,6 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
         released,
         [
             ("shop", "feat/both", false),
-            ("shop", "feat/busy", false),
             ("shop", "feat/held", false),
             ("shop", "feat/multi", false),
             ("shop", "feat/tmp", true),
@@ -1497,6 +1499,10 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
         "untracked\n"
     );
     assert!(path("feat/held").join("vendor/lib/lib.txt").is_file());
+    assert_eq!(
+        std::fs::read_link(path("feat/held").join("vendor/lib/link.txt")).unwrap(),
+        Path::new("lib.txt")
+    );
     // In the user's worktree too.
     assert!(!is_branch(&f.root.join("wt/feat-wt"), "feat/wt"));
     assert!(path("feat/wt").join("todo.txt").is_file());
@@ -1549,6 +1555,16 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
     // Again, lab's hook gone: nothing twice; the failed ones are tried again, feat/multi with
     // both its repos.
     std::fs::remove_file(f.root.join("clones/lab/.git/hooks/post-checkout")).unwrap();
+    // feat/free, imported for shop, found in lab too: the workspace gains lab.
+    let lab = f.root.join("clones/lab");
+    git(&lab, &["switch", "-q", "-c", "feat/free", "main"]);
+    commit(&lab, "free.txt", "lab's\n");
+    git(&lab, &["switch", "-q", "main"]);
+    std::fs::write(
+        f.claude.join("projects/-code/s-free-lab.jsonl"),
+        line(&lab, "feat/free", &ago(4), &edit(&lab.join("lab.txt"))) + "\n",
+    )
+    .unwrap();
     // A session on feat/held the first run did not see (it ran in the clone, on that branch):
     // into the workspace the first run made on it.
     std::fs::write(
@@ -1562,6 +1578,16 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
         (ClaudeCodeOutcome::Imported, made("feat/held").1),
         "{again:?}"
     );
+    assert_eq!(
+        outcome(&again, "s-free-lab"),
+        (ClaudeCodeOutcome::Imported, made("feat/free").1),
+        "{again:?}"
+    );
+    let free = d
+        .workspaces
+        .get(made("feat/free").1.as_deref().unwrap())
+        .unwrap();
+    assert!(is_branch(&Path::new(&free.path).join("lab"), "feat/free"));
     assert_eq!(
         outcome(&again, "s-multi").0,
         ClaudeCodeOutcome::Imported,

@@ -60,6 +60,8 @@ pub(super) fn recorded(d: &Daemon, repo: &str, branch: &str) -> Result<Option<Wo
 }
 
 /// The workspace an earlier import made on the branch, in any of its repos.
+/// The same branch in several repos is one workspace, across runs too: one made for the branch
+/// in another repo.
 pub(super) fn existing(
     d: &Daemon,
     workspace: &ClaudeCodeWorkspacePlan,
@@ -70,7 +72,17 @@ pub(super) fn existing(
             return Ok(Some(row));
         }
     }
-    Ok(None)
+    let Some(id) = d.store.kv_get(&branch_record(branch))? else {
+        return Ok(None);
+    };
+    Ok(d.store
+        .find_workspace(&id)?
+        .filter(|row| row.state == WorkspaceState::Ready))
+}
+
+/// `claudecode_branch_name:<branch>` → the id of the workspace an import made on it, in any repo.
+fn branch_record(branch: &str) -> String {
+    format!("claudecode_branch_name:{branch}")
 }
 
 /// Where a branch of a repo is, as planned.
@@ -108,10 +120,7 @@ pub(super) async fn import(
         let Some(branch) = workspace.branch.clone() else {
             continue;
         };
-        let made = match existing(d, workspace, &branch)? {
-            Some(row) => Ok(row),
-            None => make(d, &git, workspace, &branch, found, report.warnings).await,
-        };
+        let made = make(d, &git, workspace, &branch, found, report.warnings).await;
         let row = match made {
             Ok(row) => row,
             Err(error) => {
@@ -154,8 +163,28 @@ struct Released {
     kept: bool,
 }
 
-/// Makes the branch available in each repo's clone, the workspace on it, and its changes copied
-/// in; puts back what it released if the workspace cannot be made.
+/// The repos of `workspace` an earlier import's workspace on the branch lacks (all of them when
+/// there is none): a later run found the branch in another repo too.
+pub(super) fn missing_repos(
+    d: &Daemon,
+    workspace: &ClaudeCodeWorkspacePlan,
+    branch: &str,
+    existing: Option<&WorkspaceRow>,
+) -> Result<Vec<String>> {
+    let mut missing = Vec::new();
+    for repo in &workspace.repos {
+        let has =
+            recorded(d, repo, branch)?.is_some_and(|row| existing.is_some_and(|e| e.id == row.id));
+        if !has {
+            missing.push(repo.clone());
+        }
+    }
+    Ok(missing)
+}
+
+/// The branch's workspace: an earlier import's, the repos it lacks added; else a new one. The
+/// branch is made available in each new repo's clone and its changes copied in; what was
+/// released is put back if the workspace cannot be made or extended.
 async fn make(
     d: &Arc<Daemon>,
     git: &Git,
@@ -164,23 +193,31 @@ async fn make(
     found: &Found<'_>,
     warnings: &mut Vec<String>,
 ) -> Result<WorkspaceRow> {
+    let existing = existing(d, workspace, branch)?;
+    let missing = missing_repos(d, workspace, branch, existing.as_ref())?;
+    if let Some(row) = &existing
+        && missing.is_empty()
+    {
+        return Ok(row.clone());
+    }
     let mut released = Vec::new();
-    let prepared = prepare(d, git, workspace, branch, found, &mut released).await;
-    let created = match prepared {
-        Ok(()) => {
-            d.workspaces
-                .create(CreateWorkspaceParams {
-                    name: Some(workspace.name.clone()),
-                    repos: workspace.repos.clone(),
-                    branch: Some(branch.to_owned()),
-                    ..Default::default()
-                })
-                .await
-        }
-        Err(error) => Err(error),
+    let prepared = prepare(d, git, &missing, branch, found, &mut released).await;
+    let made = match (prepared, &existing) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Some(row)) => extend(d, row, &missing).await.map(|()| row.id.clone()),
+        (Ok(()), None) => d
+            .workspaces
+            .create(CreateWorkspaceParams {
+                name: Some(workspace.name.clone()),
+                repos: workspace.repos.clone(),
+                branch: Some(branch.to_owned()),
+                ..Default::default()
+            })
+            .await
+            .map(|created| created.workspace.id),
     };
-    let created = match created {
-        Ok(created) => created.workspace,
+    let id = match made {
+        Ok(id) => id,
         Err(error) => {
             for checkout in released.iter().filter(|r| !r.kept) {
                 put_back(git, checkout).await;
@@ -188,11 +225,21 @@ async fn make(
             return Err(error);
         }
     };
-    for repo in &workspace.repos {
-        d.store
-            .kv_set(&RepoBranch::new(repo, branch).record(), &created.id)?;
+    let row = d.workspaces.row(&id)?;
+    // Made: a record that cannot be written only makes a later run miss it.
+    let records = missing
+        .iter()
+        .map(|repo| RepoBranch::new(repo, branch).record())
+        .chain(std::iter::once(branch_record(branch)));
+    for record in records {
+        if let Err(error) = d.store.kv_set(&record, &row.id) {
+            warnings.push(format!(
+                "{} was made, but could not be recorded ({error}): a later import will not add to it.",
+                row.slug
+            ));
+        }
     }
-    let root = PathBuf::from(&created.path);
+    let root = PathBuf::from(&row.path);
     for checkout in &released {
         let Some(changes) = &checkout.changes else {
             continue;
@@ -202,11 +249,19 @@ async fn make(
             warnings.push(format!(
                 "Some uncommitted changes of {} could not be copied into {} ({error:#}): they are still there.",
                 checkout.folder.display(),
-                created.slug
+                row.slug
             ));
         }
     }
-    d.workspaces.row(&created.id)
+    Ok(row)
+}
+
+/// The repos an earlier import's workspace lacks, added to it on its branch.
+async fn extend(d: &Arc<Daemon>, row: &WorkspaceRow, repos: &[String]) -> Result<()> {
+    for repo in repos {
+        d.workspaces.add_repo(&row.id, repo).await?;
+    }
+    Ok(())
 }
 
 /// For each repo, the branch in the clone chosen at planning: released from the user's
@@ -214,12 +269,12 @@ async fn make(
 async fn prepare(
     d: &Daemon,
     git: &Git,
-    workspace: &ClaudeCodeWorkspacePlan,
+    repos: &[String],
     branch: &str,
     found: &Found<'_>,
     released: &mut Vec<Released>,
 ) -> Result<()> {
-    for repo in &workspace.repos {
+    for repo in repos {
         let source = found.sources.get(&RepoBranch::new(repo, branch));
         let Some(clone) = source.and_then(|s| s.clone.clone()) else {
             return Err(Error::BadRequest(format!(

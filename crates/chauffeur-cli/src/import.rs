@@ -148,7 +148,7 @@ async fn claude_code(
         println!("{}", serde_json::to_string_pretty(&plan)?);
     } else {
         println!("{}", sanitize_terminal(&render_claude_code(&plan)));
-        println!("\n{}", claude_code_outcome(&plan));
+        println!("\n{}", sanitize_terminal(&claude_code_outcome(&plan)));
     }
     let failed = plan
         .sessions
@@ -551,7 +551,9 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
         for r in released {
             lines.push(format!(
                 "  git -C {} stash --include-untracked   ({} {})",
-                r.folder, r.repo, r.branch
+                shell_quoted(&r.folder),
+                r.repo,
+                r.branch
             ));
         }
     }
@@ -577,6 +579,19 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
         ));
     }
     lines.join("\n")
+}
+
+/// A word the shell reads as it is: quoted when it holds anything but plain path characters.
+fn shell_quoted(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-+=:@%,".contains(c))
+    {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', "'\\''"))
+    }
 }
 
 /// The workspace of a release's branch was made by this run.
@@ -640,6 +655,13 @@ mod tests {
             ],
             warnings: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_cleanup_command_quotes_a_folder_the_shell_would_split() {
+        assert_eq!(shell_quoted("/code/shop"), "/code/shop");
+        assert_eq!(shell_quoted("/My Code/shop"), "'/My Code/shop'");
+        assert_eq!(shell_quoted("/a/it's"), "'/a/it'\\''s'");
     }
 
     #[test]
