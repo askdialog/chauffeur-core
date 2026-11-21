@@ -1209,6 +1209,7 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
 /// - `feat/tmp` in a worktree whose files a cleanup deleted, `feat/gone` in one removed whole;
 /// - `feat/both` in shop (a worktree) and in docs (its clone), docs' clone for Chauffeur (another
 ///   one, set in the settings) holding a `feat/both` of its own, which no fetch can move.
+///
 /// One session per branch, and a stand-in sidecar.
 struct Branches {
     f: Fixture,
