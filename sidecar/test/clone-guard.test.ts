@@ -629,6 +629,38 @@ describe("git from a workspace's worktree, which shares its clone's branches and
     "git worktree remove /code/web/.wt/other",
     "git reflog expire --expire=now --all",
     "git reflog delete HEAD@{1}",
+    // Found by the red team: a switch onto the default branch, then work on it.
+    "git checkout main && git pull",
+    "git switch main && git merge feat/x",
+    "git checkout --ignore-other-worktrees fix/typo",
+    "git branch --merged | grep -v '\\*' | xargs git branch -d",
+    "git stash clear",
+    "git stash drop",
+    "git rebase feat/x main",
+    "git rebase -i origin/main main",
+    "git rebase --onto origin/main feat/x main",
+    "git branch -Df main",
+    "git branch -fD main",
+    "git branch -Mf feat/x main",
+    "git checkout -fB main HEAD",
+    "git switch -fC main feat/x",
+    "git switch --force-create=main feat/x",
+    'cp scripts/pre-commit "$(git rev-parse --git-path hooks)/pre-commit"',
+    'git config --file "$(git rev-parse --git-common-dir)/config" user.email x',
+    "git filter-branch --tree-filter 'rm -f secret' -- --all",
+    "git push . --delete main",
+    "git push . -d main",
+    "git push ./ HEAD:main",
+    'git push "$PWD" HEAD:main',
+    "git push . :main",
+    "git branch -u origin/x main",
+    "git branch --unset-upstream main",
+    "git branch --edit-description main",
+    "git worktree add -B main ../x feat/x",
+    "git worktree add ../x main",
+    "git symbolic-ref refs/heads/main refs/heads/feat/x",
+    "git symbolic-ref HEAD refs/heads/main",
+    "git fetch origin main:heads/main",
   ], true);
 
   table("allowed", [
@@ -667,10 +699,31 @@ describe("git from a workspace's worktree, which shares its clone's branches and
     "git worktree add ../other feat/other",
     "git reflog",
     "git log main..HEAD",
+    "git checkout main -- README.md",
+    "git checkout -- README.md",
+    "git switch -c feat/next main",
+    "git switch --detach main",
+    "git stash push -m wip",
+    "git stash pop",
+    "git stash apply stash@{0}",
+    "git rebase main",
+    "git rebase origin/main feat/x",
+    "git branch -dr origin/feat/old",
+    "git remote prune origin",
+    "git fetch --prune",
+    "git worktree add ../x -b feat/y main",
+    "git worktree add --detach ../x main",
+    'cat "$(git rev-parse --git-dir)/HEAD"',
+    'cd "$(git rev-parse --show-toplevel)" && npm test',
   ], false);
 
-  test("the refusal names what it protects", () => {
+  test("the refusal names what it protects, and what to do instead", () => {
     expect(refuses("git branch -D main")).toContain("deletes main, the default branch of /code/web");
+    expect(refuses("git branch -D main")).toContain("git switch -c <name> <branch>");
+    expect(refuses("git checkout main")).toContain("switches this worktree onto main, the default branch of /code/web");
+    expect(refuses("git config user.email x")).toContain("git -c <key>=<value>");
+    expect(refuses("git worktree prune")).toContain("ask the user to do it in their clone");
+    expect(refuses("git push . :main")).toContain("deletes main");
     expect(refuses("git branch -f fix/typo HEAD")).toContain("resets fix/typo, the branch checked out in /code/web");
     expect(refuses("git fetch origin main:main")).toContain("moves main, the default branch of /code/web");
     expect(refuses("git config user.email x")).toContain("changes the settings of /code/web");
@@ -678,7 +731,7 @@ describe("git from a workspace's worktree, which shares its clone's branches and
 
   test("a clone whose branches are not known still keeps its settings, refs and worktrees", () => {
     expect(refuses("git branch -D main", "/ws/feat/api")).toBeUndefined();
-    expect(cloneCommandRefusal("git remote set-url origin x", "/ws/feat/api", SHARED)).toContain("changes the remotes of /code/api");
+    expect(refuses("git remote set-url origin x", "/ws/feat/api")).toContain("changes the remotes of /code/api");
   });
 
   test("outside the worktrees, git works on another repository", () => {

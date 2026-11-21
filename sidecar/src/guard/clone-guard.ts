@@ -73,12 +73,22 @@ function commandDenial(clone: GuardedClone): string {
   );
 }
 
-function sharedDenial({ clone, what }: { clone: GuardedClone; what: string }): string {
+/** What a git command run from a worktree changes of its clone, and what to do instead. */
+interface SharedChange {
+  what: string;
+  instead: string;
+}
+
+function sharedDenial({ clone, what, instead }: SharedChange & { clone: GuardedClone }): string {
   return (
     `This git command ${what}. Run from this workspace's worktree, git shares ${clone.clone}'s ` +
-    "branches and settings, the user's own: agents leave them as they are. Work on this workspace's own branch instead."
+    `branches and settings, the user's own: agents leave them as they are. ${instead}`
   );
 }
+
+const WORK_ON_OWN = "Work on this workspace's own branch: `git switch -c <name> <branch>` starts one from a branch.";
+const ONE_COMMAND = "For one command, pass a setting with `git -c <key>=<value> …` (an author with GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL).";
+const ASK_USER = "If it is needed, ask the user to do it in their clone.";
 
 /** The file tools and the input naming the file they write. */
 const FILE_TOOLS: Record<string, string> = {
@@ -108,7 +118,10 @@ export function cloneCommandRefusal(command: string, cwd: string, clones: Guarde
     // Nested past what the stack holds, or a form it fails on: refused rather than let through unread.
     return UNREAD;
   }
-  const { changed, named, blind, shared } = judge.verdict;
+  const { changed, named, blind, shared, pointed } = judge.verdict;
+  if (!changed && blind && pointed) {
+    return sharedDenial({ clone: pointed, what: `writes where \`git rev-parse\` points, into the .git of ${pointed.clone} (its hooks, its settings…)`, instead: ASK_USER });
+  }
   const clone = changed ?? (blind ? named : undefined);
   if (clone) return commandDenial(clone);
   return shared && sharedDenial(shared);
@@ -269,7 +282,9 @@ class Judge {
     /** A command that may change files works with a value only known when the line runs. */
     blind: boolean;
     /** A git command run from a worktree that changes what it shares with its clone. */
-    shared?: { clone: GuardedClone; what: string };
+    shared?: SharedChange & { clone: GuardedClone };
+    /** A clone whose `.git` a `git rev-parse` of the line prints a path in. */
+    pointed?: GuardedClone;
   } = { blind: false };
 
   /**
@@ -421,7 +436,7 @@ class Judge {
     else if (name === "watch") this.watch(args, state);
     else if (name === "xargs") this.xargs(args, state);
     else if (name === "find") this.find(args, state, fed);
-    else if (name === "git") this.git(args, state);
+    else if (name === "git") this.git(args, state, fed);
     else if (READERS.has(name) && onlyReads(name, texts) && !runsAProgram(name, args) && (!WRITES_BY_ARGUMENT.has(name) || args.every((arg) => arg.known))) {
       this.reads(args, state);
     }
@@ -642,7 +657,7 @@ class Judge {
   }
 
   /** Git changes the repository it runs on, unless it reads; whatever it reads, its outputs. */
-  private git(args: Value[], state: State): void {
+  private git(args: Value[], state: State, fed = false): void {
     let where = state.dir;
     const given: (string | undefined)[] = [];
     let i = 0;
@@ -665,7 +680,7 @@ class Judge {
     const file = sub.text === "config" ? optionValue(rest, ["-f", "--file"]) : undefined;
     // The repository it works on: `--work-tree` and `--git-dir` both given, where it runs no longer counts.
     const repos = file ? [isExact(file) ? this.place(file.text, where) : undefined] : given.length === 2 ? given : [where, ...given];
-    let clone = repos.map((repo) => (repo === undefined ? undefined : cloneOf(repo, this.clones))).find((found) => found !== undefined);
+    let clone = first(repos, (repo) => cloneOf(repo, this.clones));
     // The folder `clone` and `init` make, and paths outside the repository it names.
     if (sub.text === "clone" || sub.text === "init") {
       const operands = gitOperands(texts);
@@ -677,10 +692,14 @@ class Judge {
     // `GIT_DIR` and the like, set for it, point it at a clone.
     clone ??= sub.text === "clone" || sub.text === "init" ? undefined : state.env;
     // From a worktree of the workspace, git shares its clone's branches and settings.
-    const sharing = file ? undefined : repos.map((repo) => (repo === undefined ? undefined : worktreeOf(repo, this.clones))).find(Boolean);
+    const sharing = file ? undefined : first(repos, (repo) => worktreeOf(repo, this.clones));
     if (sharing && sub.known) {
-      const what = sharedChange(sub.text, rest, sharing);
-      if (what) this.verdict.shared ??= { clone: sharing, what };
+      // `xargs` gives it more operands, only known as the line runs.
+      const change = sharedChange(sub.text, fed ? [...rest, UNKNOWN] : rest, sharing, where);
+      if (change) this.verdict.shared ??= { clone: sharing, ...change };
+      // `$(git rev-parse --git-path hooks)` prints a path in the clone's `.git`: a line writing
+      // where it says writes into the clone.
+      if (sub.text === "rev-parse" && texts.some((text) => GIT_PATHS.has(option(text)[0]))) this.verdict.pointed ??= sharing;
     }
     if (!sub.known) this.verdict.blind = true;
     else if (sub.text === "submodule" && texts.includes("foreach")) {
@@ -1016,73 +1035,105 @@ function optionValue(args: Value[], names: string[]): Value | undefined {
 }
 
 /** `git branch` options taking the next word as their value. */
-const BRANCH_VALUES = new Set(["-u", "--set-upstream-to", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"]);
+const BRANCH_VALUES = new Set(["--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"]);
 /** Subcommands that rewrite what git keeps for the whole repository. */
 const HOUSEKEEPING = new Set(["gc", "prune", "repack", "pack-refs", "maintenance"]);
-/** `git remote` subcommands that change the repository's remotes. */
-const REMOTE_CHANGES = new Set(["add", "set-url", "remove", "rm", "rename", "set-head", "set-branches", "prune"]);
+/** `git remote` subcommands that change the repository's remotes (`prune` drops only stale copies, as `fetch --prune`). */
+const REMOTE_CHANGES = new Set(["add", "set-url", "remove", "rm", "rename", "set-head", "set-branches"]);
+/** `git rev-parse` options printing a path in the repository's `.git`. */
+const GIT_PATHS = new Set(["--git-path", "--git-common-dir", "--git-dir", "--absolute-git-dir"]);
+/** An operand only known as the line runs. */
+const UNKNOWN: Value = { text: "", known: false, glob: false, prefix: "" };
+
+/** The first value `find` gives for a known path. */
+function first<T>(paths: (string | undefined)[], find: (path: string) => T | undefined): T | undefined {
+  for (const path of paths) {
+    const found = path === undefined ? undefined : find(path);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/**
+ * One of the clone's own branches a value names, described: its checked-out or its default
+ * branch, or a branch whose name is only known as the line runs.
+ */
+function protectedBranch(value: Value | undefined, clone: GuardedClone): string | undefined {
+  if (!value) return undefined;
+  if (!value.known) return `a branch of ${clone.clone} whose name is only known as the line runs`;
+  const name = value.text.replace(/^\+/, "").replace(/^(?:refs\/)?heads\//, "");
+  if (name && name === clone.branch) return `${name}, the branch checked out in ${clone.clone}`;
+  if (name && name === clone.default_branch) return `${name}, the default branch of ${clone.clone}`;
+  return undefined;
+}
+
+/** Short flags given together (`-Df`) as one each, when every letter is one of `letters`. */
+function expanded(args: Value[], letters: string): Value[] {
+  return args.flatMap((arg) =>
+    arg.known && /^-[a-zA-Z]{2,}$/.test(arg.text) && [...arg.text.slice(1)].every((letter) => letters.includes(letter))
+      ? [...arg.text.slice(1)].map((letter) => exact(`-${letter}`))
+      : [arg],
+  );
+}
 
 /**
  * What a git command run from a worktree changes of what it shares with its clone (its branches,
- * refs and settings), or undefined: the clone's checked-out and default branches are its user's.
+ * refs, settings, stash and other worktrees), or undefined: the clone's checked-out and default
+ * branches are its user's. `where`: the folder it runs in.
  */
-function sharedChange(sub: string, rest: Value[], clone: GuardedClone): string | undefined {
+function sharedChange(sub: string, rest: Value[], clone: GuardedClone, where: string | undefined): SharedChange | undefined {
   const texts = rest.map((arg) => arg.text);
   const words = texts.filter((text) => !text.startsWith("-"));
-  const theirs = (value: Value | undefined): string | undefined => {
-    if (!value) return undefined;
-    if (!value.known) return `a branch of ${clone.clone} whose name is only known as the line runs`;
-    const name = value.text.replace(/^\+/, "").replace(/^refs\/heads\//, "");
-    if (name && name === clone.branch) return `${name}, the branch checked out in ${clone.clone}`;
-    if (name && name === clone.default_branch) return `${name}, the default branch of ${clone.clone}`;
-    return undefined;
-  };
+  const branch = (value: Value | undefined) => protectedBranch(value, clone);
+  const onBranch = (what: string | undefined) => (what ? { what, instead: WORK_ON_OWN } : undefined);
+  const asked = (what: string | undefined) => (what ? { what, instead: ASK_USER } : undefined);
   switch (sub) {
     case "branch":
-      return branchChange(rest, theirs);
+      return onBranch(branchChange(expanded(rest, "dDmMcCfrav"), branch));
     case "checkout":
-    case "switch": {
-      // `checkout -B` and `switch -C` reset a branch that exists.
-      const forced = rest.findIndex((arg) => arg.known && (sub === "checkout" ? arg.text === "-B" : arg.text === "-C" || arg.text === "--force-create"));
-      const branch = forced < 0 ? undefined : theirs(rest[forced + 1]);
-      return branch && `resets ${branch}`;
-    }
+    case "switch":
+      return onBranch(switchChange(sub, expanded(rest, sub === "checkout" ? "fBqm" : "fCqm"), branch));
+    case "rebase":
+      return onBranch(rebaseChange(rest, branch));
+    case "worktree":
+      if (words[0] === "add") return onBranch(worktreeAdd(rest.slice(texts.indexOf("add") + 1), branch));
+      return asked(["prune", "remove", "move"].includes(words[0] ?? "") ? `removes or moves worktrees of ${clone.clone}, the user's own included` : undefined);
     case "fetch":
     case "pull":
-    case "push": {
-      // A refspec's destination: a branch of the repository itself (a push to `.`).
-      const operands = rest.filter((arg) => !arg.known || !arg.text.startsWith("-"));
-      if (sub === "push" && operands[0]?.text !== ".") return undefined;
-      for (const spec of operands.slice(1)) {
-        const colon = spec.text.lastIndexOf(":");
-        if (colon < 0) continue;
-        const branch = theirs({ ...spec, text: spec.text.slice(colon + 1) });
-        if (branch) return `moves ${branch}`;
-      }
-      return undefined;
+    case "push":
+      return onBranch(refspecChange(sub, rest, branch, clone, where));
+    case "symbolic-ref": {
+      // `symbolic-ref refs/heads/main …` points the branch elsewhere; `symbolic-ref HEAD main` switches onto it.
+      const [ref, target] = rest.filter((arg) => !arg.known || !arg.text.startsWith("-"));
+      if (target === undefined) return undefined;
+      const moved = ref?.text === "HEAD" ? branch(target) : branch(ref);
+      return onBranch(moved && (ref?.text === "HEAD" ? `switches this worktree onto ${moved}` : `points ${moved} elsewhere`));
     }
     case "update-ref":
-      return `moves refs of ${clone.clone} directly`;
+      return asked(`moves refs of ${clone.clone} directly`);
+    case "filter-branch":
+      return asked(`rewrites the history of the branches it is given, those of ${clone.clone} among them`);
     case "config":
       return configReads(texts) || texts.some((text) => text === "--global" || text === "--system")
         ? undefined
-        : `changes the settings of ${clone.clone}`;
+        : { what: `changes the settings of ${clone.clone}`, instead: ONE_COMMAND };
     case "remote":
-      return REMOTE_CHANGES.has(words[0] ?? "") ? `changes the remotes of ${clone.clone}` : undefined;
-    case "worktree":
-      return ["prune", "remove", "move"].includes(words[0] ?? "") ? `removes or moves worktrees of ${clone.clone}, the user's own included` : undefined;
+      return asked(REMOTE_CHANGES.has(words[0] ?? "") ? `changes the remotes of ${clone.clone}` : undefined);
     case "reflog":
-      return ["expire", "delete"].includes(words[0] ?? "") ? `rewrites the reflogs of ${clone.clone}` : undefined;
+      return asked(["expire", "delete"].includes(words[0] ?? "") ? `rewrites the reflogs of ${clone.clone}` : undefined);
+    case "stash":
+      return asked(["clear", "drop"].includes(words[0] ?? "") ? `erases stashes of ${clone.clone}, the user's own among them` : undefined);
     default:
-      return HOUSEKEEPING.has(sub) ? `rewrites what git keeps for ${clone.clone} (\`git ${sub}\`)` : undefined;
+      return asked(HOUSEKEEPING.has(sub) ? `rewrites what git keeps for ${clone.clone} (\`git ${sub}\`)` : undefined);
   }
 }
 
-/** `git branch` deleting, renaming, copying onto or force-moving one of the clone's branches. */
-function branchChange(args: Value[], theirs: (value: Value | undefined) => string | undefined): string | undefined {
+/** `git branch` deleting, renaming, copying onto, force-moving or setting up one of the clone's branches. */
+function branchChange(args: Value[], branch: (value: Value | undefined) => string | undefined): string | undefined {
   let mode: "deletes" | "renames" | "overwrites" | undefined;
   let force = false;
   let remotes = false;
+  let settings = false;
   const operands: Value[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -1094,14 +1145,117 @@ function branchChange(args: Value[], theirs: (value: Value | undefined) => strin
     else if (opt === "-c" || opt === "-C" || opt === "--copy") mode = "overwrites";
     else if (opt === "-f" || opt === "--force") force = true;
     else if (opt === "-r" || opt === "--remotes") remotes = true;
+    else if (opt === "-u" || opt === "--set-upstream-to") {
+      settings = true;
+      if (attached === undefined) i++;
+    } else if (opt === "--unset-upstream" || opt === "--edit-description") settings = true;
     else if (BRANCH_VALUES.has(opt) && attached === undefined) i++;
   }
   // Remote-tracking branches are git's copies of the remote's.
   if (remotes) return undefined;
+  if (settings) {
+    const named = operands.map(branch).find(Boolean);
+    return named && `changes the settings of ${named}`;
+  }
   const touched = mode === "deletes" || mode === "renames" ? operands : mode === "overwrites" ? operands.slice(-1) : force ? operands.slice(0, 1) : [];
-  for (const operand of touched) {
-    const branch = theirs(operand);
-    if (branch) return `${mode ?? "resets"} ${branch}`;
+  const named = touched.map(branch).find(Boolean);
+  return named && `${mode ?? "resets"} ${named}`;
+}
+
+/** `checkout -B`, `switch -C` resetting a branch, or a plain switch onto one: what is then committed there moves it. */
+function switchChange(sub: string, args: Value[], branch: (value: Value | undefined) => string | undefined): string | undefined {
+  const forceCreate = sub === "checkout" ? ["-B"] : ["-C", "--force-create"];
+  const creates = sub === "checkout" ? ["-b", "--orphan"] : ["-c", "--create", "--orphan"];
+  let created = false;
+  let detached = false;
+  const operands: Value[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg) continue;
+    const [opt, attached] = option(arg.text);
+    // Paths follow: files checked out, no branch switched.
+    if (arg.known && arg.text === "--") return undefined;
+    if (!arg.known || !opt.startsWith("-")) operands.push(arg);
+    else if (forceCreate.includes(opt)) {
+      const reset = branch(attached !== undefined ? after(arg, opt.length + 1) : args[++i]);
+      if (reset) return `resets ${reset}`;
+      created = true;
+    } else if (creates.includes(opt)) {
+      created = true;
+      if (attached === undefined) i++;
+    } else if (opt === "--detach" || (sub === "switch" && opt === "-d")) detached = true;
+  }
+  if (created || detached || operands.length !== 1) return undefined;
+  const onto = branch(operands[0]);
+  return onto && `switches this worktree onto ${onto}: what is then committed, merged or reset there moves it`;
+}
+
+/** `rebase <upstream> <branch>` checks the branch out and rewrites it. */
+function rebaseChange(args: Value[], branch: (value: Value | undefined) => string | undefined): string | undefined {
+  const operands: Value[] = [];
+  let root = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg) continue;
+    const [opt, attached] = option(arg.text);
+    if (!arg.known || !opt.startsWith("-")) operands.push(arg);
+    else if (opt === "--root") root = true;
+    else if (["--onto", "-s", "--strategy", "-X", "--strategy-option", "-x", "--exec", "-C", "--whitespace"].includes(opt) && attached === undefined) i++;
+  }
+  const rewritten = branch(root ? operands[0] : operands[1]);
+  return rewritten && `rewrites ${rewritten}`;
+}
+
+/** `worktree add` resetting one of the clone's branches (`-B`), or checking it out elsewhere. */
+function worktreeAdd(args: Value[], branch: (value: Value | undefined) => string | undefined): string | undefined {
+  let created = false;
+  let detached = false;
+  const operands: Value[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (!arg) continue;
+    const [opt, attached] = option(arg.text);
+    if (!arg.known || !opt.startsWith("-")) operands.push(arg);
+    else if (opt === "-B") {
+      const reset = branch(attached !== undefined ? after(arg, 3) : args[++i]);
+      if (reset) return `resets ${reset}`;
+      created = true;
+    } else if (opt === "-b" || opt === "--orphan") {
+      created = true;
+      if (attached === undefined) i++;
+    } else if (opt === "--detach" || opt === "-d") detached = true;
+    else if (opt === "--reason" && attached === undefined) i++;
+  }
+  const checkedOut = created || detached ? undefined : branch(operands[1]);
+  return checkedOut && `checks out ${checkedOut} in another worktree: what is then committed there moves it`;
+}
+
+/** A refspec's destination that is one of the clone's branches, or a push deleting one or to the repository itself. */
+function refspecChange(
+  sub: string,
+  args: Value[],
+  branch: (value: Value | undefined) => string | undefined,
+  clone: GuardedClone,
+  where: string | undefined,
+): string | undefined {
+  const deleting = args.some((arg) => arg.known && (arg.text === "-d" || arg.text === "--delete"));
+  const operands = args.filter((arg) => !arg.known || !arg.text.startsWith("-"));
+  if (sub === "push") {
+    // Pushing to the repository itself (`.`, its folder) moves its branches; to a remote, the remote's.
+    const remote = operands[0];
+    const path = remote?.known && (remote.text === "." || /^\.{1,2}\//.test(remote.text) || isAbsolute(remote.text));
+    const target = path && where !== undefined ? resolve(where, remote.text) : undefined;
+    if (target === undefined || !(inside(target, clone.worktree) || inside(target, clone.clone))) return undefined;
+  }
+  for (const spec of operands.slice(1)) {
+    const colon = spec.text.lastIndexOf(":");
+    if (colon < 0) {
+      const deleted = sub === "push" && deleting ? branch(spec) : undefined;
+      if (deleted) return `deletes ${deleted}`;
+      continue;
+    }
+    const moved = branch({ ...spec, text: spec.text.slice(colon + 1) });
+    if (moved) return `${spec.text.slice(0, colon).replace(/^\+/, "") === "" ? "deletes" : "moves"} ${moved}`;
   }
   return undefined;
 }
@@ -1225,7 +1379,7 @@ function worktreeOf(path: string, clones: GuardedClone[]): GuardedClone | undefi
 
 /** A path in a worktree of the workspace, or in its git folder in the clone's `.git`. */
 function exempt(path: string, clones: GuardedClone[]): boolean {
-  return clones.some(({ worktree, gitdir }) => inside(path, worktree) || (gitdir !== undefined && inside(path, gitdir)));
+  return worktreeOf(path, clones) !== undefined;
 }
 
 /** macOS's file system ignores case: `~/Documents/GitHub/web` is `~/Documents/github/web`. */

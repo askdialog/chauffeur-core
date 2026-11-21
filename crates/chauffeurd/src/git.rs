@@ -129,6 +129,15 @@ impl Git {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
+    /// The branch checked out in `dir`, by its short name; none when HEAD is detached.
+    pub async fn current_branch(&self, dir: &Path) -> anyhow::Result<Option<String>> {
+        let branch = self
+            .run_allowing(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"], &[1])
+            .await?;
+        let branch = branch.trim_end();
+        Ok((!branch.is_empty()).then(|| branch.to_owned()))
+    }
+
     pub async fn ok(&self, dir: &Path, args: &[&str]) -> bool {
         self.run(dir, args).await.is_ok()
     }

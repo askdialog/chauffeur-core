@@ -4377,12 +4377,11 @@ async fn source_clones(
         let Some(clone) = &repo.clone_path else {
             continue;
         };
-        let branch = git
-            .run(clone, &["symbolic-ref", "--short", "-q", "HEAD"])
-            .await
-            .ok()
-            .map(|branch| branch.trim().to_owned())
-            .filter(|branch| !branch.is_empty());
+        // Unread, the clone's branch goes unguarded; git still keeps a checked-out one.
+        let branch = git.current_branch(clone).await.unwrap_or_else(|error| {
+            tracing::warn!(%error, clone = %clone.display(), "could not read the clone's branch");
+            None
+        });
         clones.push(chauffeur_protocol::sidecar::SourceClone {
             clone: clone.display().to_string(),
             worktree: repo.path.display().to_string(),
