@@ -693,6 +693,14 @@ class Judge {
     clone ??= sub.text === "clone" || sub.text === "init" ? undefined : state.env;
     // From a worktree of the workspace, git shares its clone's branches and settings.
     const sharing = file ? undefined : first(repos, (repo) => worktreeOf(repo, this.clones));
+    // A subcommand only known as the line runs may change what the worktree shares.
+    if (sharing && !sub.known) {
+      this.verdict.shared ??= {
+        clone: sharing,
+        what: `may change what it shares with ${sharing.clone}: its subcommand is only known as the line runs`,
+        instead: ASK_USER,
+      };
+    }
     if (sharing && sub.known) {
       // `xargs` gives it more operands, only known as the line runs.
       const change = sharedChange(sub.text, fed ? [...rest, UNKNOWN] : rest, sharing, where);
@@ -1129,6 +1137,13 @@ function sharedChange(sub: string, rest: Value[], clone: GuardedClone, where: st
       return asked(REMOTE_CHANGES.has(words[0] ?? "") ? `changes the remotes of ${clone.clone}` : undefined);
     case "reflog":
       return asked(["expire", "delete", "drop", "write"].includes(words[0] ?? "") ? `rewrites the reflogs of ${clone.clone}` : undefined);
+    case "replace":
+      // Replacements are refs of the repository: the clone's. Listing them reads.
+      return asked(
+        words.length === 0 || texts.some((text) => text === "-l" || text === "--list")
+          ? undefined
+          : `changes the replacements of ${clone.clone}`,
+      );
     case "notes":
       // Notes are refs of the repository: the clone's.
       return asked(words[0] === undefined || ["list", "show", "get-ref"].includes(words[0]) ? undefined : `changes the notes of ${clone.clone}`);

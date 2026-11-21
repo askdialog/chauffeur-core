@@ -675,6 +675,9 @@ describe("git from a workspace's worktree, which shares its clone's branches and
     "git worktree repair",
     "git reflog drop",
     "git reflog write refs/heads/main main x",
+    "git replace HEAD~1 HEAD",
+    "git replace -d abc123",
+    'git "$GIT_SUBCOMMAND" main',
   ], true);
 
   table("allowed", [
@@ -715,6 +718,9 @@ describe("git from a workspace's worktree, which shares its clone's branches and
     "git log main..HEAD",
     "git notes list",
     "git notes show HEAD",
+    "git replace -l",
+    "git bisect start",
+    "git bisect good",
     "git checkout main -- README.md",
     "git checkout -- README.md",
     "git checkout -- main",
