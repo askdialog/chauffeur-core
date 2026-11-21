@@ -107,6 +107,21 @@ impl EventBus {
         }
     }
 
+    /// Runs `store`, which stores events in a transaction of its own and returns them, then
+    /// broadcasts them, both in the order `publish` keeps: no event published meanwhile reaches
+    /// subscribers first with a later number, which would make them skip these.
+    pub fn store_and_announce<T>(
+        &self,
+        store: impl FnOnce() -> crate::Result<(T, Vec<EventEnvelope>)>,
+    ) -> crate::Result<T> {
+        let _order = self.order.lock().unwrap();
+        let (value, envelopes) = store()?;
+        for envelope in envelopes {
+            let _ = self.sender.send(Arc::new(envelope));
+        }
+        Ok(value)
+    }
+
     pub fn registry(&self, event: RegistryEvent) -> EventEnvelope {
         self.publish(Event::Registry { event })
     }
@@ -281,6 +296,76 @@ mod tests {
         for task in tasks {
             task.await.unwrap();
         }
+        let seqs = tokio::time::timeout(std::time::Duration::from_secs(30), collector)
+            .await
+            .expect("every event is delivered")
+            .unwrap();
+        assert!(
+            seqs.windows(2).all(|w| w[0] < w[1]),
+            "sequence numbers arrived out of order"
+        );
+    }
+
+    /// Events stored and announced as a batch while others publish: a subscriber still gets every
+    /// one in sequence order, the batch's included.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_batch_stored_while_others_publish_reaches_a_subscriber_in_sequence_order() {
+        let store = Store::open_in_memory().unwrap();
+        let bus = EventBus::new(store.clone());
+        let mut live = bus.subscribe();
+        let (batches, each, published) = (200, 5, 2000);
+        let total = batches * each + published;
+        let collector = tokio::spawn(async move {
+            let mut seqs = Vec::with_capacity(total);
+            while seqs.len() < total {
+                match live.recv().await {
+                    Ok(envelope) => seqs.push(envelope.seq.unwrap()),
+                    Err(error) => panic!("the subscriber fell behind: {error}"),
+                }
+            }
+            seqs
+        });
+        let publisher = {
+            let bus = bus.clone();
+            tokio::task::spawn_blocking(move || {
+                for i in 0..published {
+                    std::thread::yield_now();
+                    bus.workspace(
+                        "w",
+                        WorkspaceEvent::Progress {
+                            message: i.to_string(),
+                        },
+                    );
+                }
+            })
+        };
+        let batcher = tokio::task::spawn_blocking(move || {
+            for _ in 0..batches {
+                std::thread::yield_now();
+                bus.store_and_announce(|| {
+                    let mut stored = Vec::new();
+                    for _ in 0..each {
+                        let mut envelope = EventEnvelope {
+                            seq: None,
+                            ts: "t".into(),
+                            event: Event::Chat {
+                                workspace_id: "w".into(),
+                                chat_id: "c".into(),
+                                event: ChatEvent::TurnStarted,
+                            },
+                        };
+                        let payload = serde_json::to_string(&envelope).unwrap();
+                        envelope.seq =
+                            Some(store.append_event("t", Some("w"), Some("c"), false, &payload)?);
+                        stored.push(envelope);
+                    }
+                    Ok(((), stored))
+                })
+                .unwrap();
+            }
+        });
+        publisher.await.unwrap();
+        batcher.await.unwrap();
         let seqs = tokio::time::timeout(std::time::Duration::from_secs(30), collector)
             .await
             .expect("every event is delivered")

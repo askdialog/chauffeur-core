@@ -3431,10 +3431,14 @@ impl ChatManager {
             forked_from_agent: None,
             brand: None,
         };
-        let Some(inserted) = d.store.insert_imported_chat(&chat, events, record)? else {
+        let inserted = d.events.store_and_announce(|| {
+            let inserted = d.store.insert_imported_chat(&chat, events, record)?;
+            let announced = inserted.clone().unwrap_or_default();
+            Ok((inserted.is_some(), announced))
+        })?;
+        if !inserted {
             return Ok(None);
-        };
-        d.events.announce(inserted);
+        }
         d.events
             .registry(RegistryEvent::ChatUpserted { chat: chat.clone() });
         d.workspaces.publish(&workspace.id);

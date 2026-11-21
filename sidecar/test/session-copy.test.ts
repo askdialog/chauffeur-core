@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { claudeProjectKey } from "../src/agents/claude/context-bundle.ts";
@@ -81,6 +81,10 @@ test("refuses a link in the session, a missing transcript and an id that is no s
   mkdirSync(join(f.source, SESSION), { recursive: true });
   symlinkSync(join(f.source, "elsewhere.txt"), join(f.source, SESSION, "link.txt"));
   await expect(f.copy()).rejects.toThrow("is a link or not a file");
+  rmSync(join(f.source, SESSION, "link.txt"));
+  linkSync(join(f.source, "elsewhere.txt"), join(f.source, SESSION, "hard.txt"));
+  await expect(f.copy()).rejects.toThrow("hard.txt is not a file of its own");
+  rmSync(join(f.source, SESSION, "hard.txt"));
   // The session's folder itself a link.
   rmSync(join(f.source, SESSION), { recursive: true });
   mkdirSync(join(f.root, "elsewhere"));

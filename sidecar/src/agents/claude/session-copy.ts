@@ -77,7 +77,8 @@ async function copyFile(from: string, target: string, path: string, added: Added
   const input = await open(from, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = await input.stat();
-    if (!before.isFile()) throw refused(`${path} is not a file`);
+    // A file hard-linked in is another's too: the capture refuses it alike.
+    if (!before.isFile() || before.nlink !== 1) throw refused(`${path} is not a file of its own`);
     let output: FileHandle;
     let created = false;
     try {
