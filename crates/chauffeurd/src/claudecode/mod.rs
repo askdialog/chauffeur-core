@@ -243,6 +243,7 @@ pub async fn import(
     // user's holding the branch, which becomes Chauffeur's (`branches::adopt`).
     let mut releases = Vec::new();
     let mut sources = HashMap::new();
+    let mut chosen: HashMap<String, PathBuf> = HashMap::new();
     for workspace in plan
         .workspaces
         .iter()
@@ -255,10 +256,22 @@ pub async fn import(
         let existing = branches::existing(d, workspace, branch)?;
         for repo in &branches::missing_repos(d, workspace, branch, existing.as_ref())? {
             let clone = repos.source(repo, branch).await;
-            let chauffeur = d.repos.existing_clone(repo);
+            // Chauffeur's own clone, else the user's chosen for an earlier branch of the repo,
+            // else this one: one clone per repo for the whole run.
+            let own = d.repos.existing_clone(repo);
+            let adopt = own.is_none();
+            let chauffeur = own.or_else(|| {
+                let clone = clone.as_ref()?;
+                Some(
+                    chosen
+                        .entry(repo.clone())
+                        .or_insert_with(|| clone.clone())
+                        .clone(),
+                )
+            });
             // Its checkouts in the user's clone holding it: their changes are copied, and they are
-            // released only when Chauffeur uses that clone (it has none, or it is the same);
-            // with a clone of its own, the branch is fetched there and they keep it.
+            // released only when that clone is Chauffeur's; in another, the branch is fetched
+            // there and they keep it.
             let holders: Vec<Holder> = repos
                 .holders(repo, branch)
                 .await
@@ -269,7 +282,7 @@ pub async fn import(
                         .is_some_and(|c| crate::conductor::same_folder(c, &h.clone))
                 })
                 .collect();
-            let released = chauffeur.as_ref().is_none_or(|c| {
+            let released = chauffeur.as_ref().is_some_and(|c| {
                 clone
                     .as_ref()
                     .is_some_and(|u| crate::conductor::same_folder(c, u))
@@ -291,6 +304,7 @@ pub async fn import(
                 branches::RepoBranch::new(repo, branch),
                 branches::Source {
                     chauffeur,
+                    adopt,
                     clone,
                     holders,
                 },

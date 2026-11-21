@@ -87,8 +87,11 @@ fn branch_record(branch: &str) -> String {
 
 /// Where a branch of a repo is, as planned.
 pub(super) struct Source {
-    /// Chauffeur's clone of the repo; none when it has none yet.
+    /// Chauffeur's clone of the repo: its own, else the user's chosen for the whole run (the
+    /// first one holding one of its branches); none when no clone holds the branch.
     pub(super) chauffeur: Option<PathBuf>,
+    /// `chauffeur` is the user's clone, which becomes Chauffeur's (`adopt`).
+    pub(super) adopt: bool,
     /// The user's clone holding the branch.
     pub(super) clone: Option<PathBuf>,
     /// Its checkouts in that clone: released when Chauffeur uses it, their changes copied.
@@ -295,10 +298,12 @@ async fn prepare(
                 holder.release.folder
             )));
         }
-        let chauffeur = match source.and_then(|s| s.chauffeur.clone()) {
-            Some(chauffeur) => chauffeur,
-            None => adopt(d, repo, &clone)?,
-        };
+        let chauffeur = source
+            .and_then(|s| s.chauffeur.clone())
+            .unwrap_or_else(|| clone.clone());
+        if source.is_some_and(|s| s.adopt) {
+            adopt(d, repo, &chauffeur)?;
+        }
         let shared = same_folder(&chauffeur, &clone);
         if !shared {
             let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
