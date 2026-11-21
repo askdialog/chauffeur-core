@@ -1273,6 +1273,11 @@ fn branches_fixture() -> Branches {
     git(&shop, &["switch", "-q", "feat/held"]);
     std::fs::write(shop.join("README.md"), "shop, changed on feat/held\n").unwrap();
     std::fs::write(shop.join("notes.txt"), "untracked\n").unwrap();
+    // A repo of its own inside, untracked: git lists it as a folder.
+    let vendored = shop.join("vendor/lib");
+    std::fs::create_dir_all(&vendored).unwrap();
+    git(&vendored, &["init", "-q"]);
+    std::fs::write(vendored.join("lib.txt"), "vendored\n").unwrap();
     let worktree = |name: &str, folder: &Path| {
         git(
             &shop,
@@ -1470,6 +1475,7 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
         std::fs::read_to_string(path("feat/held").join("notes.txt")).unwrap(),
         "untracked\n"
     );
+    assert!(path("feat/held").join("vendor/lib/lib.txt").is_file());
     // In the user's worktree too.
     assert!(!is_branch(&f.root.join("wt/feat-wt"), "feat/wt"));
     assert!(path("feat/wt").join("todo.txt").is_file());
@@ -1518,7 +1524,19 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
     // Again, lab's hook gone: nothing twice; the failed ones are tried again, feat/multi with
     // both its repos.
     std::fs::remove_file(f.root.join("clones/lab/.git/hooks/post-checkout")).unwrap();
+    // A session on feat/held the first run did not see (it ran in the clone, on that branch):
+    // into the workspace the first run made on it.
+    std::fs::write(
+        f.claude.join("projects/-code/s-held-2.jsonl"),
+        line(shop, "feat/held", &ago(4), &edit(&shop.join("README.md"))) + "\n",
+    )
+    .unwrap();
     let again = import(f, false).await;
+    assert_eq!(
+        outcome(&again, "s-held-2"),
+        (ClaudeCodeOutcome::Imported, made("feat/held").1),
+        "{again:?}"
+    );
     assert_eq!(
         outcome(&again, "s-multi").0,
         ClaudeCodeOutcome::Imported,
@@ -1541,12 +1559,28 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
     unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }
 
-/// No main organization (repos named `owner/name`), no clone folder: `fixture/alpha` has no
-/// clone of Chauffeur's, only the user's; `fixture/beta` has Chauffeur's own beside the user's.
-/// Both user clones hold their branch with changes.
 #[tokio::test(flavor = "multi_thread")]
-async fn adopting_one_repos_clone_changes_no_other_repos_and_takes_owner_name_repos() {
+async fn adopting_one_repos_clone_changes_no_other_repos() {
+    adopting("fixture").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn adopting_takes_repos_named_with_their_owner() {
+    adopting("").await;
+}
+
+/// No clone folder: `alpha` has no clone of Chauffeur's, only the user's; `beta` has Chauffeur's
+/// own beside the user's. Both user clones hold their branch with changes. With `org` empty, the
+/// repos are named `fixture/alpha` and `fixture/beta`.
+async fn adopting(org: &str) {
     let _switch = SWITCH.lock().await;
+    let named = |name: &str| {
+        if org.is_empty() {
+            format!("fixture/{name}")
+        } else {
+            name.to_string()
+        }
+    };
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let on_branch = |name: &str, branch: &str| {
@@ -1558,8 +1592,8 @@ async fn adopting_one_repos_clone_changes_no_other_repos_and_takes_owner_name_re
     };
     let alpha = on_branch("alpha", "feat/a");
     let beta = on_branch("beta", "feat/b");
-    // Chauffeur's own clone of fixture/beta, where its owner's repos go.
-    let own = root.join("repos/fixture/beta");
+    // Chauffeur's own clone of beta, where it clones repos.
+    let own = root.join("repos").join(named("beta"));
     let origin = root.join("origin/beta.git");
     git(
         &root,
@@ -1595,7 +1629,7 @@ async fn adopting_one_repos_clone_changes_no_other_repos_and_takes_owner_name_re
     std::fs::create_dir_all(&home).unwrap();
     std::fs::write(
         home.join("settings.toml"),
-        "github_org = \"\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46990\nlinear_enabled = false\n",
+        format!("github_org = \"{org}\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46990\nlinear_enabled = false\n"),
     )
     .unwrap();
     let daemon = Daemon::open(Paths::new(
@@ -1621,7 +1655,7 @@ async fn adopting_one_repos_clone_changes_no_other_repos_and_takes_owner_name_re
     // Only alpha's checkout is released: beta's branch is fetched into Chauffeur's own clone.
     let planned = import(&f, true).await;
     let released: Vec<_> = planned.releases.iter().map(|r| r.repo.as_str()).collect();
-    assert_eq!(released, ["fixture/alpha"], "{planned:?}");
+    assert_eq!(released, [named("alpha")], "{planned:?}");
 
     // SAFETY: the tests reading the switch hold `SWITCH`.
     unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
@@ -1630,11 +1664,23 @@ async fn adopting_one_repos_clone_changes_no_other_repos_and_takes_owner_name_re
     for w in &plan.workspaces {
         assert_eq!(w.outcome, ClaudeCodeOutcome::Imported, "{plan:?}");
     }
-    // Alpha's folder joins the clone folders, and its checkout is released.
-    let roots = &f.daemon.settings.get().clone_roots;
-    assert_eq!(roots.len(), 1, "{roots:?}");
+    // Alpha's clone becomes Chauffeur's: named in the settings for a repo of the main
+    // organization, its folder among the clone folders for one named with its owner. Its checkout
+    // is released.
+    let settings = f.daemon.settings.get();
+    if org.is_empty() {
+        assert_eq!(settings.clone_roots.len(), 1, "{:?}", settings.clone_roots);
+    } else {
+        assert!(
+            settings.clone_roots.is_empty(),
+            "{:?}",
+            settings.clone_roots
+        );
+        let path = settings.repos.get("alpha").and_then(|r| r.path.clone());
+        assert_eq!(path.as_deref(), Some(alpha.to_str().unwrap()));
+    }
     assert!(!is_branch(&alpha, "feat/a"));
-    // Beta's stays on its branch, though its folder is now a clone folder too.
+    // Beta's stays on its branch: Chauffeur keeps its own clone of beta.
     assert!(is_branch(&beta, "feat/b"));
     let ws = |branch: &str| {
         let slug = plan

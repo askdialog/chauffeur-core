@@ -1,6 +1,6 @@
 //! The live branches' workspaces (docs/adr/claude-code-import.md): each a workspace on its branch,
 //! its sessions resumable chats (`copy`). Each repo's clone is chosen at planning, once for the
-//! run: Chauffeur's, else the user's holding the branch (its folder then joins the clone folders).
+//! run: Chauffeur's, else the user's holding the branch, which becomes Chauffeur's (`adopt`).
 //! When that is the user's clone, the branch is released where it is checked out there (HEAD
 //! detached on the same commit, its uncommitted and untracked changes copied into the workspace);
 //! when Chauffeur has a clone of its own, the branch is fetched there and the user's checkouts
@@ -267,45 +267,54 @@ async fn prepare(
     Ok(())
 }
 
-/// Chauffeur's clone of `repo` when it has none: the user's, its folder joining the clone folders
-/// when it is named after the repo, as Chauffeur's clone folders need.
+/// Chauffeur's clone of `repo` when it has none: the user's. A repo of the main organization gets
+/// it named in the settings (`[repos.<name>] path`), for it alone; a repo named with its owner,
+/// which Chauffeur finds by its folder's name and origin, gets its folder among the clone
+/// folders (Chauffeur's own clones of such repos are read first).
 fn adopt(d: &Daemon, repo: &str, clone: &Path) -> Result<PathBuf> {
     let name = repo_folder(repo);
-    let named = clone
-        .file_name()
-        .is_some_and(|folder| folder.to_string_lossy() == name);
-    let Some(root) = clone.parent().filter(|_| named) else {
-        return Err(Error::BadRequest(format!(
-            "Chauffeur has no clone of {repo}, and {} is not named {name}, as its clone folders need: rename the folder, or clone {repo} into a folder named {name}, then run the import again",
-            clone.display()
-        )));
-    };
-    let known = d
-        .settings
-        .get()
-        .clone_roots
-        .iter()
-        .any(|r| same_folder(&expand_home(r), root));
-    if !known {
+    let text = clone.to_string_lossy().into_owned();
+    let written = if repo == name {
+        d.settings.update(|doc| {
+            let repos = conductor::implicit_table(doc.as_table_mut(), "repos");
+            conductor::implicit_table(repos, name).insert("path", toml_edit::value(text.as_str()));
+        })
+    } else {
+        let named = clone
+            .file_name()
+            .is_some_and(|folder| folder.to_string_lossy() == name);
+        let Some(root) = clone.parent().filter(|_| named) else {
+            return Err(Error::BadRequest(format!(
+                "Chauffeur has no clone of {repo}, and {} is not named {name}, as its clone folders need: rename the folder, or clone {repo} into a folder named {name}, then run the import again",
+                clone.display()
+            )));
+        };
+        let known = d
+            .settings
+            .get()
+            .clone_roots
+            .iter()
+            .any(|r| same_folder(&expand_home(r), root));
         let root = root.to_string_lossy().into_owned();
-        d.settings
-            .update(|doc| {
-                if let Some(roots) = doc
-                    .entry("clone_roots")
-                    .or_insert_with(|| toml_edit::value(toml_edit::Array::new()))
-                    .as_array_mut()
-                {
-                    roots.push(root.as_str());
-                }
-            })
-            .map_err(|e| {
-                Error::Internal(e.context("adding the clone's folder to the clone folders"))
-            })?;
-    }
+        d.settings.update(|doc| {
+            if known {
+                return;
+            }
+            if let Some(roots) = doc
+                .entry("clone_roots")
+                .or_insert_with(|| toml_edit::value(toml_edit::Array::new()))
+                .as_array_mut()
+            {
+                roots.push(root.as_str());
+            }
+        })
+    };
+    written.map_err(|e| {
+        Error::Internal(e.context(format!("naming {repo}'s clone in the settings")))
+    })?;
     d.repos.existing_clone(repo).ok_or_else(|| {
         Error::not_found(format!(
-            "the clone of {repo} in {} (its origin must be {repo}'s)",
-            root.display()
+            "{repo}'s clone at {text} (its origin must be {repo}'s)"
         ))
     })
 }
