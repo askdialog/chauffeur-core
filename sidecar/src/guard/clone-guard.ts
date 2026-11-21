@@ -1132,7 +1132,6 @@ function sharedChange(sub: string, rest: Value[], clone: GuardedClone, where: st
 function branchChange(args: Value[], branch: (value: Value | undefined) => string | undefined): string | undefined {
   let mode: "deletes" | "renames" | "overwrites" | undefined;
   let force = false;
-  let remotes = false;
   let settings = false;
   const operands: Value[] = [];
   for (let i = 0; i < args.length; i++) {
@@ -1144,15 +1143,12 @@ function branchChange(args: Value[], branch: (value: Value | undefined) => strin
     else if (opt === "-m" || opt === "-M" || opt === "--move") mode = "renames";
     else if (opt === "-c" || opt === "-C" || opt === "--copy") mode = "overwrites";
     else if (opt === "-f" || opt === "--force") force = true;
-    else if (opt === "-r" || opt === "--remotes") remotes = true;
     else if (opt === "-u" || opt === "--set-upstream-to") {
       settings = true;
       if (attached === undefined) i++;
     } else if (opt === "--unset-upstream" || opt === "--edit-description") settings = true;
     else if (BRANCH_VALUES.has(opt) && attached === undefined) i++;
   }
-  // Remote-tracking branches are git's copies of the remote's.
-  if (remotes) return undefined;
   if (settings) {
     const named = operands.map(branch).find(Boolean);
     return named && `changes the settings of ${named}`;
@@ -1173,8 +1169,11 @@ function switchChange(sub: string, args: Value[], branch: (value: Value | undefi
     const arg = args[i];
     if (!arg) continue;
     const [opt, attached] = option(arg.text);
-    // Paths follow: files checked out, no branch switched.
-    if (arg.known && arg.text === "--") return undefined;
+    // Paths follow: files checked out, no branch switched; a `--` ending the line changes nothing.
+    if (arg.known && arg.text === "--") {
+      if (i < args.length - 1) return undefined;
+      break;
+    }
     if (!arg.known || !opt.startsWith("-")) operands.push(arg);
     else if (forceCreate.includes(opt)) {
       const reset = branch(attached !== undefined ? after(arg, opt.length + 1) : args[++i]);
