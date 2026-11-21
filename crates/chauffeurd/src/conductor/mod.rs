@@ -803,6 +803,19 @@ async fn import_active(
 /// After a failed creation: the branch back in Conductor's worktree, made again at its commit if
 /// the creation's rollback deleted it.
 pub(crate) async fn put_back(git: &Git, clone: &Path, folder: &Path, branch: &str, head: &str) {
+    put_back_head(git, clone, folder, &[], branch, head).await;
+}
+
+/// `put_back`, HEAD run with `git_dir` (`--git-dir=…`, for a worktree whose folder is gone, from
+/// its clone) or in `folder`.
+pub(crate) async fn put_back_head(
+    git: &Git,
+    clone: &Path,
+    folder: &Path,
+    git_dir: &[&str],
+    branch: &str,
+    head: &str,
+) {
     let reference = format!("refs/heads/{branch}");
     if !git
         .ok(clone, &["rev-parse", "-q", "--verify", &reference])
@@ -813,8 +826,14 @@ pub(crate) async fn put_back(git: &Git, clone: &Path, folder: &Path, branch: &st
     {
         tracing::error!(%error, branch, "could not make a released branch again");
     }
-    if let Err(error) = git.run(folder, &["symbolic-ref", "HEAD", &reference]).await {
-        tracing::error!(%error, branch, "could not attach conductor's worktree to its branch again");
+    let at = if git_dir.is_empty() { folder } else { clone };
+    let args: Vec<&str> = git_dir
+        .iter()
+        .copied()
+        .chain(["symbolic-ref", "HEAD", reference.as_str()])
+        .collect();
+    if let Err(error) = git.run(at, &args).await {
+        tracing::error!(%error, branch, "could not attach a released worktree to its branch again");
     }
 }
 
@@ -825,33 +844,51 @@ pub(crate) async fn reapply(
     from: &Path,
     to: &Path,
 ) -> anyhow::Result<()> {
+    // Each change on its own: one that cannot be copied leaves the others coming.
+    let mut failed = Vec::new();
     if !changes.patch.is_empty() {
         let patch = tempfile::NamedTempFile::new()?;
         std::fs::write(patch.path(), &changes.patch)?;
-        git.run(
-            to,
-            &[
-                "apply",
-                "--binary",
-                "--whitespace=nowarn",
-                &patch.path().to_string_lossy(),
-            ],
-        )
-        .await?;
+        let path = patch.path().to_string_lossy();
+        if let Err(error) = git
+            .run(to, &["apply", "--binary", "--whitespace=nowarn", &path])
+            .await
+        {
+            failed.push(format!("the changes to tracked files ({error:#})"));
+        }
+        // `git apply` passes over a submodule's new commit without a word.
+        if changes
+            .patch
+            .windows(b"Subproject commit".len())
+            .any(|w| w == b"Subproject commit")
+        {
+            failed.push("a submodule's commit, which a patch does not carry".into());
+        }
     }
     for file in &changes.untracked {
-        let source = from.join(file);
-        let target = to.join(file);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
+        if let Err(error) = copy_untracked(&from.join(file), &to.join(file)) {
+            failed.push(format!("{file} ({error})"));
         }
-        let meta = std::fs::symlink_metadata(&source)?;
-        if meta.file_type().is_symlink() {
-            let _ = std::fs::remove_file(&target);
-            std::os::unix::fs::symlink(std::fs::read_link(&source)?, &target)?;
-        } else {
-            std::fs::copy(&source, &target)?;
-        }
+    }
+    if !failed.is_empty() {
+        anyhow::bail!("not copied: {}", failed.join("; "));
+    }
+    Ok(())
+}
+
+/// An untracked file, link or folder (a repo of its own inside, as git lists it) copied.
+fn copy_untracked(source: &Path, target: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let meta = std::fs::symlink_metadata(source)?;
+    if meta.file_type().is_symlink() {
+        let _ = std::fs::remove_file(target);
+        std::os::unix::fs::symlink(std::fs::read_link(source)?, target)?;
+    } else if meta.is_dir() {
+        crate::workspaces::copy_dir(source, target)?;
+    } else {
+        std::fs::copy(source, target)?;
     }
     Ok(())
 }

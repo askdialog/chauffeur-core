@@ -2,10 +2,12 @@
 //! sidecar's `context.copy`, streamed whatever its size), its conversation read back from the
 //! copy, recorded so that no session is imported twice.
 
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context;
+use chauffeur_protocol::claudecode::{ClaudeCodeOutcome, ClaudeCodeSessionPlan};
 use chauffeur_protocol::model::AgentKind;
 use chauffeur_protocol::sidecar::{
     AgentSessionMessagesParams, AgentSessionMessagesResult, ContextCopyParams,
@@ -13,8 +15,74 @@ use chauffeur_protocol::sidecar::{
 };
 
 use super::sessions::Session;
+use crate::chats::ImportedSession;
 use crate::store::WorkspaceRow;
 use crate::{Daemon, Error, Result};
+
+/// What the import says of each session: how it went, and what went wrong.
+pub(super) struct Report<'a> {
+    index: BTreeMap<String, usize>,
+    plans: &'a mut [ClaudeCodeSessionPlan],
+    pub(super) warnings: &'a mut Vec<String>,
+}
+
+impl<'a> Report<'a> {
+    pub(super) fn new(
+        plans: &'a mut [ClaudeCodeSessionPlan],
+        warnings: &'a mut Vec<String>,
+    ) -> Report<'a> {
+        let index = plans
+            .iter()
+            .enumerate()
+            .map(|(i, plan)| (plan.id.clone(), i))
+            .collect();
+        Report {
+            index,
+            plans,
+            warnings,
+        }
+    }
+
+    /// The sessions `ids` could not be imported, for `reason`.
+    pub(super) fn fail(&mut self, ids: &[String], reason: &str) {
+        for id in ids {
+            if let Some(&i) = self.index.get(id) {
+                self.plans[i].outcome = ClaudeCodeOutcome::Failed;
+                self.plans[i].reason = Some(reason.to_owned());
+            }
+        }
+    }
+
+    /// Imports `ids` into `workspace` as chats, closed tabs with `closed`: a session that fails
+    /// is said, the others go on.
+    pub(super) async fn import(
+        &mut self,
+        d: &Arc<Daemon>,
+        claude: &Path,
+        workspace: &WorkspaceRow,
+        ids: &[String],
+        sessions: &HashMap<String, Session>,
+        closed: bool,
+    ) {
+        for id in ids {
+            let (Some(&i), Some(session)) = (self.index.get(id), sessions.get(id)) else {
+                continue;
+            };
+            let plan = &mut self.plans[i];
+            plan.lands_in = Some(workspace.slug.clone());
+            match import_session(d, claude, workspace, session, closed).await {
+                Ok(true) => plan.outcome = ClaudeCodeOutcome::Imported,
+                Ok(false) => plan.outcome = ClaudeCodeOutcome::AlreadyImported,
+                Err(error) => {
+                    self.warnings
+                        .push(format!("“{}” could not be imported: {error}", plan.title));
+                    plan.outcome = ClaudeCodeOutcome::Failed;
+                    plan.reason = Some(error.to_string());
+                }
+            }
+        }
+    }
+}
 
 /// `<prefix><session id>` → the id of the chat it was imported as: never imported twice.
 const IMPORTED: &str = "claudecode_import:";
@@ -36,7 +104,7 @@ pub(super) fn workspace_of(d: &Daemon, chat: &str) -> Result<Option<String>> {
 
 /// Copies `session` into `workspace`'s Claude project folder and opens it there as a chat, a
 /// closed tab with `closed`; false when an earlier import has it.
-pub(super) async fn import_session(
+async fn import_session(
     d: &Arc<Daemon>,
     claude: &Path,
     workspace: &WorkspaceRow,
@@ -116,12 +184,14 @@ async fn open_copy(
         .chats
         .import_chat(
             workspace,
-            &session.title,
-            &session.id,
-            &session.last_active,
-            &events,
-            record,
-            closed,
+            ImportedSession {
+                title: &session.title,
+                session_id: &session.id,
+                last_active: &session.last_active,
+                events: &events,
+                record,
+                closed,
+            },
         )
         .await?;
     match imported {

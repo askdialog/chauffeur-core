@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS worktrees (
     grp TEXT,
     removed INTEGER NOT NULL DEFAULT 0,
     snapshot_ref TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    created_branch INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS worktrees_by_workspace ON worktrees(workspace_id);
 CREATE TABLE IF NOT EXISTS port_blocks (
@@ -412,6 +413,9 @@ pub struct WorktreeRow {
     pub removed: bool,
     pub snapshot_ref: Option<String>,
     pub created_at: String,
+    /// Its creation made its branch: a failed creation deletes it. A branch that was there
+    /// before (the user's, an import's) stays.
+    pub created_branch: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -638,6 +642,15 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         .exists([])?
     {
         conn.execute_batch("ALTER TABLE workspaces ADD COLUMN execution_fence TEXT")?;
+    }
+    if !conn
+        .prepare("SELECT 1 FROM pragma_table_info('worktrees') WHERE name='created_branch'")?
+        .exists([])?
+    {
+        // Whether the worktree's creation made its branch: a failed creation deletes only those.
+        conn.execute_batch(
+            "ALTER TABLE worktrees ADD COLUMN created_branch INTEGER NOT NULL DEFAULT 1",
+        )?;
     }
     if !conn
         .prepare("SELECT 1 FROM pragma_table_info('design_shares') WHERE name='team'")?
@@ -1554,8 +1567,8 @@ impl Store {
     pub fn insert_worktree(&self, row: &WorktreeRow) -> Result<()> {
         self.with(|c| {
             c.execute(
-                "INSERT INTO worktrees (id, workspace_id, repo, clone_path, path, branch, base_branch, base_commit, origin, grp, removed, snapshot_ref, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                "INSERT INTO worktrees (id, workspace_id, repo, clone_path, path, branch, base_branch, base_commit, origin, grp, removed, snapshot_ref, created_at, created_branch)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     row.id,
                     row.workspace_id,
@@ -1569,7 +1582,8 @@ impl Store {
                     row.group,
                     row.removed,
                     row.snapshot_ref,
-                    row.created_at
+                    row.created_at,
+                    row.created_branch
                 ],
             )
         })?;
@@ -1663,6 +1677,7 @@ impl Store {
             removed: row.get("removed")?,
             snapshot_ref: row.get("snapshot_ref")?,
             created_at: row.get("created_at")?,
+            created_branch: row.get("created_branch")?,
         })
     }
 
