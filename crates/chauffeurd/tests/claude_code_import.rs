@@ -1863,3 +1863,194 @@ async fn adopting(org: &str) {
         );
     }
 }
+
+/// Each repo the import makes a workspace in, Chauffeur having no clone of it: `pn` (pnpm and uv
+/// lockfiles at its root, yarn's in a subfolder), `js` (yarn and npm's), `nested` (lockfiles in
+/// subfolders only), `committed` (a setup committed), `mine` (a setup in the user's settings),
+/// `plain` (no lockfile), each with a live branch; and `hist`, whose session lands in its history
+/// exploration (poetry's).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
+    let _switch = SWITCH.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let claude = root.join("claude");
+    let projects = claude.join("projects").join("-code");
+    std::fs::create_dir_all(&projects).unwrap();
+    let repo = |name: &str, files: &[&str], branch: Option<&str>| {
+        let clone = clone_repo(&root, name, &[]);
+        for file in files {
+            let path = clone.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            commit(&clone, file, "lock\n");
+        }
+        if let Some(branch) = branch {
+            git(&clone, &["switch", "-q", "-c", branch]);
+            commit(&clone, "work.txt", "work\n");
+        }
+        let session = line(
+            &clone,
+            branch.unwrap_or("main"),
+            &ago(1),
+            &edit(&clone.join("README.md")),
+        );
+        let session = if branch.is_some() {
+            session
+        } else {
+            line(&clone, "main", &ago(1), r#""message":{"content":[]}"#)
+        };
+        std::fs::write(projects.join(format!("s-{name}.jsonl")), session + "\n").unwrap();
+        clone
+    };
+    let pn = repo(
+        "pn",
+        &["pnpm-lock.yaml", "uv.lock", "web/yarn.lock"],
+        Some("feat/pn"),
+    );
+    repo("js", &["yarn.lock", "package-lock.json"], Some("feat/js"));
+    repo(
+        "nested",
+        &["app/package-lock.json", "api/uv.lock"],
+        Some("feat/nested"),
+    );
+    let committed = repo("committed", &["bun.lock", ".chauffeur/settings.toml"], None);
+    std::fs::write(
+        committed.join(".chauffeur/settings.toml"),
+        "[scripts]\nsetup = \"make deps\"\n",
+    )
+    .unwrap();
+    git(&committed, &["commit", "-qam", "setup"]);
+    git(&committed, &["switch", "-q", "-c", "feat/committed"]);
+    commit(&committed, "work.txt", "work\n");
+    std::fs::write(
+        projects.join("s-committed.jsonl"),
+        line(
+            &committed,
+            "feat/committed",
+            &ago(1),
+            &edit(&committed.join("README.md")),
+        ) + "\n",
+    )
+    .unwrap();
+    repo("mine", &["Gemfile.lock"], Some("feat/mine"));
+    repo("plain", &[], Some("feat/plain"));
+    repo("hist", &["poetry.lock"], None);
+
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("settings.toml"),
+        "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46990\nlinear_enabled = false\n\n[repos.mine.scripts]\nsetup = \"make mine\"\n",
+    )
+    .unwrap();
+    let daemon = Daemon::open(Paths::new(
+        home.clone(),
+        root.join("workspaces"),
+        root.join("repos"),
+    ))
+    .unwrap();
+    let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    vars.insert(
+        "CLAUDE_CONFIG_DIR".into(),
+        claude.to_string_lossy().into_owned(),
+    );
+    daemon.shell_env.set_vars(vars);
+    daemon.chats.sidecar.use_binary(history_sidecar());
+    let f = Fixture {
+        _dir: dir,
+        root: root.clone(),
+        claude,
+        daemon,
+    };
+    let guessed = |plan: &ClaudeCodeImportResult| {
+        let mut setups: Vec<_> = plan
+            .setups
+            .iter()
+            .map(|s| (s.repo.clone(), s.command.clone(), s.lockfiles.join(" ")))
+            .collect();
+        setups.sort();
+        setups
+    };
+    let some = |command: &str| Some(command.to_string());
+    let expected = vec![
+        (
+            "hist".to_string(),
+            some("poetry install"),
+            "poetry.lock".to_string(),
+        ),
+        ("js".into(), some("yarn install"), "yarn.lock".into()),
+        (
+            "nested".into(),
+            None,
+            "api/uv.lock app/package-lock.json".into(),
+        ),
+        (
+            "pn".into(),
+            some("pnpm install && uv sync"),
+            "pnpm-lock.yaml uv.lock".into(),
+        ),
+    ];
+
+    // The dry run shows them and writes nothing.
+    let before = std::fs::read_to_string(home.join("settings.toml")).unwrap();
+    let planned = import(&f, true).await;
+    assert_eq!(guessed(&planned), expected, "{planned:?}");
+    assert_eq!(
+        std::fs::read_to_string(home.join("settings.toml")).unwrap(),
+        before
+    );
+
+    // SAFETY: the tests reading the switch hold `SWITCH`.
+    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    let plan = import(&f, false).await;
+    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
+    assert_eq!(guessed(&plan), expected, "{plan:?}");
+    for w in &plan.workspaces {
+        assert_eq!(w.outcome, ClaudeCodeOutcome::Imported, "{plan:?}");
+    }
+    // Written to the user's settings, theirs kept; nothing in the repos.
+    let settings = f.daemon.settings.get();
+    let setup = |repo: &str| {
+        settings
+            .repos
+            .get(repo)
+            .and_then(|r| r.scripts.as_ref())
+            .and_then(|s| {
+                chauffeurd::settings::RepoSettings::load(&root, &root, Some(s))
+                    .unwrap()
+                    .setup
+            })
+    };
+    assert_eq!(setup("pn").as_deref(), Some("pnpm install && uv sync"));
+    assert_eq!(setup("js").as_deref(), Some("yarn install"));
+    assert_eq!(setup("hist").as_deref(), Some("poetry install"));
+    assert_eq!(setup("mine").as_deref(), Some("make mine"));
+    for repo in ["nested", "committed", "plain"] {
+        assert_eq!(setup(repo), None, "{repo}");
+    }
+    assert!(!pn.join(".chauffeur").exists());
+    assert_eq!(
+        git(&committed, &["show", "HEAD:.chauffeur/settings.toml"]),
+        "[scripts]\nsetup = \"make deps\""
+    );
+    // Written before the worktrees: pn's workspace ran it.
+    let slug = plan
+        .workspaces
+        .iter()
+        .find(|w| w.branch.as_deref() == Some("feat/pn"))
+        .and_then(|w| w.workspace.clone())
+        .unwrap();
+    let id = f.daemon.workspaces.get(&slug).unwrap().id;
+    let commands: Vec<String> = f
+        .daemon
+        .procs
+        .list(&id)
+        .into_iter()
+        .map(|p| p.command)
+        .collect();
+    assert_eq!(commands, ["pnpm install && uv sync"]);
+
+    // A second run makes no workspace: it guesses nothing.
+    let again = import(&f, true).await;
+    assert!(again.setups.is_empty(), "{again:?}");
+}

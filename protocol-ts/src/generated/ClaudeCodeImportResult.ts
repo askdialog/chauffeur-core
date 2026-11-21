@@ -2,6 +2,7 @@
 import type { ClaudeCodeHistoryPlan } from "./ClaudeCodeHistoryPlan";
 import type { ClaudeCodeRelease } from "./ClaudeCodeRelease";
 import type { ClaudeCodeSessionPlan } from "./ClaudeCodeSessionPlan";
+import type { ClaudeCodeSetup } from "./ClaudeCodeSetup";
 import type { ClaudeCodeWorkspacePlan } from "./ClaudeCodeWorkspacePlan";
 
 export type ClaudeCodeImportResult = { dry_run: boolean, 
@@ -32,4 +33,8 @@ histories: Array<ClaudeCodeHistoryPlan>,
 /**
  * Live branches checked out in a clone or one of the user's worktrees, released there.
  */
-releases: Array<ClaudeCodeRelease>, warnings: Array<string>, };
+releases: Array<ClaudeCodeRelease>, 
+/**
+ * The repos of its workspaces that have no setup script: one guessed from their lockfiles.
+ */
+setups: Array<ClaudeCodeSetup>, warnings: Array<string>, };

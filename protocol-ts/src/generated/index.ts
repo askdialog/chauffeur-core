@@ -78,6 +78,7 @@ export type { ClaudeCodeImportResult } from "./ClaudeCodeImportResult";
 export type { ClaudeCodeOutcome } from "./ClaudeCodeOutcome";
 export type { ClaudeCodeRelease } from "./ClaudeCodeRelease";
 export type { ClaudeCodeSessionPlan } from "./ClaudeCodeSessionPlan";
+export type { ClaudeCodeSetup } from "./ClaudeCodeSetup";
 export type { ClaudeCodeWorkspaceKind } from "./ClaudeCodeWorkspaceKind";
 export type { ClaudeCodeWorkspacePlan } from "./ClaudeCodeWorkspacePlan";
 export type { ClearedScenery } from "./ClearedScenery";
