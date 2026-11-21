@@ -10,7 +10,7 @@ use chauffeur_protocol::claudecode::ClaudeCodeSetup;
 
 use crate::git::Git;
 use crate::repos::repo_folder;
-use crate::settings::RepoSettings;
+use crate::settings::{RepoSettings, sets_setup};
 use crate::{Daemon, Error, Result};
 
 struct Lockfile {
@@ -63,19 +63,35 @@ const LOCKFILES: [Lockfile; 8] = [
     },
 ];
 
-/// The setups guessed for the repos in `clones` (each repo's clone the import reads it from) that
-/// have none.
+/// A tree a workspace of the run checks out: a ref of a clone.
+pub(super) struct Tree {
+    pub(super) clone: PathBuf,
+    pub(super) reference: String,
+}
+
+/// The setups guessed for the repos of `trees` (each one's base first, then its branches') that
+/// have none: from the lockfiles of the base, none when one of the trees commits a setup (the
+/// user's settings, where the guess goes, come before a committed one).
 pub(super) async fn guess_all(
     d: &Daemon,
     git: &Git,
-    clones: &BTreeMap<String, PathBuf>,
+    trees: &BTreeMap<String, Vec<Tree>>,
 ) -> Vec<ClaudeCodeSetup> {
     let mut setups = Vec::new();
-    for (repo, clone) in clones {
-        if has_setup(d, repo, clone) {
+    for (repo, trees) in trees {
+        let Some(base) = trees.first() else {
+            continue;
+        };
+        if has_setup(d, repo, &base.clone) || committed(git, trees).await {
             continue;
         }
-        match git.run_bytes(clone, &["ls-files", "-z"]).await {
+        let listed = git
+            .run_bytes(
+                &base.clone,
+                &["ls-tree", "-r", "-z", "--name-only", &base.reference],
+            )
+            .await;
+        match listed {
             Ok(tracked) => {
                 let files = tracked
                     .split(|b| *b == 0)
@@ -91,8 +107,8 @@ pub(super) async fn guess_all(
     setups
 }
 
-/// A setup committed in the clone's checkout or in the user's settings; one unreadable counts as
-/// one, left as it is.
+/// A setup in the clone's own files (its local settings, its checkout's) or the user's settings;
+/// one unreadable counts as one, left as it is.
 fn has_setup(d: &Daemon, repo: &str, clone: &Path) -> bool {
     let settings = d.settings.get();
     let user = settings
@@ -100,6 +116,23 @@ fn has_setup(d: &Daemon, repo: &str, clone: &Path) -> bool {
         .get(repo_folder(repo))
         .and_then(|r| r.scripts.as_ref());
     RepoSettings::load(clone, clone, user).map_or(true, |s| s.setup.is_some())
+}
+
+/// One of `trees` commits a setup, in Chauffeur's settings or Conductor's.
+async fn committed(git: &Git, trees: &[Tree]) -> bool {
+    for tree in trees {
+        for file in [".chauffeur/settings.toml", ".conductor/settings.toml"] {
+            let object = format!("{}:{file}", tree.reference);
+            if !git.ok(&tree.clone, &["cat-file", "-e", &object]).await {
+                continue;
+            }
+            let text = git.run(&tree.clone, &["show", &object]).await;
+            if text.map_or(true, |text| sets_setup(&text)) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// `repo`'s setup from its tracked `files`: its root lockfiles' commands, else its lockfiles in

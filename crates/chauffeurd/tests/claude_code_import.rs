@@ -1865,9 +1865,12 @@ async fn adopting(org: &str) {
 }
 
 /// Repos the import makes a workspace in, Chauffeur having no clone of them, each with a live
-/// branch: `pn` (pnpm's lockfile), `committed` (bun's, and a setup committed), `mine` (bundle's,
-/// and a setup in the user's settings); and `hist` (poetry's), whose session lands in its history
-/// exploration. Which lockfile gives which setup is `setup.rs`'s.
+/// branch: `pn` (pnpm's lockfile, and inline settings of the user's), `committed` (bun's, and a
+/// setup committed), `mine` (bundle's, and a setup in the user's settings), `br` (npm's, its
+/// branch committing a setup in a worktree of the user's, the clone on main), `stale` (yarn's,
+/// `origin/main` committing a setup the clone's checkout has not pulled); and `hist` (poetry's),
+/// whose session lands in its history exploration. Which lockfile gives which setup is
+/// `setup.rs`'s.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     let _switch = SWITCH.lock().await;
@@ -1888,6 +1891,7 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
                 &format!("[scripts]\nsetup = \"{setup}\"\n"),
             );
         }
+        git(&clone, &["push", "-q", "origin", "main"]);
         let session = match branch {
             Some(branch) => {
                 git(&clone, &["switch", "-q", "-c", branch]);
@@ -1903,12 +1907,60 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     let committed = repo("committed", "bun.lock", Some("make deps"), Some("feat/c"));
     repo("mine", "Gemfile.lock", None, Some("feat/mine"));
     repo("hist", "poetry.lock", None, None);
+    let session = |name: &str, folder: &Path, branch: &str| {
+        let text = line(folder, branch, &ago(1), &edit(&folder.join("README.md")));
+        std::fs::write(projects.join(format!("s-{name}.jsonl")), text + "\n").unwrap();
+    };
+    let br = clone_repo(&root, "br", &[]);
+    commit(&br, "package-lock.json", "lock\n");
+    git(&br, &["push", "-q", "origin", "main"]);
+    let br_worktree = root.join("wt-br");
+    git(
+        &br,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/br",
+            br_worktree.to_str().unwrap(),
+        ],
+    );
+    std::fs::create_dir_all(br_worktree.join(".chauffeur")).unwrap();
+    commit(
+        &br_worktree,
+        ".chauffeur/settings.toml",
+        "[scripts]\nsetup = \"make br\"\n",
+    );
+    session("br", &br_worktree, "feat/br");
+    let stale = clone_repo(&root, "stale", &["yarn.lock"]);
+    let team = root.join("team-stale");
+    git(
+        &root,
+        &[
+            "clone",
+            "-q",
+            root.join("origin/stale.git").to_str().unwrap(),
+            team.to_str().unwrap(),
+        ],
+    );
+    std::fs::create_dir_all(team.join(".chauffeur")).unwrap();
+    commit(
+        &team,
+        ".chauffeur/settings.toml",
+        "[scripts]\nsetup = \"make stale\"\n",
+    );
+    git(&team, &["push", "-q", "origin", "main"]);
+    git(&stale, &["fetch", "-q"]);
+    git(&stale, &["switch", "-q", "-c", "feat/stale"]);
+    commit(&stale, "work.txt", "work\n");
+    session("stale", &stale, "feat/stale");
 
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::write(
         home.join("settings.toml"),
-        "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46990\nlinear_enabled = false\n\n[repos.mine.scripts]\nsetup = \"make mine\"\n",
+        "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46990\nlinear_enabled = false\n\n[repos]\npn = { env = { FOO = \"1\" } }\n\n[repos.mine.scripts]\nsetup = \"make mine\"\n",
     )
     .unwrap();
     let daemon = Daemon::open(Paths::new(
@@ -1973,7 +2025,15 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     assert_eq!(setup("pn").as_deref(), Some("pnpm install"));
     assert_eq!(setup("hist").as_deref(), Some("poetry install"));
     assert_eq!(setup("mine").as_deref(), Some("make mine"));
-    assert_eq!(setup("committed"), None);
+    for repo in ["committed", "br", "stale"] {
+        assert_eq!(setup(repo), None, "{repo}");
+    }
+    // The user's inline settings of pn are kept beside its setup.
+    let env = settings.repos.get("pn").map(|r| r.env.0.clone());
+    assert_eq!(
+        env.and_then(|e| e.get("FOO").cloned()).as_deref(),
+        Some("1")
+    );
     assert!(!pn.join(".chauffeur").exists());
     assert_eq!(
         git(&committed, &["status", "--porcelain", "--", ".chauffeur"]),

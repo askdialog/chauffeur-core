@@ -312,8 +312,8 @@ pub async fn import(
             );
         }
     }
-    let clones = workspace_clones(d, &sources, &plan.histories, &repos)?;
-    let setups = setup::guess_all(d, &repos.git, &clones).await;
+    let trees = workspace_trees(d, &sources, &plan.histories, &repos).await?;
+    let setups = setup::guess_all(d, &repos.git, &trees).await;
     warnings.extend(repos.warnings);
     if params.dry_run {
         for history in &mut plan.histories {
@@ -353,20 +353,31 @@ pub async fn import(
     })
 }
 
-/// The repos the run makes a workspace in, with the clone it reads each from: a branch's, and a
-/// history's whose exploration is not ready.
-fn workspace_clones(
+/// The trees the run checks out in each repo it makes a workspace in: first its base, in the clone
+/// the workspaces come from (a branch's, or a history's whose exploration is not ready); then each
+/// branch's, in the user's clone holding it.
+async fn workspace_trees(
     d: &Daemon,
     sources: &HashMap<branches::RepoBranch, branches::Source>,
     histories: &[ClaudeCodeHistoryPlan],
     repos: &Repos<'_>,
-) -> Result<BTreeMap<String, PathBuf>> {
+) -> Result<BTreeMap<String, Vec<setup::Tree>>> {
     let mut clones = BTreeMap::new();
+    let mut branches: BTreeMap<String, Vec<setup::Tree>> = BTreeMap::new();
     for (key, source) in sources {
         if let Some(clone) = source.chauffeur.as_ref().or(source.clone.as_ref()) {
             clones
                 .entry(key.repo.clone())
                 .or_insert_with(|| clone.clone());
+        }
+        if let Some(clone) = &source.clone {
+            branches
+                .entry(key.repo.clone())
+                .or_default()
+                .push(setup::Tree {
+                    clone: clone.clone(),
+                    reference: format!("refs/heads/{}", key.branch),
+                });
         }
     }
     for history in histories {
@@ -381,7 +392,14 @@ fn workspace_clones(
             clones.entry(history.repo.clone()).or_insert(clone);
         }
     }
-    Ok(clones)
+    let mut trees = BTreeMap::new();
+    for (repo, clone) in clones {
+        let (_, reference) = repos.base(&clone).await;
+        let mut checked = vec![setup::Tree { clone, reference }];
+        checked.extend(branches.remove(&repo).unwrap_or_default());
+        trees.insert(repo, checked);
+    }
+    Ok(trees)
 }
 
 /// A checkout of a branch to release, with the clone it belongs to.
