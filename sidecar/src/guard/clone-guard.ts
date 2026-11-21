@@ -1116,6 +1116,8 @@ function sharedChange(sub: string, rest: Value[], clone: GuardedClone, where: st
   const branch = (value: Value | undefined) => protectedBranch(value, clone);
   const onBranch = (what: string | undefined) => (what ? { what, instead: WORK_ON_OWN } : undefined);
   const asked = (what: string | undefined) => (what ? { what, instead: ASK_USER } : undefined);
+  // The action it is given (`git worktree prune`): its first word.
+  const action = rest.find((arg) => !arg.known || !arg.text.startsWith("-"));
   switch (sub) {
     case "branch":
       return onBranch(branchChange(expanded(rest, "dDmMcCfrav"), branch));
@@ -1125,9 +1127,9 @@ function sharedChange(sub: string, rest: Value[], clone: GuardedClone, where: st
     case "rebase":
       return onBranch(rebaseChange(rest, branch));
     case "worktree":
-      if (words[0] === "add") return onBranch(worktreeAdd(rest.slice(texts.indexOf("add") + 1), branch));
+      if (action?.known && action.text === "add") return onBranch(worktreeAdd(rest.slice(rest.indexOf(action) + 1), branch));
       return asked(
-        ["prune", "remove", "move", "lock", "unlock", "repair"].includes(words[0] ?? "")
+        actionIn(action, ["prune", "remove", "move", "lock", "unlock", "repair"])
           ? `changes worktrees of ${clone.clone}, the user's own included`
           : undefined,
       );
@@ -1155,9 +1157,9 @@ function sharedChange(sub: string, rest: Value[], clone: GuardedClone, where: st
         ? undefined
         : { what: `changes the settings of ${clone.clone}`, instead: ONE_COMMAND };
     case "remote":
-      return asked(REMOTE_CHANGES.has(words[0] ?? "") ? `changes the remotes of ${clone.clone}` : undefined);
+      return asked(actionIn(action, [...REMOTE_CHANGES]) ? `changes the remotes of ${clone.clone}` : undefined);
     case "reflog":
-      return asked(["expire", "delete", "drop", "write"].includes(words[0] ?? "") ? `rewrites the reflogs of ${clone.clone}` : undefined);
+      return asked(actionIn(action, ["expire", "delete", "drop", "write"]) ? `rewrites the reflogs of ${clone.clone}` : undefined);
     case "replace":
       // Replacements are refs of the repository: the clone's. Listing them reads.
       return asked(
@@ -1169,10 +1171,20 @@ function sharedChange(sub: string, rest: Value[], clone: GuardedClone, where: st
       // Notes are refs of the repository: the clone's.
       return asked(words[0] === undefined || ["list", "show", "get-ref"].includes(words[0]) ? undefined : `changes the notes of ${clone.clone}`);
     case "stash":
-      return asked(["clear", "drop"].includes(words[0] ?? "") ? `erases stashes of ${clone.clone}, the user's own among them` : undefined);
+      // Its action comes first, or none: an option first stashes (`git stash -m wip`).
+      return asked(
+        actionIn(rest[0] === action ? action : undefined, ["clear", "drop"])
+          ? `erases stashes of ${clone.clone}, the user's own among them`
+          : undefined,
+      );
     default:
       return asked(HOUSEKEEPING.has(sub) ? `rewrites what git keeps for ${clone.clone} (\`git ${sub}\`)` : undefined);
   }
+}
+
+/** `action` is one of `actions`, or a word only the line knows, which may be any. */
+function actionIn(action: Value | undefined, actions: readonly string[]): boolean {
+  return action !== undefined && (!action.known || actions.includes(action.text));
 }
 
 /** `git branch` deleting, renaming, copying onto, force-moving or setting up one of the clone's branches. */
