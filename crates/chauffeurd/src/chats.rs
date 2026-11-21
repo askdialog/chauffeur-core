@@ -1158,15 +1158,7 @@ impl ChatManager {
             } else {
                 Vec::new()
             },
-            source_clones: config_repos
-                .iter()
-                .filter_map(|repo| {
-                    Some(chauffeur_protocol::sidecar::SourceClone {
-                        clone: repo.clone_path.as_ref()?.display().to_string(),
-                        worktree: repo.path.display().to_string(),
-                    })
-                })
-                .collect(),
+            source_clones: source_clones(&d, &config_repos).await,
             resume_session_id: chat.agent_session_id.clone(),
             env,
             append_system_prompt: system_prompt(
@@ -4436,6 +4428,33 @@ pub(crate) fn default_choice(d: &Daemon) -> Result<LoadoutEntry> {
             effort: None,
             fast: false,
         }))
+}
+
+/// The clones of a workspace's repos with their worktrees, the branch checked out in each and the
+/// repo's base branch: a worktree shares its clone's branches, which the sidecar keeps agents off.
+async fn source_clones(
+    d: &Daemon,
+    repos: &[crate::genconfig::RepoEntry],
+) -> Vec<chauffeur_protocol::sidecar::SourceClone> {
+    let git = crate::git::Git::new(d.shell_env.clone());
+    let mut clones = Vec::new();
+    for repo in repos {
+        let Some(clone) = &repo.clone_path else {
+            continue;
+        };
+        // Unread, the clone's branch goes unguarded; git still keeps a checked-out one.
+        let branch = git.current_branch(clone).await.unwrap_or_else(|error| {
+            tracing::warn!(%error, clone = %clone.display(), "could not read the clone's branch");
+            None
+        });
+        clones.push(chauffeur_protocol::sidecar::SourceClone {
+            clone: clone.display().to_string(),
+            worktree: repo.path.display().to_string(),
+            branch,
+            default_branch: Some(repo.base_branch.clone()).filter(|base| !base.is_empty()),
+        });
+    }
+    clones
 }
 
 /// What a chat of `agent` gets when the user picked no model (a design chat, a fork into the other

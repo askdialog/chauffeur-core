@@ -230,7 +230,8 @@ describe("the sidecar over JSON-RPC", () => {
 
   test("passes the source clones the session never writes into on, and checks them", async () => {
     const { call, agent } = sidecar();
-    const source_clones = [{ clone: "/code/web", worktree: "/ws/web" }];
+    // The branches the clone keeps, its checked-out and default ones, reach the guard.
+    const source_clones = [{ clone: "/code/web", worktree: "/ws/web", branch: "user-work", default_branch: "main" }, { clone: "/code/api", worktree: "/ws/api" }];
     expect((await call("session.start", { ...START, source_clones }))?.error).toBeUndefined();
     expect(agent.sessions[0]?.params.source_clones).toEqual(source_clones);
     expect((await call("session.start", { ...START, chat_id: "c2" }))?.error).toBeUndefined();

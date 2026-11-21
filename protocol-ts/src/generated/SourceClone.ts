@@ -3,4 +3,12 @@
 /**
  * A clone of one of a workspace's repos, and its worktree in the workspace.
  */
-export type SourceClone = { clone: string, worktree: string, };
+export type SourceClone = { clone: string, worktree: string, 
+/**
+ * The branch checked out in the clone; none when its HEAD is detached.
+ */
+branch?: string, 
+/**
+ * The repo's base branch, the one workspaces start from.
+ */
+default_branch?: string, };

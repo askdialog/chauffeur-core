@@ -291,7 +291,14 @@ function sourceClones(value: unknown): SourceClone[] {
   if (!Array.isArray(value)) throw invalid("source_clones must be an array");
   return value.map((item) => {
     const s = object(item, "source_clones[]");
-    return { clone: string(s, "clone"), worktree: string(s, "worktree") };
+    const branch = optionalString(s, "branch");
+    const defaultBranch = optionalString(s, "default_branch");
+    return {
+      clone: string(s, "clone"),
+      worktree: string(s, "worktree"),
+      ...(branch ? { branch } : {}),
+      ...(defaultBranch ? { default_branch: defaultBranch } : {}),
+    };
   });
 }
 

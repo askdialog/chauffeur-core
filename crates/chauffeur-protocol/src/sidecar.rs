@@ -703,6 +703,14 @@ pub struct AgentTitleResult {
 pub struct SourceClone {
     pub clone: String,
     pub worktree: String,
+    /// The branch checked out in the clone; none when its HEAD is detached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub branch: Option<String>,
+    /// The repo's base branch, the one workspaces start from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default_branch: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
