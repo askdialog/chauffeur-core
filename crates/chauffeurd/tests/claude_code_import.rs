@@ -756,8 +756,9 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
         ["in-chauffeur-2", "in-chauffeur", "history"]
     );
 
-    // A live branch checked out in one of the user's worktrees, or another clone of the repo,
-    // is released there.
+    // A live branch checked out in one of the user's worktrees is released there; in another
+    // clone of the repo (feat/two in web-2), it is fetched into the one chosen for the run, which
+    // keeps it.
     // One whose folder is gone carries its commits only; an orchestration's (feat/held, a child)
     // waits for the version that imports them.
     let release = |branch: &str, folder: &str, commits_only: bool| ClaudeCodeRelease {
@@ -770,7 +771,6 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
         plan.releases,
         [
             release("feat/y", "clones/web/.wt/y", true),
-            release("feat/two", "clones/web-2", false),
             release("feat/ext", "scratch/ext", true),
         ]
     );
@@ -1620,9 +1620,9 @@ async fn adopting_takes_repos_named_with_their_owner() {
     adopting("").await;
 }
 
-/// No clone folder: `alpha` has no clone of Chauffeur's, only the user's; `beta` has Chauffeur's
-/// own beside the user's. Both user clones hold their branch with changes. With `org` empty, the
-/// repos are named `fixture/alpha` and `fixture/beta`.
+/// No clone folder: `alpha` has no clone of Chauffeur's, only two of the user's, each holding a
+/// branch; `beta` has Chauffeur's own beside the user's. Every user clone holds its branch with
+/// changes. With `org` empty, the repos are named `fixture/alpha` and `fixture/beta`.
 async fn adopting(org: &str) {
     let _switch = SWITCH.lock().await;
     let named = |name: &str| {
@@ -1643,6 +1643,30 @@ async fn adopting(org: &str) {
     };
     let alpha = on_branch("alpha", "feat/a");
     let beta = on_branch("beta", "feat/b");
+    // The user's second clone of alpha, on another branch.
+    let alpha2 = root.join("clones2/alpha");
+    git(
+        &root,
+        &[
+            "clone",
+            "-q",
+            alpha.to_str().unwrap(),
+            alpha2.to_str().unwrap(),
+        ],
+    );
+    let alpha_url = "https://github.com/fixture/alpha.git";
+    git(&alpha2, &["remote", "set-url", "origin", alpha_url]);
+    git(
+        &alpha2,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", root.join("origin/alpha.git").display()),
+            alpha_url,
+        ],
+    );
+    git(&alpha2, &["switch", "-q", "-c", "feat/a2", "origin/main"]);
+    commit(&alpha2, "work2.txt", "work\n");
+    std::fs::write(alpha2.join("README.md"), "alpha2, changed\n").unwrap();
     // Chauffeur's own clone of beta, where it clones repos.
     let own = root.join("repos").join(named("beta"));
     let origin = root.join("origin/beta.git");
@@ -1669,7 +1693,11 @@ async fn adopting(org: &str) {
     let claude = root.join("claude");
     let projects = claude.join("projects").join("-code");
     std::fs::create_dir_all(&projects).unwrap();
-    for (id, clone, branch) in [("s-a", &alpha, "feat/a"), ("s-b", &beta, "feat/b")] {
+    for (id, clone, branch) in [
+        ("s-a", &alpha, "feat/a"),
+        ("s-a2", &alpha2, "feat/a2"),
+        ("s-b", &beta, "feat/b"),
+    ] {
         std::fs::write(
             projects.join(format!("{id}.jsonl")),
             line(clone, branch, &ago(1), &edit(&clone.join("README.md"))) + "\n",
@@ -1703,10 +1731,17 @@ async fn adopting(org: &str) {
         daemon,
     };
 
-    // Only alpha's checkout is released: beta's branch is fetched into Chauffeur's own clone.
+    // One clone of alpha is chosen for the run, its checkout released; the other's branch is
+    // fetched into it, as beta's into Chauffeur's own clone.
     let planned = import(&f, true).await;
     let released: Vec<_> = planned.releases.iter().map(|r| r.repo.as_str()).collect();
     assert_eq!(released, [named("alpha")], "{planned:?}");
+    let (alpha, alpha_branch, alpha2, alpha2_branch) =
+        if Path::new(&planned.releases[0].folder) == alpha {
+            (alpha, "feat/a", alpha2, "feat/a2")
+        } else {
+            (alpha2, "feat/a2", alpha, "feat/a")
+        };
 
     // SAFETY: the tests reading the switch hold `SWITCH`.
     unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
@@ -1730,8 +1765,9 @@ async fn adopting(org: &str) {
         let path = settings.repos.get("alpha").and_then(|r| r.path.clone());
         assert_eq!(path.as_deref(), Some(alpha.to_str().unwrap()));
     }
-    assert!(!is_branch(&alpha, "feat/a"));
-    // Beta's stays on its branch: Chauffeur keeps its own clone of beta.
+    assert!(!is_branch(&alpha, alpha_branch));
+    // The other clone of alpha stays on its branch, as beta's: Chauffeur keeps its own clone.
+    assert!(is_branch(&alpha2, alpha2_branch));
     assert!(is_branch(&beta, "feat/b"));
     let ws = |branch: &str| {
         let slug = plan
@@ -1750,9 +1786,18 @@ async fn adopting(org: &str) {
         )),
         own.join(".git")
     );
-    // Both carry their changes.
+    let alpha2_checkout = ws("feat/a2").join("alpha");
+    assert_eq!(
+        PathBuf::from(git(
+            &alpha2_checkout,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"]
+        )),
+        alpha.join(".git")
+    );
+    // Each carries its changes.
     for (checkout, name) in [
         (ws("feat/a").join("alpha"), "alpha"),
+        (alpha2_checkout, "alpha2"),
         (beta_checkout, "beta"),
     ] {
         assert_eq!(
