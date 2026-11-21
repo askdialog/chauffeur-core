@@ -700,6 +700,24 @@ mod tests {
             std::fs::read_to_string(kept.join("mine.txt")).unwrap(),
             "mine"
         );
+        // A worktree of the user's at that path stays, registered, with what it holds.
+        let theirs = root.join("theirs-wt");
+        let status = std::process::Command::new("git")
+            .args(["-c", "core.hooksPath=/dev/null", "worktree", "add", "-q"])
+            .arg(&theirs)
+            .arg("theirs")
+            .current_dir(&clone)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        std::fs::write(theirs.join("mine.txt"), "mine").unwrap();
+        let _ = git.worktree_add(&clone, &theirs, "again", "main").await;
+        assert_eq!(
+            std::fs::read_to_string(theirs.join("mine.txt")).unwrap(),
+            "mine"
+        );
+        let listed = git.worktree_list(&clone).await.unwrap();
+        assert!(listed.iter().any(|w| w.path == theirs), "{listed:?}");
     }
 
     #[test]
