@@ -687,6 +687,16 @@ mod tests {
             "{done}"
         );
         assert!(!done.contains("git -C /tmp/gone"), "{done}");
+        // A folder with a space is quoted, so the line runs as it is.
+        let mut spaced = claude_code_plan(false, ClaudeCodeOutcome::Imported);
+        for r in &mut spaced.releases {
+            r.folder = r.folder.replace("/code/", "/My Code/");
+        }
+        let done_spaced = claude_code_outcome(&spaced);
+        assert!(
+            done_spaced.contains("git -C '/My Code/shop' stash --include-untracked"),
+            "{done_spaced}"
+        );
         assert!(
             done.contains("shop feat/gone came with its commits only: whatever /tmp/gone still holds stays there."),
             "{done}"
