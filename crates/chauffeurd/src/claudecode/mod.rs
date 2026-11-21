@@ -238,8 +238,8 @@ pub async fn import(
             session.lands_in = Some(lands_in.clone());
         }
     }
-    // The branches this version makes workspaces of: each one's own, not yet made by an earlier
-    // import. Each repo's clone is chosen now, once for the whole run: Chauffeur's, else the
+    // The branches this version makes workspaces of: each one's own, in the repos an earlier
+    // import's workspace on it lacks (all, without one). Each repo's clone is chosen now, once for the whole run: Chauffeur's, else the
     // user's holding the branch, which becomes Chauffeur's (`branches::adopt`).
     let mut releases = Vec::new();
     let mut sources = HashMap::new();
@@ -251,10 +251,9 @@ pub async fn import(
         let Some(branch) = &workspace.branch else {
             continue;
         };
-        if branches::existing(d, workspace, branch)?.is_some() {
-            continue;
-        }
-        for repo in &workspace.repos {
+        // An earlier import's workspace on the branch: only the repos it lacks.
+        let existing = branches::existing(d, workspace, branch)?;
+        for repo in &branches::missing_repos(d, workspace, branch, existing.as_ref())? {
             let clone = repos.source(repo, branch).await;
             let chauffeur = d.repos.existing_clone(repo);
             // Its checkouts in the user's clone holding it: their changes are copied, and they are
@@ -275,8 +274,18 @@ pub async fn import(
                     .as_ref()
                     .is_some_and(|u| crate::conductor::same_folder(c, u))
             });
+            // Where Claude Code still runs, nothing is released: the import refuses that branch.
+            let running = |h: &&Holder| {
+                let folder = real(Path::new(&h.release.folder));
+                running_folders.iter().any(|r| r.starts_with(&folder))
+            };
             if released {
-                releases.extend(holders.iter().map(|h| h.release.clone()));
+                releases.extend(
+                    holders
+                        .iter()
+                        .filter(|h| !running(h))
+                        .map(|h| h.release.clone()),
+                );
             }
             sources.insert(
                 branches::RepoBranch::new(repo, branch),

@@ -250,7 +250,9 @@ impl Git {
         start: &str,
     ) -> anyhow::Result<()> {
         let path_str = path.to_string_lossy();
-        let added = if self.branch_exists(clone, branch).await {
+        let existed = path.exists();
+        let had_branch = self.branch_exists(clone, branch).await;
+        let added = if had_branch {
             self.run(
                 clone,
                 &[
@@ -281,14 +283,20 @@ impl Git {
             .await
         };
         if let Err(error) = added {
-            // An add that failed past its registration (a hook of the clone's): taken back, or
-            // the next add at that path is refused.
-            let _ = self
-                .run(
-                    clone,
-                    &["worktree", "remove", "--force", "--force", &path_str],
-                )
-                .await;
+            // An add that failed past its registration (a hook of the clone's) is taken back, or
+            // the next add at that path is refused; and the branch it made. Never a folder or a
+            // branch that was there before.
+            if !existed {
+                let _ = self
+                    .run(
+                        clone,
+                        &["worktree", "remove", "--force", "--force", &path_str],
+                    )
+                    .await;
+            }
+            if !had_branch && self.branch_exists(clone, branch).await {
+                let _ = self.delete_branch(clone, branch).await;
+            }
             return Err(error);
         }
         Ok(())
@@ -642,6 +650,66 @@ async fn output(command: &mut Command) -> std::io::Result<std::process::Output> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A repo whose `post-checkout` hook fails: `git worktree add` registers, checks out, then fails.
+    fn failing_clone(root: &Path) -> PathBuf {
+        let clone = root.join("clone");
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&clone)
+                .env("GIT_AUTHOR_NAME", "t")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "t")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        };
+        std::fs::create_dir_all(&clone).unwrap();
+        run(&["init", "-q", "-b", "main"]);
+        run(&["commit", "-q", "--allow-empty", "-m", "init"]);
+        run(&["branch", "theirs"]);
+        let hook = clone.join(".git/hooks/post-checkout");
+        std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        clone
+    }
+
+    #[tokio::test]
+    async fn a_failed_worktree_add_takes_back_what_it_made_and_only_that() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let clone = failing_clone(&root);
+        let git = Git::new(ShellEnv::new());
+        // A new branch and folder: both taken back.
+        let path = root.join("new");
+        assert!(
+            git.worktree_add(&clone, &path, "made", "main")
+                .await
+                .is_err()
+        );
+        assert!(!git.branch_exists(&clone, "made").await);
+        let listed = git.worktree_list(&clone).await.unwrap();
+        assert!(listed.iter().all(|w| w.path != path), "{listed:?}");
+        // A branch that was there before stays.
+        assert!(
+            git.worktree_add(&clone, &root.join("other"), "theirs", "main")
+                .await
+                .is_err()
+        );
+        assert!(git.branch_exists(&clone, "theirs").await);
+        // A folder that was there before stays, with what it holds.
+        let kept = root.join("kept");
+        std::fs::create_dir_all(&kept).unwrap();
+        std::fs::write(kept.join("mine.txt"), "mine").unwrap();
+        let _ = git.worktree_add(&clone, &kept, "again", "main").await;
+        assert_eq!(
+            std::fs::read_to_string(kept.join("mine.txt")).unwrap(),
+            "mine"
+        );
+    }
 
     #[test]
     fn the_base_remote_is_the_one_gh_resolved_as_base() {

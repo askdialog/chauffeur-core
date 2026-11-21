@@ -47,6 +47,11 @@ pub struct ClaudeCodeImportResult {
     pub warnings: Vec<String>,
 }
 
+/// A workspace's outcome from a daemon that plans only.
+fn planned() -> ClaudeCodeOutcome {
+    ClaudeCodeOutcome::Import
+}
+
 #[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -120,10 +125,14 @@ pub struct ClaudeCodeWorkspacePlan {
     /// Repos whose uncommitted default-branch changes it carries.
     pub changes_from: Vec<String>,
     /// `import` in a plan; `imported` or `failed` once run, `reason` saying why it failed.
-    /// Workspaces of the kinds a later version imports stay `import`.
+    /// Workspaces of the kinds a later version imports stay `import`. (Defaults: a daemon from
+    /// before plans only.)
+    #[serde(default = "planned")]
     pub outcome: ClaudeCodeOutcome,
+    #[serde(default)]
     pub reason: Option<String>,
     /// The workspace made, or the one an earlier import made on that branch, by name.
+    #[serde(default)]
     pub workspace: Option<String>,
 }
 
@@ -149,5 +158,24 @@ pub struct ClaudeCodeRelease {
     pub folder: String,
     /// Its folder is gone, or half deleted under a temporary folder (a cleanup cut short): the
     /// branch's commits come, never its changes.
+    #[serde(default)]
     pub commits_only: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_plan_from_a_daemon_that_only_planned_still_reads() {
+        let workspace: ClaudeCodeWorkspacePlan = serde_json::from_str(
+            r#"{"name":"w","kind":"branch","branch":"b","repos":["r"],"parent":null,"sessions":[],"changes_from":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(workspace.outcome, ClaudeCodeOutcome::Import);
+        assert!(workspace.reason.is_none() && workspace.workspace.is_none());
+        let release: ClaudeCodeRelease =
+            serde_json::from_str(r#"{"repo":"r","branch":"b","folder":"/f"}"#).unwrap();
+        assert!(!release.commits_only);
+    }
 }

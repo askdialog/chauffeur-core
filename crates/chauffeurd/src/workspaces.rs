@@ -3838,6 +3838,10 @@ pub(crate) fn copy_dir(from: &Path, to: &Path) -> anyhow::Result<()> {
             std::fs::create_dir_all(&target)?;
         } else if entry.file_type().is_file() {
             std::fs::copy(entry.path(), &target)?;
+        } else if entry.file_type().is_symlink() {
+            // A link stays a link, pointing where it pointed.
+            let _ = std::fs::remove_file(&target);
+            std::os::unix::fs::symlink(std::fs::read_link(entry.path())?, &target)?;
         }
     }
     Ok(())
