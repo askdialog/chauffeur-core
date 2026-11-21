@@ -5,7 +5,8 @@ use crate::client::Client;
 use crate::render::sanitize_terminal;
 use anyhow::bail;
 use chauffeur_protocol::claudecode::{
-    ClaudeCodeImportParams, ClaudeCodeImportResult, ClaudeCodeOutcome, ClaudeCodeWorkspaceKind,
+    ClaudeCodeImportParams, ClaudeCodeImportResult, ClaudeCodeOutcome, ClaudeCodeRelease,
+    ClaudeCodeWorkspaceKind,
 };
 use chauffeur_protocol::client::ClientCall;
 use chauffeur_protocol::conductor::{
@@ -44,6 +45,9 @@ pub enum Source {
         /// Print what would be imported and released, and change nothing.
         #[arg(long)]
         dry_run: bool,
+        /// Release the branches to release without asking.
+        #[arg(long)]
+        yes: bool,
         /// Sessions active in the last DAYS days, or since a day (YYYY-MM-DD); 60 days by default.
         #[arg(long, value_name = "DAYS|DATE", conflicts_with = "all")]
         since: Option<String>,
@@ -75,6 +79,7 @@ pub async fn run(source: Source, client: &mut Client, json: bool) -> anyhow::Res
         }
         Source::ClaudeCode {
             dry_run,
+            yes,
             since,
             all,
             claude_dir,
@@ -106,16 +111,38 @@ pub async fn run(source: Source, client: &mut Client, json: bool) -> anyhow::Res
                 dry_run,
                 claude_dir,
             };
-            claude_code(params, client, json).await
+            claude_code(params, yes, client, json).await
         }
     }
 }
 
 async fn claude_code(
     params: ClaudeCodeImportParams,
+    yes: bool,
     client: &mut Client,
     json: bool,
 ) -> anyhow::Result<()> {
+    // Branches to release: the plan first, and the user's yes before anything is released.
+    if !params.dry_run && !yes {
+        let planned: ClaudeCodeImportResult = client
+            .call(ClientCall::ClaudeCodeImport(ClaudeCodeImportParams {
+                dry_run: true,
+                ..params.clone()
+            }))
+            .await?;
+        if planned.releases.iter().any(|r| released_now(&planned, r)) {
+            if !json {
+                println!("{}", sanitize_terminal(&render_claude_code(&planned)));
+            }
+            eprintln!(
+                "\n{}",
+                sanitize_terminal(&claude_code_release_warning(&planned))
+            );
+            if !crate::confirm("Continue?")? {
+                bail!("Nothing was imported.");
+            }
+        }
+    }
     let plan: ClaudeCodeImportResult = client.call(ClientCall::ClaudeCodeImport(params)).await?;
     if json {
         println!("{}", serde_json::to_string_pretty(&plan)?);
@@ -430,6 +457,20 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
                 w.changes_from.join(", ")
             ));
         }
+        match (w.outcome, &w.workspace) {
+            (ClaudeCodeOutcome::Imported, Some(slug)) => parts.push(format!("imported → {slug}")),
+            (ClaudeCodeOutcome::Failed, _) => parts.push(format!(
+                "failed: {}",
+                w.reason.as_deref().unwrap_or_default()
+            )),
+            (ClaudeCodeOutcome::Import, Some(slug)) => {
+                parts.push(format!("into {slug} (made by an earlier import)"))
+            }
+            (ClaudeCodeOutcome::Import, None) if !plan.dry_run => {
+                parts.push("in a later version".into())
+            }
+            _ => {}
+        }
         out.push_str(&format!("\n  {kind:7}  {}   {}", w.name, parts.join(", ")));
     }
     out.push_str("\n\nHistory explorations:");
@@ -454,8 +495,13 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
             "\n\nBranches to release (HEAD detached on the same commit there, its changes copied):",
         );
         for r in &plan.releases {
+            let only = if r.commits_only {
+                ", gone or half deleted: its commits only"
+            } else {
+                ""
+            };
             out.push_str(&format!(
-                "\n  {} {}   checked out in {}",
+                "\n  {} {}   checked out in {}{only}",
                 r.repo, r.branch, r.folder
             ));
         }
@@ -489,9 +535,26 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
         "No session imported.".to_string()
     } else {
         format!(
-            "{imported} session(s) imported into history explorations. Each is a copy: the session in Claude Code and its chat in Chauffeur no longer sync."
+            "{imported} session(s) imported. Each is a copy: the session in Claude Code and its chat in Chauffeur no longer sync."
         )
     }];
+    // Where a branch was released, the user's checkout keeps its files and changes.
+    let released: Vec<&ClaudeCodeRelease> = plan
+        .releases
+        .iter()
+        .filter(|r| !r.commits_only && released_in(plan, r))
+        .collect();
+    if !released.is_empty() {
+        lines.push(
+            "Released, these checkouts keep their files and uncommitted changes on a detached HEAD, copied into the workspace; once you no longer need them there, clean each one:".into(),
+        );
+        for r in released {
+            lines.push(format!(
+                "  git -C {} stash --include-untracked   ({} {})",
+                r.folder, r.repo, r.branch
+            ));
+        }
+    }
     if failed > 0 {
         lines.push(format!(
             "{failed} could not be imported (see above). Once that is fixed, run the import again: it takes them."
@@ -499,10 +562,44 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
     }
     if later > 0 {
         lines.push(format!(
-            "{later} on a live branch or with changes come in a later version: nothing changed for them."
+            "{later} in an orchestration or with default-branch changes come in a later version: nothing changed for them."
         ));
     }
     lines.join("\n")
+}
+
+/// The workspace of a release's branch was made by this run.
+fn released_in(plan: &ClaudeCodeImportResult, release: &ClaudeCodeRelease) -> bool {
+    plan.workspaces.iter().any(|w| {
+        w.outcome == ClaudeCodeOutcome::Imported
+            && w.branch.as_deref() == Some(release.branch.as_str())
+            && w.repos.contains(&release.repo)
+    })
+}
+
+/// A release this version makes: of a branch's own workspace (not an orchestration's).
+fn released_now(plan: &ClaudeCodeImportResult, release: &ClaudeCodeRelease) -> bool {
+    plan.workspaces.iter().any(|w| {
+        w.kind == ClaudeCodeWorkspaceKind::Branch
+            && w.parent.is_none()
+            && w.workspace.is_none()
+            && w.branch.as_deref() == Some(release.branch.as_str())
+            && w.repos.contains(&release.repo)
+    })
+}
+
+/// The warning the user answers before any branch is released.
+fn claude_code_release_warning(plan: &ClaudeCodeImportResult) -> String {
+    let mut out = String::from(
+        "These branches will be released where they are checked out, for their workspaces:\n",
+    );
+    for r in plan.releases.iter().filter(|r| released_now(plan, r)) {
+        out.push_str(&format!("  {} {}   in {}\n", r.repo, r.branch, r.folder));
+    }
+    out.push_str(
+        "Those checkouts keep their files and uncommitted changes, on a detached HEAD on the same commit; the changes are copied into the workspace.",
+    );
+    out
 }
 
 #[cfg(test)]

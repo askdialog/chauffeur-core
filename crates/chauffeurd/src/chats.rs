@@ -3384,11 +3384,12 @@ impl ChatManager {
         Ok(chat)
     }
 
-    /// A Claude Code session imported into `workspace` (an exploration) as a closed tab: its
+    /// A Claude Code session imported into `workspace` as a chat, a closed tab with `closed`: its
     /// agent session copied there under the same id, which it resumes, and its conversation as
     /// `events`, each at its time. Recorded under `record` with the chat: None when an earlier
     /// import recorded it, or the workspace is gone. The workspace keeps one open chat.
-    pub(crate) async fn import_closed(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn import_chat(
         &self,
         workspace: &WorkspaceRow,
         title: &str,
@@ -3396,6 +3397,7 @@ impl ChatManager {
         last_active: &str,
         events: &[(String, ChatEvent)],
         record: &str,
+        closed: bool,
     ) -> Result<Option<ChatInfo>> {
         let d = self.d();
         let admission = d.execution.admit(&workspace.id)?;
@@ -3413,14 +3415,18 @@ impl ChatManager {
             effort: choice.effort,
             fast: choice.fast,
             // An exploration's chats plan: they change nothing.
-            permission_mode: PermissionMode::Plan,
+            permission_mode: if workspace.explore {
+                PermissionMode::Plan
+            } else {
+                PermissionMode::default()
+            },
             title: Some(title.to_owned()),
             status: ChatStatus::Idle,
             agent_session_id: Some(session_id.to_owned()),
             created_at,
             running_tasks: 0,
             permission_mode_effective: None,
-            closed: true,
+            closed,
             last_activity_at: Some(last_active.to_owned()),
             mcp_servers: Vec::new(),
             kind: ChatKind::Chat,
