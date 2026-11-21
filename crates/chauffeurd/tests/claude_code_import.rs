@@ -1549,7 +1549,7 @@ async fn adopting_one_repos_clone_changes_no_other_repos_and_takes_owner_name_re
     let _switch = SWITCH.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
-    let mut on_branch = |name: &str, branch: &str| {
+    let on_branch = |name: &str, branch: &str| {
         let clone = clone_repo(&root, name, &[]);
         git(&clone, &["switch", "-q", "-c", branch]);
         commit(&clone, "work.txt", "work\n");
