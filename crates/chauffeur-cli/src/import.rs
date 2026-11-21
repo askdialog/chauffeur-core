@@ -538,7 +538,9 @@ fn claude_code_setups(plan: &ClaudeCodeImportResult) -> String {
         };
         out.push_str(&format!("\n  {}   {line}", s.repo));
     }
-    out.push_str("\n  A guess: check it, then commit it in the repo's .chauffeur/settings.toml ([scripts] setup) to share it.");
+    if plan.setups.iter().any(|s| s.command.is_some()) {
+        out.push_str("\n  A guess: check it, then commit it in the repo's .chauffeur/settings.toml ([scripts] setup) to share it.");
+    }
     out
 }
 
@@ -702,10 +704,6 @@ mod tests {
         ];
         let out = render_claude_code(&plan);
         assert!(
-            out.contains("to write to your settings' [repos.<name>.scripts] setup, never the repo"),
-            "{out}"
-        );
-        assert!(
             out.contains("shop   pnpm install   (from pnpm-lock.yaml)"),
             "{out}"
         );
@@ -721,8 +719,9 @@ mod tests {
             ),
             "{out}"
         );
-        plan.dry_run = false;
-        assert!(render_claude_code(&plan).contains("written to your settings'"));
+        // Nothing guessed: no guess to check.
+        plan.setups.remove(0);
+        assert!(!render_claude_code(&plan).contains("A guess"));
     }
 
     #[test]

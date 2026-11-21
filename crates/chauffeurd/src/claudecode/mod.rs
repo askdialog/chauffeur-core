@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chauffeur_protocol::claudecode::{
-    ClaudeCodeBranch, ClaudeCodeImportParams, ClaudeCodeImportResult, ClaudeCodeOutcome,
-    ClaudeCodeRelease, ClaudeCodeSessionPlan, ClaudeCodeWorkspaceKind,
+    ClaudeCodeBranch, ClaudeCodeHistoryPlan, ClaudeCodeImportParams, ClaudeCodeImportResult,
+    ClaudeCodeOutcome, ClaudeCodeRelease, ClaudeCodeSessionPlan, ClaudeCodeWorkspaceKind,
 };
 
 use crate::conductor::{reference, remote_of};
@@ -312,28 +312,8 @@ pub async fn import(
             );
         }
     }
-    // The repos the run makes a workspace in, with the clone it reads them from: a branch's, and a
-    // history's whose exploration is not ready. Those without a setup get one guessed.
-    let mut made: BTreeMap<String, Option<PathBuf>> = BTreeMap::new();
-    for (key, source) in &sources {
-        let clone = source.chauffeur.clone().or_else(|| source.clone.clone());
-        made.entry(key.repo.clone()).or_insert(clone);
-    }
-    for history in &plan.histories {
-        if history::exploration(d, &history.repo)?.is_none() {
-            let clone = d
-                .repos
-                .existing_clone(&history.repo)
-                .or_else(|| repos.clones.get(&history.repo)?.first().cloned());
-            made.entry(history.repo.clone()).or_insert(clone);
-        }
-    }
-    let mut setups = Vec::new();
-    for (repo, clone) in &made {
-        if let Some(clone) = clone {
-            setups.extend(setup::guess(d, &repos.git, repo, clone).await);
-        }
-    }
+    let clones = workspace_clones(d, &sources, &plan.histories, &repos)?;
+    let setups = setup::guess_all(d, &repos.git, &clones).await;
     warnings.extend(repos.warnings);
     if params.dry_run {
         for history in &mut plan.histories {
@@ -371,6 +351,37 @@ pub async fn import(
         setups,
         warnings,
     })
+}
+
+/// The repos the run makes a workspace in, with the clone it reads each from: a branch's, and a
+/// history's whose exploration is not ready.
+fn workspace_clones(
+    d: &Daemon,
+    sources: &HashMap<branches::RepoBranch, branches::Source>,
+    histories: &[ClaudeCodeHistoryPlan],
+    repos: &Repos<'_>,
+) -> Result<BTreeMap<String, PathBuf>> {
+    let mut clones = BTreeMap::new();
+    for (key, source) in sources {
+        if let Some(clone) = source.chauffeur.as_ref().or(source.clone.as_ref()) {
+            clones
+                .entry(key.repo.clone())
+                .or_insert_with(|| clone.clone());
+        }
+    }
+    for history in histories {
+        if history::exploration(d, &history.repo)?.is_some() {
+            continue;
+        }
+        let clone = d
+            .repos
+            .existing_clone(&history.repo)
+            .or_else(|| repos.clones.get(&history.repo)?.first().cloned());
+        if let Some(clone) = clone {
+            clones.entry(history.repo.clone()).or_insert(clone);
+        }
+    }
+    Ok(clones)
 }
 
 /// A checkout of a branch to release, with the clone it belongs to.

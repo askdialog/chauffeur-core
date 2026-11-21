@@ -1807,11 +1807,10 @@ async fn adopting(org: &str) {
     }
 }
 
-/// Each repo the import makes a workspace in, Chauffeur having no clone of it: `pn` (pnpm and uv
-/// lockfiles at its root, yarn's in a subfolder), `js` (yarn and npm's), `nested` (lockfiles in
-/// subfolders only), `committed` (a setup committed), `mine` (a setup in the user's settings),
-/// `plain` (no lockfile), each with a live branch; and `hist`, whose session lands in its history
-/// exploration (poetry's).
+/// Repos the import makes a workspace in, Chauffeur having no clone of them, each with a live
+/// branch: `pn` (pnpm's lockfile), `committed` (bun's, and a setup committed), `mine` (bundle's,
+/// and a setup in the user's settings); and `hist` (poetry's), whose session lands in its history
+/// exploration. Which lockfile gives which setup is `setup.rs`'s.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     let _switch = SWITCH.lock().await;
@@ -1820,64 +1819,33 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     let claude = root.join("claude");
     let projects = claude.join("projects").join("-code");
     std::fs::create_dir_all(&projects).unwrap();
-    let repo = |name: &str, files: &[&str], branch: Option<&str>| {
+    // A repo with `lockfile` and, when given, a committed setup; on `branch`, else main alone.
+    let repo = |name: &str, lockfile: &str, committed: Option<&str>, branch: Option<&str>| {
         let clone = clone_repo(&root, name, &[]);
-        for file in files {
-            let path = clone.join(file);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            commit(&clone, file, "lock\n");
+        commit(&clone, lockfile, "lock\n");
+        if let Some(setup) = committed {
+            std::fs::create_dir_all(clone.join(".chauffeur")).unwrap();
+            commit(
+                &clone,
+                ".chauffeur/settings.toml",
+                &format!("[scripts]\nsetup = \"{setup}\"\n"),
+            );
         }
-        if let Some(branch) = branch {
-            git(&clone, &["switch", "-q", "-c", branch]);
-            commit(&clone, "work.txt", "work\n");
-        }
-        let session = line(
-            &clone,
-            branch.unwrap_or("main"),
-            &ago(1),
-            &edit(&clone.join("README.md")),
-        );
-        let session = if branch.is_some() {
-            session
-        } else {
-            line(&clone, "main", &ago(1), r#""message":{"content":[]}"#)
+        let session = match branch {
+            Some(branch) => {
+                git(&clone, &["switch", "-q", "-c", branch]);
+                commit(&clone, "work.txt", "work\n");
+                line(&clone, branch, &ago(1), &edit(&clone.join("README.md")))
+            }
+            None => line(&clone, "main", &ago(1), r#""message":{"content":[]}"#),
         };
         std::fs::write(projects.join(format!("s-{name}.jsonl")), session + "\n").unwrap();
         clone
     };
-    let pn = repo(
-        "pn",
-        &["pnpm-lock.yaml", "uv.lock", "web/yarn.lock"],
-        Some("feat/pn"),
-    );
-    repo("js", &["yarn.lock", "package-lock.json"], Some("feat/js"));
-    repo(
-        "nested",
-        &["app/package-lock.json", "api/uv.lock"],
-        Some("feat/nested"),
-    );
-    let committed = repo("committed", &["bun.lock", ".chauffeur/settings.toml"], None);
-    std::fs::write(
-        committed.join(".chauffeur/settings.toml"),
-        "[scripts]\nsetup = \"make deps\"\n",
-    )
-    .unwrap();
-    git(&committed, &["commit", "-qam", "setup"]);
-    git(&committed, &["switch", "-q", "-c", "feat/committed"]);
-    commit(&committed, "work.txt", "work\n");
-    std::fs::write(
-        projects.join("s-committed.jsonl"),
-        line(
-            &committed,
-            "feat/committed",
-            &ago(1),
-            &edit(&committed.join("README.md")),
-        ) + "\n",
-    )
-    .unwrap();
-    repo("mine", &["Gemfile.lock"], Some("feat/mine"));
-    repo("plain", &[], Some("feat/plain"));
-    repo("hist", &["poetry.lock"], None);
+    let pn = repo("pn", "pnpm-lock.yaml", None, Some("feat/pn"));
+    let committed = repo("committed", "bun.lock", Some("make deps"), Some("feat/c"));
+    repo("mine", "Gemfile.lock", None, Some("feat/mine"));
+    repo("hist", "poetry.lock", None, None);
 
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -1909,29 +1877,14 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
         let mut setups: Vec<_> = plan
             .setups
             .iter()
-            .map(|s| (s.repo.clone(), s.command.clone(), s.lockfiles.join(" ")))
+            .map(|s| (s.repo.clone(), s.command.clone().unwrap_or_default()))
             .collect();
         setups.sort();
         setups
     };
-    let some = |command: &str| Some(command.to_string());
-    let expected = vec![
-        (
-            "hist".to_string(),
-            some("poetry install"),
-            "poetry.lock".to_string(),
-        ),
-        ("js".into(), some("yarn install"), "yarn.lock".into()),
-        (
-            "nested".into(),
-            None,
-            "api/uv.lock app/package-lock.json".into(),
-        ),
-        (
-            "pn".into(),
-            some("pnpm install && uv sync"),
-            "pnpm-lock.yaml uv.lock".into(),
-        ),
+    let expected = [
+        ("hist".to_string(), "poetry install".to_string()),
+        ("pn".into(), "pnpm install".into()),
     ];
 
     // The dry run shows them and writes nothing.
@@ -1951,30 +1904,23 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     for w in &plan.workspaces {
         assert_eq!(w.outcome, ClaudeCodeOutcome::Imported, "{plan:?}");
     }
-    // Written to the user's settings, theirs kept; nothing in the repos.
+    // Written to the user's settings, theirs kept, a committed one left alone; nothing in the
+    // repos.
     let settings = f.daemon.settings.get();
     let setup = |repo: &str| {
-        settings
-            .repos
-            .get(repo)
-            .and_then(|r| r.scripts.as_ref())
-            .and_then(|s| {
-                chauffeurd::settings::RepoSettings::load(&root, &root, Some(s))
-                    .unwrap()
-                    .setup
-            })
+        let scripts = settings.repos.get(repo).and_then(|r| r.scripts.as_ref())?;
+        chauffeurd::settings::RepoSettings::load(&root, &root, Some(scripts))
+            .unwrap()
+            .setup
     };
-    assert_eq!(setup("pn").as_deref(), Some("pnpm install && uv sync"));
-    assert_eq!(setup("js").as_deref(), Some("yarn install"));
+    assert_eq!(setup("pn").as_deref(), Some("pnpm install"));
     assert_eq!(setup("hist").as_deref(), Some("poetry install"));
     assert_eq!(setup("mine").as_deref(), Some("make mine"));
-    for repo in ["nested", "committed", "plain"] {
-        assert_eq!(setup(repo), None, "{repo}");
-    }
+    assert_eq!(setup("committed"), None);
     assert!(!pn.join(".chauffeur").exists());
     assert_eq!(
-        git(&committed, &["show", "HEAD:.chauffeur/settings.toml"]),
-        "[scripts]\nsetup = \"make deps\""
+        git(&committed, &["status", "--porcelain", "--", ".chauffeur"]),
+        ""
     );
     // Written before the worktrees: pn's workspace ran it.
     let slug = plan
@@ -1991,7 +1937,7 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
         .into_iter()
         .map(|p| p.command)
         .collect();
-    assert_eq!(commands, ["pnpm install && uv sync"]);
+    assert_eq!(commands, ["pnpm install"]);
 
     // A second run makes no workspace: it guesses nothing.
     let again = import(&f, true).await;
