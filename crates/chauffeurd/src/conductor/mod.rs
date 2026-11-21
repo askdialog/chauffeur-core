@@ -689,6 +689,11 @@ pub(crate) fn implicit_table<'a>(
         new.set_implicit(true);
         toml_edit::Item::Table(new)
     });
+    // `name = { path = "…" }`: the same table, its keys kept.
+    if let toml_edit::Item::Value(toml_edit::Value::InlineTable(inline)) = item {
+        let table = std::mem::take(inline).into_table();
+        *item = toml_edit::Item::Table(table);
+    }
     if !item.is_table() {
         *item = toml_edit::Item::Table(toml_edit::Table::new());
     }

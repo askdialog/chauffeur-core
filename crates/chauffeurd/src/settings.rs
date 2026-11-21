@@ -957,6 +957,12 @@ impl RepoSettings {
 }
 
 /// A settings file, when it exists.
+/// A repo's committed settings file (`.chauffeur/settings.toml`, Conductor's) sets a setup; one
+/// that cannot be read counts as setting one, which is left as it is.
+pub fn sets_setup(text: &str) -> bool {
+    toml::from_str::<RawRepoSettings>(text).map_or(true, |raw| raw.scripts.setup.is_some())
+}
+
 fn read_layer(path: &Path) -> anyhow::Result<Option<RawRepoSettings>> {
     if !path.exists() {
         return Ok(None);
