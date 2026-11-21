@@ -662,6 +662,19 @@ describe("git from a workspace's worktree, which shares its clone's branches and
     "git symbolic-ref refs/heads/main refs/heads/feat/x",
     "git symbolic-ref HEAD refs/heads/main",
     "git fetch origin main:heads/main",
+    // Found by cubic.
+    'git push . "$SPEC"',
+    'git fetch origin "$SPEC"',
+    "git checkout -Bmain origin/main",
+    "git switch -Cfix/typo",
+    "git worktree add -Bmain ../x feat/x",
+    "git symbolic-ref --delete refs/remotes/origin/HEAD",
+    "git notes add -m note main",
+    "git notes remove HEAD",
+    "git worktree lock /code/web/.wt/other",
+    "git worktree repair",
+    "git reflog drop",
+    "git reflog write refs/heads/main main x",
   ], true);
 
   table("allowed", [
@@ -700,6 +713,8 @@ describe("git from a workspace's worktree, which shares its clone's branches and
     "git worktree add ../other feat/other",
     "git reflog",
     "git log main..HEAD",
+    "git notes list",
+    "git notes show HEAD",
     "git checkout main -- README.md",
     "git checkout -- README.md",
     "git checkout -- main",

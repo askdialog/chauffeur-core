@@ -1097,7 +1097,11 @@ function sharedChange(sub: string, rest: Value[], clone: GuardedClone, where: st
       return onBranch(rebaseChange(rest, branch));
     case "worktree":
       if (words[0] === "add") return onBranch(worktreeAdd(rest.slice(texts.indexOf("add") + 1), branch));
-      return asked(["prune", "remove", "move"].includes(words[0] ?? "") ? `removes or moves worktrees of ${clone.clone}, the user's own included` : undefined);
+      return asked(
+        ["prune", "remove", "move", "lock", "unlock", "repair"].includes(words[0] ?? "")
+          ? `changes worktrees of ${clone.clone}, the user's own included`
+          : undefined,
+      );
     case "fetch":
     case "pull":
     case "push":
@@ -1105,6 +1109,10 @@ function sharedChange(sub: string, rest: Value[], clone: GuardedClone, where: st
     case "symbolic-ref": {
       // `symbolic-ref refs/heads/main …` points the branch elsewhere; `symbolic-ref HEAD main` switches onto it.
       const [ref, target] = rest.filter((arg) => !arg.known || !arg.text.startsWith("-"));
+      // Deleting a ref other than the worktree's own HEAD (`refs/remotes/origin/HEAD`) deletes the clone's.
+      if (texts.some((text) => text === "-d" || text === "--delete")) {
+        return asked(ref && ref.text !== "HEAD" ? `deletes ${ref.known ? ref.text : "a ref"} of ${clone.clone}` : undefined);
+      }
       if (target === undefined) return undefined;
       const moved = ref?.text === "HEAD" ? branch(target) : branch(ref);
       return onBranch(moved && (ref?.text === "HEAD" ? `switches this worktree onto ${moved}` : `points ${moved} elsewhere`));
@@ -1120,7 +1128,10 @@ function sharedChange(sub: string, rest: Value[], clone: GuardedClone, where: st
     case "remote":
       return asked(REMOTE_CHANGES.has(words[0] ?? "") ? `changes the remotes of ${clone.clone}` : undefined);
     case "reflog":
-      return asked(["expire", "delete"].includes(words[0] ?? "") ? `rewrites the reflogs of ${clone.clone}` : undefined);
+      return asked(["expire", "delete", "drop", "write"].includes(words[0] ?? "") ? `rewrites the reflogs of ${clone.clone}` : undefined);
+    case "notes":
+      // Notes are refs of the repository: the clone's.
+      return asked(words[0] === undefined || ["list", "show", "get-ref"].includes(words[0]) ? undefined : `changes the notes of ${clone.clone}`);
     case "stash":
       return asked(["clear", "drop"].includes(words[0] ?? "") ? `erases stashes of ${clone.clone}, the user's own among them` : undefined);
     default:
@@ -1174,8 +1185,14 @@ function switchChange(sub: string, args: Value[], branch: (value: Value | undefi
       if (i < args.length - 1) return undefined;
       break;
     }
+    // `-Bmain`: the short option with its value attached.
+    const glued = forceCreate.find((short) => short.length === 2 && opt.length > 2 && opt.startsWith(short) && !opt.startsWith("--"));
     if (!arg.known || !opt.startsWith("-")) operands.push(arg);
-    else if (forceCreate.includes(opt)) {
+    else if (glued) {
+      const reset = branch(after(arg, 2));
+      if (reset) return `resets ${reset}`;
+      created = true;
+    } else if (forceCreate.includes(opt)) {
       const reset = branch(attached !== undefined ? after(arg, opt.length + 1) : args[++i]);
       if (reset) return `resets ${reset}`;
       created = true;
@@ -1215,7 +1232,11 @@ function worktreeAdd(args: Value[], branch: (value: Value | undefined) => string
     if (!arg) continue;
     const [opt, attached] = option(arg.text);
     if (!arg.known || !opt.startsWith("-")) operands.push(arg);
-    else if (opt === "-B") {
+    else if (opt.startsWith("-B") && opt.length > 2) {
+      const reset = branch(after(arg, 2));
+      if (reset) return `resets ${reset}`;
+      created = true;
+    } else if (opt === "-B") {
       const reset = branch(attached !== undefined ? after(arg, 3) : args[++i]);
       if (reset) return `resets ${reset}`;
       created = true;
@@ -1247,6 +1268,8 @@ function refspecChange(
     if (target === undefined || !(inside(target, clone.worktree) || inside(target, clone.clone))) return undefined;
   }
   for (const spec of operands.slice(1)) {
+    // Only known as the line runs: it may name one of the clone's branches as its destination.
+    if (!spec.known) return `may move ${branch(spec)}`;
     const colon = spec.text.lastIndexOf(":");
     if (colon < 0) {
       const deleted = sub === "push" && deleting ? branch(spec) : undefined;
