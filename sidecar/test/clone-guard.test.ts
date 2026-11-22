@@ -578,3 +578,209 @@ describe("cloneCommandRefusal", () => {
     expect(refuses(`${"( ".repeat(100000)}ls${" )".repeat(100000)}`)).toContain("could not read this command line");
   });
 });
+
+describe("git from a workspace's worktree, which shares its clone's branches and settings", () => {
+  const SHARED: SourceClone[] = [
+    { clone: "/code/web", worktree: "/ws/feat/web", branch: "fix/typo", default_branch: "main" },
+    { clone: "/code/api", worktree: "/ws/feat/api" },
+  ];
+  const refuses = (command: string, cwd = "/ws/feat/web") => cloneCommandRefusal(command, cwd, SHARED);
+  const table = (title: string, commands: string[], refused: boolean) => {
+    for (const command of commands) {
+      test(`${title}: ${JSON.stringify(command)}`, () => {
+        if (refused) expect(refuses(command)).toContain("git shares /code/web's branches and settings");
+        else expect(refuses(command)).toBeUndefined();
+      });
+    }
+  };
+
+  table("refused", [
+    // The clone's checked-out branch and its default branch.
+    "git branch -D main",
+    "git branch -d fix/typo",
+    "git branch --delete other main",
+    "git branch -m main old-main",
+    "git branch -M feat/x main",
+    "git branch -C feat/x main",
+    "git branch -f main HEAD",
+    "git branch --force fix/typo origin/fix/typo",
+    "git branch -D refs/heads/main",
+    'git branch -D "$B"',
+    "git checkout -B main origin/main",
+    "git switch -C fix/typo",
+    "git switch --force-create main",
+    "git fetch origin main:main",
+    "git fetch origin +refs/heads/main:refs/heads/main",
+    "git pull origin main:main",
+    "git push . HEAD:main",
+    "git -C /ws/feat/web branch -D main",
+    // The repo's settings, remotes, refs, reflogs and worktrees.
+    "git config user.email agent@example.com",
+    "git config --unset core.hooksPath",
+    "git config core.hooksPath .githooks",
+    "git remote add fork git@github.com:me/web.git",
+    "git remote set-url origin https://example.com/web.git",
+    "git remote remove origin",
+    "git remote rename origin upstream",
+    "git update-ref refs/heads/feat/x HEAD",
+    "git gc --prune=now",
+    "git prune",
+    "git worktree prune",
+    "git worktree remove /code/web/.wt/other",
+    "git reflog expire --expire=now --all",
+    "git reflog delete HEAD@{1}",
+    // Found by the red team: a switch onto the default branch, then work on it.
+    "git checkout main && git pull",
+    "git switch main && git merge feat/x",
+    "git checkout --ignore-other-worktrees fix/typo",
+    "git checkout main --",
+    "git branch --merged | grep -v '\\*' | xargs git branch -d",
+    "git stash clear",
+    "git stash drop",
+    "git rebase feat/x main",
+    "git rebase -i origin/main main",
+    "git rebase --onto origin/main feat/x main",
+    "git branch -Df main",
+    "git branch -fD main",
+    "git branch -Mf feat/x main",
+    "git checkout -fB main HEAD",
+    "git switch -fC main feat/x",
+    "git switch --force-create=main feat/x",
+    'cp scripts/pre-commit "$(git rev-parse --git-path hooks)/pre-commit"',
+    'git config --file "$(git rev-parse --git-common-dir)/config" user.email x',
+    "git filter-branch --tree-filter 'rm -f secret' -- --all",
+    "git push . --delete main",
+    "git push . -d main",
+    "git push ./ HEAD:main",
+    'git push "$PWD" HEAD:main',
+    "git push . :main",
+    "git branch -u origin/x main",
+    "git branch --unset-upstream main",
+    "git branch --edit-description main",
+    "git worktree add -B main ../x feat/x",
+    "git worktree add ../x main",
+    "git symbolic-ref refs/heads/main refs/heads/feat/x",
+    "git symbolic-ref HEAD refs/heads/main",
+    "git fetch origin main:heads/main",
+    // Found by cubic.
+    'git push . "$SPEC"',
+    'git fetch origin "$SPEC"',
+    "git checkout -Bmain origin/main",
+    "git switch -Cfix/typo",
+    "git worktree add -Bmain ../x feat/x",
+    "git symbolic-ref --delete refs/remotes/origin/HEAD",
+    "git notes add -m note main",
+    "git notes remove HEAD",
+    "git worktree lock /code/web/.wt/other",
+    "git worktree repair",
+    "git reflog drop",
+    "git reflog write refs/heads/main main x",
+    "git replace HEAD~1 HEAD",
+    "git replace -d abc123",
+    'git "$GIT_SUBCOMMAND" main',
+    "git push -o ci.skip . HEAD:main",
+    "git push --repo . HEAD:main",
+    "git fetch origin 'refs/heads/*:refs/heads/*'",
+    "git fetch origin '+refs/heads/ma*:refs/heads/ma*'",
+    "git push . main",
+    'git config --file "$CONFIG" user.email x',
+    'git stash "$ACTION"',
+    'git stash $(echo drop)',
+    'git worktree "$ACTION" /code/web/.wt/other',
+    'git remote "$ACTION" origin',
+    'git reflog "$ACTION" --all',
+    'git push "$REMOTE" HEAD:main',
+    'git push "$REMOTE" :main',
+  ], true);
+
+  table("allowed", [
+    "git commit -am 'fix'",
+    "git checkout -b feat/new",
+    "git switch -c feat/new main",
+    "git branch feat/new",
+    "git branch -D feat/new",
+    "git branch -m feat/new feat/renamed",
+    "git branch -f feat/new HEAD~1",
+    "git branch -d -r origin/main",
+    "git branch -u origin/feat/x",
+    "git branch --set-upstream-to origin/main",
+    "git rebase origin/main",
+    "git rebase -i HEAD~3",
+    "git reset --hard origin/main",
+    "git merge main",
+    "git push -u origin feat/new",
+    "git push --force-with-lease origin HEAD:feat/new",
+    "git push origin main:main",
+    "git fetch origin",
+    "git fetch origin main",
+    "git fetch origin main:refs/remotes/origin/main",
+    "git pull --rebase",
+    "git stash",
+    "git stash pop",
+    "git tag v1.2.3",
+    "git tag -d v1.2.3",
+    "git config --get user.email",
+    "git config user.email",
+    "git config --global user.name 'Me'",
+    "git config -f .gitmodules submodule.x.url https://example.com/x.git",
+    "git remote -v",
+    "git remote update",
+    "git worktree list",
+    "git worktree add ../other feat/other",
+    "git reflog",
+    "git log main..HEAD",
+    "git notes list",
+    "git notes show HEAD",
+    "git replace -l",
+    "git bisect start",
+    "git bisect good",
+    "git push -o ci.skip origin HEAD:main",
+    "git fetch origin 'refs/heads/*:refs/remotes/origin/*'",
+    "git push . feat/x",
+    'git config --file "$CONFIG" --get user.email',
+    "git checkout main -- README.md",
+    "git checkout -- README.md",
+    "git checkout -- main",
+    "git switch -c feat/next main",
+    "git switch --detach main",
+    "git stash push -m wip",
+    "git stash pop",
+    "git stash apply stash@{0}",
+    'git stash -m "$MESSAGE"',
+    'git push "$REMOTE" HEAD:feat/x',
+    'git push "$REMOTE"',
+    'git stash push -m "$MESSAGE"',
+    'git worktree add "$DIR" -b feat/y main',
+    "git rebase main",
+    "git rebase origin/main feat/x",
+    "git branch -dr origin/feat/old",
+    "git remote prune origin",
+    "git fetch --prune",
+    "git worktree add ../x -b feat/y main",
+    "git worktree add --detach ../x main",
+    'cat "$(git rev-parse --git-dir)/HEAD"',
+    'cd "$(git rev-parse --show-toplevel)" && npm test',
+  ], false);
+
+  test("the refusal names what it protects, and what to do instead", () => {
+    expect(refuses("git branch -D main")).toContain("deletes main, the default branch of /code/web");
+    expect(refuses("git branch -D main")).toContain("git switch -c <name> <branch>");
+    expect(refuses("git checkout main")).toContain("switches this worktree onto main, the default branch of /code/web");
+    expect(refuses("git config user.email x")).toContain("git -c <key>=<value>");
+    expect(refuses("git worktree prune")).toContain("ask the user to do it in their clone");
+    expect(refuses("git push . :main")).toContain("deletes main");
+    expect(refuses("git branch -f fix/typo HEAD")).toContain("resets fix/typo, the branch checked out in /code/web");
+    expect(refuses("git fetch origin main:main")).toContain("moves main, the default branch of /code/web");
+    expect(refuses("git config user.email x")).toContain("changes the settings of /code/web");
+  });
+
+  test("a clone whose branches are not known still keeps its settings, refs and worktrees", () => {
+    expect(refuses("git branch -D main", "/ws/feat/api")).toBeUndefined();
+    expect(refuses("git remote set-url origin x", "/ws/feat/api")).toContain("changes the remotes of /code/api");
+  });
+
+  test("outside the worktrees, git works on another repository", () => {
+    expect(refuses("git branch -D main", "/tmp/elsewhere")).toBeUndefined();
+    expect(refuses("git config user.email x", "/ws/feat")).toBeUndefined();
+  });
+});

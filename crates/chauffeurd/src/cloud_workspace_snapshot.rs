@@ -199,9 +199,7 @@ async fn git_state(
         head.len() == 40 && head.bytes().all(|b| b.is_ascii_hexdigit()),
         "Unborn or unsupported Git object format"
     );
-    let branch = git
-        .run_allowing(repo, &["symbolic-ref", "--quiet", "--short", "HEAD"], &[1])
-        .await?;
+    let branch = git.current_branch(repo).await?;
     let index = git
         .run_bytes(
             repo,
@@ -241,16 +239,7 @@ async fn git_state(
             ],
         )
         .await?;
-    Ok((
-        head,
-        if branch.is_empty() {
-            None
-        } else {
-            Some(branch.trim_end().to_owned())
-        },
-        index,
-        status,
-    ))
+    Ok((head, branch, index, status))
 }
 
 /// The files a snapshot carries: tracked ones and untracked ones Git does not ignore.
