@@ -452,8 +452,15 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
             parts.push(format!("child of {parent}"));
         }
         if !w.changes_from.is_empty() {
+            // A parent is made now; the changes it is to carry come with the workspaces of
+            // changes, in a later version.
+            let later = if w.kind == ClaudeCodeWorkspaceKind::Parent {
+                ", in a later version"
+            } else {
+                ""
+            };
             parts.push(format!(
-                "carries the uncommitted changes on the default branch of {}",
+                "carries the uncommitted changes on the default branch of {}{later}",
                 w.changes_from.join(", ")
             ));
         }

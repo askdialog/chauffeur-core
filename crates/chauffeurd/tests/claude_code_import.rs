@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use chauffeur_protocol::claudecode::{
     ClaudeCodeBranch, ClaudeCodeImportParams, ClaudeCodeImportResult, ClaudeCodeOutcome,
-    ClaudeCodeRelease,
+    ClaudeCodeRelease, ClaudeCodeWorkspaceKind,
 };
 use chauffeurd::Daemon;
 use chauffeurd::paths::Paths;
@@ -2346,11 +2346,51 @@ async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() 
     );
     std::fs::remove_file(&hook).unwrap();
 
+    // Then a Claude Code session runs in feat/held's worktree: that child fails, the rest is made.
+    let held_folder = f.root.join("wt/held");
+    std::fs::write(
+        f.claude.join("projects/-code/busy-held.jsonl"),
+        line(
+            &held_folder,
+            "feat/held",
+            &ago(1),
+            r#""message":{"content":[]}"#,
+        ) + "\n",
+    )
+    .unwrap();
+    let busy = f.claude.join(format!(
+        "sessions/{}.json",
+        std::os::unix::process::parent_id()
+    ));
+    std::fs::write(
+        &busy,
+        format!(
+            r#"{{"pid":{},"sessionId":"busy-held"}}"#,
+            std::os::unix::process::parent_id()
+        ),
+    )
+    .unwrap();
     let plan = import(&f, false).await;
     let (done, parent) = outcome(&plan, "orchestrator");
     assert_eq!(done, ClaudeCodeOutcome::Imported, "{plan:?}");
     let parent = d.workspaces.get(parent.as_deref().unwrap()).unwrap();
     assert_eq!(parent.slug, "orchestrate-the-release");
+    let held_plan = plan
+        .workspaces
+        .iter()
+        .find(|w| w.branch.as_deref() == Some("feat/held"))
+        .unwrap();
+    assert_eq!(held_plan.outcome, ClaudeCodeOutcome::Failed, "{plan:?}");
+    // Once it is closed, a later run makes it under the same parent, no other parent made.
+    std::fs::remove_file(&busy).unwrap();
+    let later = import(&f, false).await;
+    let held_plan = later
+        .workspaces
+        .iter()
+        .find(|w| w.branch.as_deref() == Some("feat/held"))
+        .unwrap();
+    assert_eq!(held_plan.outcome, ClaudeCodeOutcome::Imported, "{later:?}");
+    assert_eq!(held_plan.parent.as_deref(), Some("orchestrate-the-release"));
     let parent_row = d.workspaces.row(&parent.id).unwrap();
     assert_eq!(parent_row.parent_id, None);
     let mut children: Vec<(String, String)> = d
@@ -2414,7 +2454,7 @@ async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() 
     ] {
         assert!(prompt.contains(&said), "{said}\n{prompt}");
     }
-    let held_folder = f.root.join("wt/held").display().to_string();
+    let held_folder = held_folder.display().to_string();
     let guarded = start["params"]["source_clones"].as_array().unwrap();
     let entry = guarded
         .iter()
@@ -2424,5 +2464,37 @@ async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() 
         entry["worktree"],
         Path::new(&held.path).join("web").display().to_string()
     );
+
+    // Its chat lost (as when it could not be made), the session goes back to its parent: no
+    // second parent.
+    d.store.kv_delete("claudecode_import:orchestrator").unwrap();
+    let again = import(&f, false).await;
+    assert_eq!(
+        outcome(&again, "orchestrator").1.as_deref(),
+        Some("orchestrate-the-release"),
+        "{again:?}"
+    );
+    let parents: Vec<_> = again
+        .workspaces
+        .iter()
+        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Parent)
+        .map(|w| (w.name.clone(), w.workspace.clone()))
+        .collect();
+    assert_eq!(
+        parents,
+        [(
+            "orchestrate-the-release".to_string(),
+            Some("orchestrate-the-release".to_string())
+        )]
+    );
+    let made: Vec<String> = d
+        .store
+        .list_workspaces()
+        .unwrap()
+        .into_iter()
+        .map(|w| w.slug)
+        .filter(|slug| slug.starts_with("orchestrate-the-release"))
+        .collect();
+    assert_eq!(made, ["orchestrate-the-release"]);
     unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }

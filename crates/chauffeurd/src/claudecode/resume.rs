@@ -68,12 +68,13 @@ fn live(worktree: &WorktreeRow) -> bool {
     !worktree.removed && worktree.origin == WorktreeOrigin::Workspace
 }
 
-/// The worktree of `checkout`'s repo among `worktrees` (the workspace's, then its children's):
-/// its folder's name, made from a clone of that repo (another owner's repo of the same name is
-/// not); the one on the branch the session worked on there first (a child's), else the first.
+/// The worktree standing for `checkout`, of its repo (its folder's name, made from a clone of
+/// that repo: another owner's repo of the same name is not): the one on the branch the session
+/// worked on there, among the workspace's (`own`) and its children's; else the workspace's own.
 fn worktree_of<'a>(
     d: &Daemon,
-    worktrees: &'a [WorktreeRow],
+    own: &'a [WorktreeRow],
+    children: &'a [WorktreeRow],
     checkout: &Checkout,
 ) -> Option<&'a WorktreeRow> {
     let of_repo = |w: &&WorktreeRow| {
@@ -82,11 +83,11 @@ fn worktree_of<'a>(
             && d.repos
                 .clone_matches(Path::new(&w.clone_path), &checkout.repo)
     };
-    worktrees
-        .iter()
+    own.iter()
+        .chain(children)
         .filter(of_repo)
         .find(|w| checkout.branch.as_deref() == Some(w.branch.as_str()))
-        .or_else(|| worktrees.iter().find(of_repo))
+        .or_else(|| own.iter().find(of_repo))
 }
 
 /// The children of `workspace` still there: an orchestration's branches, after an import.
@@ -104,9 +105,9 @@ fn children(d: &Daemon, workspace: &str) -> Result<Vec<WorkspaceRow>> {
         .collect())
 }
 
-/// The worktrees of `workspace`, then of its children.
-fn worktrees_around(d: &Daemon, workspace: &str) -> Result<Vec<WorktreeRow>> {
-    let mut worktrees = d.store.worktrees_of(workspace)?;
+/// The worktrees of `workspace`'s children.
+fn children_worktrees(d: &Daemon, workspace: &str) -> Result<Vec<WorktreeRow>> {
+    let mut worktrees = Vec::new();
     for child in children(d, workspace)? {
         worktrees.extend(d.store.worktrees_of(&child.id)?);
     }
@@ -197,10 +198,11 @@ pub(crate) fn guarded(d: &Daemon, chat: &ChatInfo, clones: &[SourceClone]) -> Ve
         let Some(origin) = origin(d, &chat.id)? else {
             return Ok(Vec::new());
         };
-        let worktrees = worktrees_around(d, &chat.workspace_id)?;
+        let own = d.store.worktrees_of(&chat.workspace_id)?;
+        let children = children_worktrees(d, &chat.workspace_id)?;
         let mut guarded: Vec<SourceClone> = Vec::new();
         for checkout in &origin.checkouts {
-            let Some(worktree) = worktree_of(d, &worktrees, checkout) else {
+            let Some(worktree) = worktree_of(d, &own, &children, checkout) else {
                 continue;
             };
             let known =
