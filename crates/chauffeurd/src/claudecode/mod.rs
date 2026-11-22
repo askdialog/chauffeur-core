@@ -9,6 +9,7 @@
 mod branches;
 mod copy;
 mod history;
+mod mcp;
 mod place;
 mod sessions;
 mod setup;
@@ -57,6 +58,7 @@ pub async fn import(
             )
         })?)
     };
+    let locations = Locations::of(&d.shell_env.vars());
     let claude = match params
         .claude_dir
         .as_deref()
@@ -72,7 +74,8 @@ pub async fn import(
             }
             dir
         }
-        None => Locations::of(&d.shell_env.vars())
+        None => locations
+            .as_ref()
             .map(|at| at.config().to_path_buf())
             .ok_or_else(|| {
                 Error::BadRequest(
@@ -314,6 +317,19 @@ pub async fn import(
     }
     let trees = workspace_trees(d, &sources, &plan.histories, &repos).await?;
     let setups = setup::guess_all(d, &repos.git, &trees).await;
+    let user_clones: BTreeMap<String, Vec<PathBuf>> = trees
+        .keys()
+        .map(|repo| {
+            (
+                repo.clone(),
+                repos.clones.get(repo).cloned().unwrap_or_default(),
+            )
+        })
+        .collect();
+    let state = locations
+        .as_ref()
+        .map_or_else(|| claude.join(".claude.json"), |at| at.state_for(&claude));
+    warnings.extend(mcp::warnings(&state, &user_clones));
     warnings.extend(repos.warnings);
     if params.dry_run {
         for history in &mut plan.histories {
