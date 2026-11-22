@@ -793,15 +793,17 @@ impl ChatManager {
         {
             self.close_for_briefing(&chat.id, true).await;
         }
-        // What the agent reads: a fork's conversation its agent never had, what moved since a
-        // reactivated exploration's archive, the user's shell commands the message hands over,
-        // the message, and a design chat's invalid canvas.json.
+        // What the agent reads: a fork's conversation its agent never had, where an imported
+        // chat's repos now live, what moved since a reactivated exploration's archive, the user's
+        // shell commands the message hands over, the message, and a design chat's invalid
+        // canvas.json.
         let (text, moved) = self
             .with_moved(
                 &chat,
                 crate::chat_shell::with_commands(&commands, &self.with_canvas_note(&chat, text)),
             )
             .await;
+        let (text, imported) = self.with_import_note(&chat, text);
         let text = self.with_handoff(&chat, text, message.sent)?;
         let text = &text;
         self.ensure_ollama(&chat).await?;
@@ -833,7 +835,30 @@ impl ChatManager {
             .await?;
         }
         self.told_what_moved(&chat, moved);
+        self.told_where_it_lives(&chat, imported);
         self.current(&chat.id)
+    }
+
+    /// `text` after where an imported chat's repos now live, when its agent was not told; with
+    /// whether it was said, to keep as told once the agent has it.
+    fn with_import_note(&self, chat: &ChatInfo, mut text: String) -> (String, bool) {
+        match crate::claudecode::resume::note(&self.d(), chat) {
+            Ok(Some(note)) => {
+                text.insert_str(0, &note);
+                (text, true)
+            }
+            Ok(None) => (text, false),
+            Err(error) => {
+                tracing::warn!(%error, chat = chat.id, "could not tell an imported chat where its repos live");
+                (text, false)
+            }
+        }
+    }
+
+    fn told_where_it_lives(&self, chat: &ChatInfo, said: bool) {
+        if said && let Err(error) = crate::claudecode::resume::told(&self.d(), &chat.id) {
+            tracing::warn!(%error, chat = chat.id, "could not keep that an imported chat was told where its repos live");
+        }
     }
 
     /// `text` after what moved since a reactivated exploration's archive, when the chat's agent
@@ -1164,7 +1189,13 @@ impl ChatManager {
             } else {
                 Vec::new()
             },
-            source_clones: source_clones(&d, &config_repos).await,
+            source_clones: {
+                // An imported chat's: also the checkouts its session stood or wrote in.
+                let mut clones = source_clones(&d, &config_repos).await;
+                let own = crate::claudecode::resume::guarded(&d, &chat, &clones);
+                clones.extend(own);
+                clones
+            },
             resume_session_id: chat.agent_session_id.clone(),
             env,
             append_system_prompt: system_prompt(
@@ -2425,10 +2456,12 @@ impl ChatManager {
                 let chat = d.chats.current(&chat_id)?;
                 let admission = d.execution.admit(&chat.workspace_id)?;
                 let (prompt, moved) = d.chats.with_moved(&chat, prompt).await;
+                let (prompt, imported) = d.chats.with_import_note(&chat, prompt);
                 d.chats
                     .start_session_admitted(&chat, Some(prompt), Vec::new(), admission)
                     .await?;
                 d.chats.told_what_moved(&chat, moved);
+                d.chats.told_where_it_lives(&chat, imported);
                 Ok::<_, Error>(())
             }
             .await;
@@ -3426,6 +3459,7 @@ impl ChatManager {
             events,
             record,
             closed,
+            origin,
         } = imported;
         let d = self.d();
         let admission = d.execution.admit(&workspace.id)?;
@@ -3466,7 +3500,10 @@ impl ChatManager {
             brand: None,
         };
         let inserted = d.events.store_and_announce(|| {
-            let inserted = d.store.insert_imported_chat(&chat, events, record)?;
+            let origin = crate::claudecode::resume::origin_entry(&chat.id, origin)?;
+            let inserted = d
+                .store
+                .insert_imported_chat(&chat, events, record, &origin)?;
             let announced = inserted.clone().unwrap_or_default();
             Ok((inserted.is_some(), announced))
         })?;
@@ -3635,6 +3672,10 @@ impl ChatManager {
         else {
             return Err(Error::not_found(format!("workspace {}", workspace.slug)));
         };
+        // A fork of an imported chat goes on from the same folders: kept off them, and told.
+        if let Err(error) = crate::claudecode::resume::forked(&d, &source.id, &chat.id) {
+            tracing::warn!(%error, chat = chat.id, "could not keep where a fork of an imported chat ran");
+        }
         let (open_tasks, queued) = left_open(&copied);
         // Clients following the workspace live see the conversation come, before the notice.
         d.events.announce(copied);
@@ -4573,6 +4614,8 @@ pub(crate) struct ImportedSession<'a> {
     pub(crate) record: &'a str,
     /// A closed tab (a history exploration's).
     pub(crate) closed: bool,
+    /// Where it ran, kept with the chat.
+    pub(crate) origin: &'a crate::claudecode::resume::Origin,
 }
 
 /// What a chat of `agent` gets when the user picked no model (a design chat, a fork into the other

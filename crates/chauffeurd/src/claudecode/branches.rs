@@ -7,7 +7,7 @@
 //! keep it. A checkout gone, or half deleted by a cleanup, carries the branch's commits only. A
 //! workspace that fails to import puts back what it released; the others go on.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -67,7 +67,16 @@ pub(super) fn existing(
     workspace: &ClaudeCodeWorkspacePlan,
     branch: &str,
 ) -> Result<Option<WorkspaceRow>> {
-    for repo in &workspace.repos {
+    existing_in(d, &workspace.repos, branch)
+}
+
+/// The workspace an earlier import made on `branch`, in one of `repos` or another.
+pub(super) fn existing_in(
+    d: &Daemon,
+    repos: &[String],
+    branch: &str,
+) -> Result<Option<WorkspaceRow>> {
+    for repo in repos {
         if let Some(row) = recorded(d, repo, branch)? {
             return Ok(Some(row));
         }
@@ -101,13 +110,24 @@ pub(super) struct Source {
 /// What the plan found, for the import.
 pub(super) struct Found<'a> {
     pub(super) sources: &'a HashMap<RepoBranch, Source>,
+    /// The clone of each repo a workspace is made in on a new branch (a parent's, a changes
+    /// one's), by repo.
+    pub(super) new_branch_clones: &'a HashMap<String, RepoClone>,
+    /// The user's clone holding uncommitted changes on its default branch, by repo.
+    pub(super) changed: &'a BTreeMap<String, PathBuf>,
     pub(super) sessions: &'a HashMap<String, Session>,
     /// The folders Claude Code still runs in: no branch is released from under it.
     pub(super) running: &'a [PathBuf],
 }
 
-/// The workspaces of the live branches this version imports (a branch's own, not an
-/// orchestration's), and their sessions as chats; `plans` say how each went.
+/// The clone a workspace on a new branch is made from: Chauffeur's, else the user's it adopts.
+pub(super) struct RepoClone {
+    pub(super) clone: PathBuf,
+    pub(super) adopt: bool,
+}
+
+/// The workspaces of the live branches this version imports and of the orchestrations' parents,
+/// and their sessions as chats; `plans` say how each went.
 pub(super) async fn import(
     d: &Arc<Daemon>,
     claude: &Path,
@@ -116,14 +136,61 @@ pub(super) async fn import(
     report: &mut Report<'_>,
 ) -> Result<()> {
     let git = Git::new(d.shell_env.clone());
-    for workspace in workspaces
-        .iter_mut()
-        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Branch && w.parent.is_none())
-    {
-        let Some(branch) = workspace.branch.clone() else {
-            continue;
+    // Each parent made, by name (its children go under it); none for one that failed.
+    let mut parents: HashMap<String, Option<String>> = HashMap::new();
+    // Each parent's children as planned, kept with it for a later run to make those that fail.
+    let mut planned: HashMap<String, Vec<PlannedChild>> = HashMap::new();
+    for child in workspaces.iter() {
+        if let (Some(parent), Some(branch)) = (&child.parent, &child.branch) {
+            planned
+                .entry(parent.clone())
+                .or_default()
+                .push(PlannedChild {
+                    branch: branch.clone(),
+                    repos: child.repos.clone(),
+                });
+        }
+    }
+    for workspace in workspaces.iter_mut() {
+        // The default-branch changes it could not carry: no longer said to.
+        let mut uncarried = Vec::new();
+        let made = match (workspace.kind, workspace.branch.clone()) {
+            (ClaudeCodeWorkspaceKind::Parent, _) => {
+                let children = planned.remove(&workspace.name).unwrap_or_default();
+                let made = make_parent(
+                    d,
+                    &git,
+                    workspace,
+                    children,
+                    found,
+                    report.warnings,
+                    &mut uncarried,
+                )
+                .await;
+                let id = made.as_ref().ok().map(|row| row.id.clone());
+                parents.insert(workspace.name.clone(), id);
+                made
+            }
+            (ClaudeCodeWorkspaceKind::Changes, _) => {
+                // Carried by an earlier import: nothing more.
+                let repo = workspace.repos.first().cloned().unwrap_or_default();
+                if let Some(earlier) = changes_workspace(d, &repo)? {
+                    workspace.outcome = ClaudeCodeOutcome::AlreadyImported;
+                    workspace.workspace = Some(earlier.slug);
+                    continue;
+                }
+                make_changes(d, &git, workspace, found, report.warnings, &mut uncarried).await
+            }
+            (ClaudeCodeWorkspaceKind::Branch, Some(branch)) => {
+                match parent_id(&parents, workspace.parent.as_deref()) {
+                    Ok(parent) => {
+                        make(d, &git, workspace, &branch, parent, found, report.warnings).await
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            _ => continue,
         };
-        let made = make(d, &git, workspace, &branch, found, report.warnings).await;
         let row = match made {
             Ok(row) => row,
             Err(error) => {
@@ -141,6 +208,9 @@ pub(super) async fn import(
                 continue;
             }
         };
+        workspace
+            .changes_from
+            .retain(|repo| !uncarried.contains(repo));
         workspace.outcome = ClaudeCodeOutcome::Imported;
         workspace.workspace = Some(row.slug.clone());
         report
@@ -148,6 +218,251 @@ pub(super) async fn import(
             .await;
     }
     Ok(())
+}
+
+/// The workspace a child goes under: its parent's, made earlier in the run; none for a plain one.
+fn parent_id(
+    parents: &HashMap<String, Option<String>>,
+    parent: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(name) = parent else {
+        return Ok(None);
+    };
+    match parents.get(name) {
+        Some(Some(id)) => Ok(Some(id.clone())),
+        _ => Err(Error::Conflict(format!(
+            "its parent workspace {name} could not be made: see why above, then run the import again"
+        ))),
+    }
+}
+
+/// `<prefix><session id>` → the parent an earlier import made of an orchestration session
+/// ([`ParentRecord`]).
+const PARENT: &str = "claudecode_parent:";
+
+/// An orchestration's parent as made: a later run lands its session there (its chat failed) and
+/// makes the children still missing.
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub(super) struct ParentRecord {
+    pub(super) workspace: String,
+    pub(super) repo: String,
+    pub(super) children: Vec<PlannedChild>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub(super) struct PlannedChild {
+    pub(super) branch: String,
+    pub(super) repos: Vec<String>,
+}
+
+/// The parent an earlier import made of `session`, while it is ready.
+pub(super) fn recorded_parent(
+    d: &Daemon,
+    session: &str,
+) -> Result<Option<(WorkspaceRow, ParentRecord)>> {
+    let Some(text) = d.store.kv_get(&format!("{PARENT}{session}"))? else {
+        return Ok(None);
+    };
+    let record: ParentRecord = serde_json::from_str(&text).map_err(|e| {
+        Error::Internal(anyhow::Error::new(e).context("reading an imported parent"))
+    })?;
+    Ok(d.store
+        .find_workspace(&record.workspace)?
+        .filter(|row| row.state == WorkspaceState::Ready)
+        .map(|row| (row, record)))
+}
+
+/// An orchestration's parent: the one an earlier import made (`workspace.workspace`), else a
+/// workspace on its folder's repo, on a new branch named after it, from the clone chosen for that
+/// repo (the user's becomes Chauffeur's), recorded with its `children`.
+async fn make_parent(
+    d: &Arc<Daemon>,
+    git: &Git,
+    workspace: &ClaudeCodeWorkspacePlan,
+    children: Vec<PlannedChild>,
+    found: &Found<'_>,
+    warnings: &mut Vec<String>,
+    uncarried: &mut Vec<String>,
+) -> Result<WorkspaceRow> {
+    if let Some(earlier) = &workspace.workspace {
+        return d.workspaces.row(earlier);
+    }
+    let (repo, row) = make_on_new_branch(d, git, workspace, found).await?;
+    for changed in &workspace.changes_from {
+        if !carry_changes(d, git, changed, &row, found, warnings).await {
+            uncarried.push(changed.clone());
+        }
+    }
+    let record = ParentRecord {
+        workspace: row.id.clone(),
+        repo,
+        children,
+    };
+    // Made: a record that cannot be written only makes a later run miss it.
+    let written = serde_json::to_string(&record)
+        .map_err(|e| Error::Internal(e.into()))
+        .and_then(|text| {
+            let session = workspace.sessions.first().cloned().unwrap_or_default();
+            d.store.kv_set(&format!("{PARENT}{session}"), &text)
+        });
+    if let Err(error) = written {
+        warnings.push(format!(
+            "{} was made, but could not be recorded ({error}): a later import will not make its missing children.",
+            row.slug
+        ));
+    }
+    Ok(row)
+}
+
+/// `<prefix><repo>` → the workspace an earlier import made carrying the uncommitted changes on
+/// the repo's default branch (a parent's, a changes one's): a later run makes none again.
+const CHANGES: &str = "claudecode_changes:";
+
+/// The workspace an earlier import made carrying `repo`'s default-branch changes, while ready.
+pub(super) fn changes_workspace(d: &Daemon, repo: &str) -> Result<Option<WorkspaceRow>> {
+    let Some(id) = d.store.kv_get(&format!("{CHANGES}{repo}"))? else {
+        return Ok(None);
+    };
+    Ok(d.store
+        .find_workspace(&id)?
+        .filter(|row| row.state == WorkspaceState::Ready))
+}
+
+/// A workspace on a new branch from the default branch of its repo, carrying the uncommitted
+/// changes of the user's clone there (which keeps its own).
+async fn make_changes(
+    d: &Arc<Daemon>,
+    git: &Git,
+    workspace: &ClaudeCodeWorkspacePlan,
+    found: &Found<'_>,
+    warnings: &mut Vec<String>,
+    uncarried: &mut Vec<String>,
+) -> Result<WorkspaceRow> {
+    let (repo, row) = make_on_new_branch(d, git, workspace, found).await?;
+    if !carry_changes(d, git, &repo, &row, found, warnings).await {
+        uncarried.push(repo);
+    }
+    Ok(row)
+}
+
+/// A workspace on a new branch of its repo (a parent's, a changes one's), from the clone chosen
+/// for it (the user's becomes Chauffeur's): from the default branch; when it carries the user's
+/// default-branch changes, from the commit their clone stands on, where those changes apply.
+async fn make_on_new_branch(
+    d: &Arc<Daemon>,
+    git: &Git,
+    workspace: &ClaudeCodeWorkspacePlan,
+    found: &Found<'_>,
+) -> Result<(String, WorkspaceRow)> {
+    let Some(repo) = workspace.repos.first().cloned() else {
+        return Err(Error::Internal(anyhow::anyhow!(
+            "a workspace planned with no repo"
+        )));
+    };
+    let Some(chosen) = found.new_branch_clones.get(&repo) else {
+        return Err(Error::BadRequest(format!(
+            "none of the clones of {repo} the sessions ran in is left: open a session in one, then run the import again"
+        )));
+    };
+    if chosen.adopt {
+        adopt(d, &repo, &chosen.clone)?;
+    }
+    let changed = found
+        .changed
+        .get(&repo)
+        .filter(|_| workspace.changes_from.contains(&repo));
+    let branch = match changed {
+        Some(from) => Some(branch_at(d, git, &chosen.clone, from, &workspace.name).await?),
+        None => None,
+    };
+    let made = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some(workspace.name.clone()),
+            repos: vec![repo.clone()],
+            branch: branch.clone(),
+            ..Default::default()
+        })
+        .await;
+    match made {
+        Ok(made) => Ok((repo, d.workspaces.row(&made.workspace.id)?)),
+        Err(error) => {
+            // Made for it: it goes with it.
+            if let Some(branch) = &branch {
+                let _ = git.delete_branch(&chosen.clone, branch).await;
+            }
+            Err(error)
+        }
+    }
+}
+
+/// A new branch in `clone`, named as a workspace `name`'s would be, at the commit the user's
+/// clone `from` stands on (fetched from it, when another clone).
+async fn branch_at(d: &Daemon, git: &Git, clone: &Path, from: &Path, name: &str) -> Result<String> {
+    let base = format!("{}/{name}", d.workspaces.branch_prefix().await);
+    let mut branch = base.clone();
+    for n in 2.. {
+        if !git.branch_exists(clone, &branch).await {
+            break;
+        }
+        branch = format!("{base}-{n}");
+    }
+    let from_text = from.to_string_lossy();
+    git.run(
+        clone,
+        &[
+            "fetch",
+            "--no-tags",
+            &from_text,
+            &format!("HEAD:refs/heads/{branch}"),
+        ],
+    )
+    .await
+    .map_err(|e| {
+        Error::Internal(e.context(format!("starting {branch} where {} stands", from.display())))
+    })?;
+    Ok(branch)
+}
+
+/// The uncommitted changes on `repo`'s default branch in the user's clone, copied into `row`'s
+/// worktree of it, the clone keeping them; recorded, so that a later run copies them no more.
+/// What cannot be copied is said; true when all were.
+async fn carry_changes(
+    d: &Daemon,
+    git: &Git,
+    repo: &str,
+    row: &WorkspaceRow,
+    found: &Found<'_>,
+    warnings: &mut Vec<String>,
+) -> bool {
+    let Some(from) = found.changed.get(repo) else {
+        return false;
+    };
+    // Carried by an earlier import: not again.
+    if changes_workspace(d, repo).is_ok_and(|earlier| earlier.is_some_and(|e| e.id != row.id)) {
+        return false;
+    }
+    let into = PathBuf::from(&row.path).join(repo_folder(repo));
+    let copied = async {
+        let changes = conductor::changes(git, from).await?;
+        conductor::reapply(git, &changes, from, &into).await
+    }
+    .await;
+    if let Err(error) = &copied {
+        warnings.push(format!(
+            "Some uncommitted changes on the default branch of {} could not be copied into {} ({error:#}): copy them there by hand, or archive {} and run the import again.",
+            from.display(),
+            row.slug,
+            row.slug
+        ));
+    }
+    if let Err(error) = d.store.kv_set(&format!("{CHANGES}{repo}"), &row.id) {
+        warnings.push(format!(
+            "{} was made, but could not be recorded ({error}): a later import will make another.",
+            row.slug
+        ));
+    }
+    copied.is_ok()
 }
 
 /// A checkout the branch was released from (or whose changes were read, the branch kept there),
@@ -193,6 +508,7 @@ async fn make(
     git: &Git,
     workspace: &ClaudeCodeWorkspacePlan,
     branch: &str,
+    parent: Option<String>,
     found: &Found<'_>,
     warnings: &mut Vec<String>,
 ) -> Result<WorkspaceRow> {
@@ -219,6 +535,7 @@ async fn make(
                 name: Some(workspace.name.clone()),
                 repos: workspace.repos.clone(),
                 branch: Some(branch.to_owned()),
+                parent,
                 ..Default::default()
             })
             .await

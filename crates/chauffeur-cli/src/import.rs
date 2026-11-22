@@ -395,8 +395,7 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
         let day = s.last_active.get(..10).unwrap_or(&s.last_active);
         let lands_in = s.lands_in.as_deref().unwrap_or("nowhere");
         let state = match s.outcome {
-            ClaudeCodeOutcome::Import if plan.dry_run => format!("→ {lands_in}"),
-            ClaudeCodeOutcome::Import => format!("→ {lands_in}, in a later version"),
+            ClaudeCodeOutcome::Import => format!("→ {lands_in}"),
             ClaudeCodeOutcome::Imported => format!("imported → {lands_in}"),
             ClaudeCodeOutcome::AlreadyImported => match &s.lands_in {
                 Some(into) => format!("imported earlier → {into}"),
@@ -459,15 +458,15 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
         }
         match (w.outcome, &w.workspace) {
             (ClaudeCodeOutcome::Imported, Some(slug)) => parts.push(format!("imported → {slug}")),
+            (ClaudeCodeOutcome::AlreadyImported, Some(slug)) => {
+                parts.push(format!("imported earlier → {slug}"))
+            }
             (ClaudeCodeOutcome::Failed, _) => parts.push(format!(
                 "failed: {}",
                 w.reason.as_deref().unwrap_or_default()
             )),
             (ClaudeCodeOutcome::Import, Some(slug)) => {
                 parts.push(format!("into {slug} (made by an earlier import)"))
-            }
-            (ClaudeCodeOutcome::Import, None) if !plan.dry_run => {
-                parts.push("in a later version".into())
             }
             _ => {}
         }
@@ -555,10 +554,9 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
             .filter(|s| s.outcome == outcome)
             .count()
     };
-    let (imported, failed, later) = (
+    let (imported, failed) = (
         count(ClaudeCodeOutcome::Imported),
         count(ClaudeCodeOutcome::Failed),
-        count(ClaudeCodeOutcome::Import),
     );
     let mut lines = vec![if imported == 0 {
         "No session imported.".to_string()
@@ -602,9 +600,16 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
             "{failed} could not be imported (see above). Once that is fixed, run the import again: it takes them."
         ));
     }
-    if later > 0 {
+    // Copied, the default-branch changes stay in the clone too.
+    for w in plan
+        .workspaces
+        .iter()
+        .filter(|w| w.outcome == ClaudeCodeOutcome::Imported && !w.changes_from.is_empty())
+    {
+        let slug = w.workspace.as_deref().unwrap_or(&w.name);
         lines.push(format!(
-            "{later} in an orchestration or with default-branch changes come in a later version: nothing changed for them."
+            "The uncommitted changes on the default branch of {} are copied into {slug}; the clone keeps them as well: once you no longer need them there, put them away in it (`git stash --include-untracked`).",
+            w.changes_from.join(", ")
         ));
     }
     lines.join("\n")

@@ -42,6 +42,8 @@ pub struct Session {
     pub last_active: String,
     pub writes: Vec<Write>,
     pub created: Vec<Created>,
+    /// The checkouts it stood or wrote in: found when the import plans it.
+    pub checkouts: Vec<super::resume::Checkout>,
 }
 
 /// A file a file tool wrote, with where the session stood then.
@@ -151,6 +153,7 @@ pub fn read(transcript: &Path) -> Option<Session> {
         last_active,
         writes: read.writes,
         created: read.created,
+        checkouts: Vec::new(),
     })
 }
 

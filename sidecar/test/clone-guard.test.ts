@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { cloneCommandRefusal, cloneWriteRefusal, withRealPaths } from "../src/guard/clone-guard.ts";
@@ -47,6 +47,62 @@ describe("cloneWriteRefusal", () => {
     const refusal = cloneWriteRefusal("Write", { file_path: "/code/web/.git/config" }, CWD, CLONES);
     expect(refusal).toContain("/code/web/.git/config");
     expect(refusal).not.toContain("/ws/feat/web/.git");
+  });
+  test("an imported session's own checkouts stand for the workspace's worktree, the deepest first", () => {
+    const imported: SourceClone[] = [
+      { clone: "/code/web", worktree: "/ws/feat/web", default_branch: "main" },
+      { clone: "/code/web/.wt/fix", worktree: "/ws/feat/web" },
+      { clone: "/tmp/scratch/web", worktree: "/ws/feat/web" },
+    ];
+    expect(cloneWriteRefusal("Edit", { file_path: "/code/web/.wt/fix/src/app.ts" }, CWD, imported)).toContain(
+      "Write /ws/feat/web/src/app.ts instead",
+    );
+    expect(cloneWriteRefusal("Write", { file_path: "/tmp/scratch/web/notes.md" }, CWD, imported)).toContain(
+      "Write /ws/feat/web/notes.md instead",
+    );
+    expect(cloneWriteRefusal("Edit", { file_path: "/code/web/src/app.ts" }, CWD, imported)).toContain(
+      "Write /ws/feat/web/src/app.ts instead",
+    );
+    expect(cloneCommandRefusal("echo x > /tmp/scratch/web/a.txt", CWD, imported)).toBeDefined();
+    // Git run from the worktree keeps the clone's branches: the clone's entry comes first.
+    expect(cloneCommandRefusal("git branch -D main", "/ws/feat/web", imported)).toContain("main");
+    // The workspace's worktree, and what is beside the session's folders, stay writable.
+    expect(cloneWriteRefusal("Write", { file_path: "/ws/feat/web/src/app.ts" }, CWD, imported)).toBeUndefined();
+    expect(cloneWriteRefusal("Write", { file_path: "/tmp/scratch/notes.md" }, CWD, imported)).toBeUndefined();
+  });
+  test("a folder reached through a link is guarded as git named it", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "clone-link-")));
+    try {
+      const real = join(root, "private", "fix");
+      mkdirSync(real, { recursive: true });
+      symlinkSync(join(root, "private"), join(root, "tmp"));
+      const linked: SourceClone[] = [{ clone: real, worktree: "/ws/feat/web" }];
+      const via = join(root, "tmp", "fix");
+      expect(cloneWriteRefusal("Edit", { file_path: join(via, "src", "a.ts") }, CWD, linked)).toContain(
+        "Write /ws/feat/web/src/a.ts instead",
+      );
+      expect(cloneCommandRefusal(`echo x > ${join(via, "a.txt")}`, CWD, linked)).toBeDefined();
+      expect(cloneCommandRefusal(`git commit -am x`, via, linked)).toBeDefined();
+      expect(cloneWriteRefusal("Write", { file_path: join(root, "tmp", "other.ts") }, CWD, linked)).toBeUndefined();
+      // A link to a file the clone does not have yet: the write lands in the clone.
+      symlinkSync(join(real, "new.ts"), join(root, "new.ts"));
+      expect(cloneWriteRefusal("Write", { file_path: join(root, "new.ts") }, CWD, linked)).toContain(
+        "Write /ws/feat/web/new.ts instead",
+      );
+      // A link in the workspace's worktree that leads into the clone: refused as the clone.
+      const worktree = join(root, "ws");
+      mkdirSync(worktree);
+      symlinkSync(real, join(worktree, "into"));
+      const inWorktree: SourceClone[] = [{ clone: real, worktree }];
+      expect(cloneWriteRefusal("Write", { file_path: join(worktree, "into", "a.ts") }, CWD, inWorktree)).toContain(
+        `Write ${join(worktree, "a.ts")} instead`,
+      );
+      expect(cloneWriteRefusal("Write", { file_path: join(worktree, "a.ts") }, CWD, inWorktree)).toBeUndefined();
+      symlinkSync(join(root, "nowhere", "x.ts"), join(root, "loose.ts"));
+      expect(cloneWriteRefusal("Write", { file_path: join(root, "loose.ts") }, CWD, linked)).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
   test("a worktree inside its clone stays writable", () => {
     const nested: SourceClone[] = [{ clone: "/code/web", worktree: "/code/web/.wt/feat" }];

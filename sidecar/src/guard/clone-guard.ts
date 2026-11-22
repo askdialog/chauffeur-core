@@ -18,15 +18,17 @@
 // A guard rail, not a sandbox: a program whose own code writes into the clone, the command line
 // not naming it (a script, a build step run from elsewhere), is not caught.
 
-import { readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SourceClone } from "../protocol.ts";
 import { type Command, type Group, type List, readLine, type Word } from "./shell-line.ts";
 
 /** A source clone, and its worktree's git folder in the clone's `.git` when it has one. */
 export interface GuardedClone extends SourceClone {
   gitdir?: string;
+  /** `gitdir` through the links it goes by, when it differs (`/var` is `/private/var`). */
+  realGitdir?: string;
 }
 
 /**
@@ -45,7 +47,11 @@ export function withRealPaths(clones: SourceClone[]): GuardedClone[] {
     const resolved = { ...given, clone: real(given.clone), worktree: real(given.worktree) };
     return resolved.clone === given.clone && resolved.worktree === given.worktree ? [given] : [given, resolved];
   });
-  return all.map((clone) => ({ ...clone, gitdir: gitdirOf(clone.worktree) }));
+  return all.map((clone) => {
+    const gitdir = gitdirOf(clone.worktree);
+    const realGitdir = gitdir === undefined ? undefined : realOf(gitdir);
+    return { ...clone, gitdir, realGitdir: realGitdir === gitdir ? undefined : realGitdir };
+  });
 }
 
 /** A worktree's `.git` file names its git folder: `gitdir: <path>`. */
@@ -59,9 +65,11 @@ function gitdirOf(worktree: string): string | undefined {
 }
 
 function writeDenial(path: string, clone: GuardedClone): string {
-  const instead = inside(path, join(clone.clone, ".git"))
+  // The path as the clone is named: through its links when only that form is in it.
+  const named = inside(path, clone.clone) ? path : realOf(path);
+  const instead = inside(named, join(clone.clone, ".git"))
     ? "Run git in this workspace's worktree instead"
-    : `Write ${join(clone.worktree, relative(clone.clone, path))} instead, in this workspace's worktree`;
+    : `Write ${join(clone.worktree, relative(clone.clone, named))} instead, in this workspace's worktree`;
   return `${path} is in ${clone.clone}, the user's own clone of this repo: agents never change it. ${instead}.`;
 }
 
@@ -1450,17 +1458,68 @@ function configReads(texts: string[]): boolean {
 
 /** The clone a path is in, or the clone in the folder it names. */
 function cloneAround(path: string, clones: GuardedClone[]): GuardedClone | undefined {
-  return cloneOf(path, clones) ?? clones.find(({ clone }) => inside(clone, path));
+  return cloneOf(path, clones) ?? clones.find(({ clone }) => forms(path).some((form) => inside(clone, form)));
 }
 
-/** The clone a path is in, unless it is in a worktree of the workspace or its git folder. */
+/**
+ * A path as written and, when it differs, through the links it goes by: an agent writes
+ * `/tmp/fix/a.ts` where git named the folder `/private/tmp/fix`.
+ */
+function forms(path: string): string[] {
+  const real = realOf(path);
+  return real === path ? [path] : [path, real];
+}
+
+/**
+ * A path with the links it goes through followed, as far as they lead: a link to a file not made
+ * yet (`/tmp/a.ts` → `<clone>/a.ts`) is where a write through it lands.
+ */
+function realOf(path: string, depth = 0): string {
+  const rest: string[] = [];
+  for (let dir = path; ; dir = dirname(dir)) {
+    try {
+      return join(realpathSync(dir), ...rest);
+    } catch {
+      const dangling = depth < 40 && isLink(dir);
+      if (dangling) return realOf(join(resolve(dirname(dir), readlinkSync(dir)), ...rest), depth + 1);
+      if (dirname(dir) === dir) return path;
+      rest.unshift(basename(dir));
+    }
+  }
+}
+
+function isLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The clone a path is in, unless it is in a worktree of the workspace or its git folder: the
+ * deepest, so that an imported session's worktree in its clone (`<clone>/.wt/x`) names the path
+ * that stands for it in the workspace.
+ */
 function cloneOf(path: string, clones: GuardedClone[]): GuardedClone | undefined {
-  return exempt(path, clones) ? undefined : clones.find(({ clone }) => inside(path, clone));
+  // Each form on its own: a link in the worktree may lead into a clone.
+  for (const form of forms(path)) {
+    if (exempt(form, clones)) continue;
+    let found: GuardedClone | undefined;
+    for (const candidate of clones) {
+      if (inside(form, candidate.clone) && (found === undefined || candidate.clone.length > found.clone.length)) found = candidate;
+    }
+    if (found !== undefined) return found;
+  }
+  return undefined;
 }
 
 /** The clone whose worktree, or its git folder, holds a path. */
 function worktreeOf(path: string, clones: GuardedClone[]): GuardedClone | undefined {
-  return clones.find(({ worktree, gitdir }) => inside(path, worktree) || (gitdir !== undefined && inside(path, gitdir)));
+  return clones.find(
+    ({ worktree, gitdir, realGitdir }) =>
+      inside(path, worktree) || [gitdir, realGitdir].some((dir) => dir !== undefined && inside(path, dir)),
+  );
 }
 
 /** A path in a worktree of the workspace, or in its git folder in the clone's `.git`. */

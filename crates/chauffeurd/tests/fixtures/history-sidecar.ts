@@ -5,8 +5,9 @@
 // `cwd` not named as the file system names it, and here an id starting with `unreadable`.
 // `agent.session_messages` reads the copy's prompts and texts there (`CLAUDE_CONFIG_DIR`, as the
 // real one), each at its time; it finds no copy of an id starting with `lost`. Anything else
-// answers `{}`.
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+// answers `{}`, but `agent.fork` its session id with `-fork`. Each request is kept, a line of
+// `sidecar.log` in that folder.
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { createInterface } from "node:readline";
 const key = (cwd) => cwd.replace(/[^a-zA-Z0-9]/g, "-");
@@ -40,9 +41,11 @@ function messages(p) {
 
 for await (const line of createInterface({ input: process.stdin })) {
   const request = JSON.parse(line), p = request.params ?? {};
+  if (process.env.CLAUDE_CONFIG_DIR) appendFileSync(join(process.env.CLAUDE_CONFIG_DIR, "sidecar.log"), line + "\n");
   if (request.id === undefined) continue;
   try {
-    const result = request.method === "context.copy" ? copy(p) : request.method === "agent.session_messages" ? messages(p) : {};
+    const result = request.method === "context.copy" ? copy(p) : request.method === "agent.session_messages" ? messages(p)
+      : request.method === "agent.fork" ? { session_id: p.session_id + "-fork" } : {};
     console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }));
   } catch (error) {
     console.log(JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32000, message: String(error.message) } }));

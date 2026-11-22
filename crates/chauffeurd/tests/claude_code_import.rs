@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use chauffeur_protocol::claudecode::{
     ClaudeCodeBranch, ClaudeCodeImportParams, ClaudeCodeImportResult, ClaudeCodeOutcome,
-    ClaudeCodeRelease,
+    ClaudeCodeRelease, ClaudeCodeWorkspaceKind,
 };
 use chauffeurd::Daemon;
 use chauffeurd::paths::Paths;
@@ -759,8 +759,8 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
     // A live branch checked out in one of the user's worktrees is released there; in another
     // clone of the repo (feat/two in web-2), it is fetched into the one chosen for the run, which
     // keeps it.
-    // One whose folder is gone carries its commits only; an orchestration's (feat/held, a child)
-    // waits for the version that imports them.
+    // One whose folder is gone carries its commits only; an orchestration's child (feat/held) is
+    // released as any.
     let release = |branch: &str, folder: &str, commits_only: bool| ClaudeCodeRelease {
         repo: "web".into(),
         branch: branch.into(),
@@ -770,6 +770,7 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
     assert_eq!(
         plan.releases,
         [
+            release("feat/held", "wt/held", false),
             release("feat/y", "clones/web/.wt/y", true),
             release("feat/ext", "scratch/ext", true),
         ]
@@ -1022,9 +1023,8 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
             .is_some_and(|r| r.contains("could not be copied")),
         "{unreadable:?}"
     );
-    // A session on a live branch goes to its workspace; an orchestration's waits for a later version.
+    // A session on a live branch goes to its workspace.
     assert_eq!(outcome(&plan, "simple-web").0, ClaudeCodeOutcome::Imported);
-    assert_eq!(outcome(&plan, "orchestrator").0, ClaudeCodeOutcome::Import);
 
     let ws = d.workspaces.get("web-history").unwrap();
     assert!(ws.explore);
@@ -2118,4 +2118,497 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     let again = import(&f, true).await;
     assert!(again.setups.is_empty(), "{again:?}");
     assert_eq!(mcp(&again), named);
+}
+
+/// A session that ran in a worktree of `shop`'s, `wt/other`, wrote in another, `wt/fix`, from a
+/// third, `wt/third`, and in a clone of another owner's `shop`, imported into feat/fix's
+/// workspace: the first message sent to its chat tells its agent where shop lives now and which
+/// folders are the user's, once, a restart included; its guard keeps it off the worktrees it ran
+/// in, standing for the workspace's, not off the other repo's clone. A fork made before is told
+/// and kept off them too.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_imported_chat_is_told_where_its_repo_lives_and_kept_off_the_folders_it_ran_in() {
+    let _switch = SWITCH.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let shop = clone_repo(&root, "shop", &[]);
+    let fix = root.join("wt/fix");
+    git(
+        &shop,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/fix",
+            fix.to_str().unwrap(),
+        ],
+    );
+    commit(&fix, "a.txt", "a\n");
+    // The session ran in another worktree of the user's, on a branch of no work of its own.
+    let other = root.join("wt/other");
+    git(
+        &shop,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/other",
+            other.to_str().unwrap(),
+        ],
+    );
+    let third = root.join("wt/third");
+    git(
+        &shop,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/third",
+            third.to_str().unwrap(),
+        ],
+    );
+    // Another owner's shop, its clone on its default branch, nothing live there.
+    let theirs = clone_repo(&root.join("theirs"), "shop", &[]);
+    let theirs_url = "https://github.com/someone/shop.git";
+    git(&theirs, &["remote", "set-url", "origin", theirs_url]);
+    let claude = root.join("claude");
+    let projects = claude.join("projects").join("-code");
+    std::fs::create_dir_all(&projects).unwrap();
+    std::fs::write(
+        projects.join("s-fix.jsonl"),
+        [
+            line(&other, "feat/other", &ago(1), &edit(&fix.join("a.txt"))),
+            line(&third, "feat/third", &ago(1), &edit(&fix.join("a.txt"))),
+            line(
+                &other,
+                "feat/other",
+                &ago(1),
+                &edit(&theirs.join("README.md")),
+            ),
+        ]
+        .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("settings.toml"),
+        "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46990\nlinear_enabled = false\n",
+    )
+    .unwrap();
+    let paths = || Paths::new(home.clone(), root.join("workspaces"), root.join("repos"));
+    let open = || {
+        let daemon = Daemon::open(paths()).unwrap();
+        let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+        vars.insert(
+            "CLAUDE_CONFIG_DIR".into(),
+            claude.to_string_lossy().into_owned(),
+        );
+        daemon.shell_env.set_vars(vars);
+        daemon.chats.sidecar.use_binary(history_sidecar());
+        daemon
+    };
+    let f = Fixture {
+        _dir: dir,
+        root: root.clone(),
+        claude: claude.clone(),
+        daemon: open(),
+    };
+    // SAFETY: the tests reading the switch hold `SWITCH`.
+    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    let plan = import(&f, false).await;
+    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
+    let slug = plan.workspaces[0].workspace.clone().expect("imported");
+    let ws = PathBuf::from(f.daemon.workspaces.get(&slug).unwrap().path);
+    let chat = f
+        .daemon
+        .store
+        .kv_get("claudecode_import:s-fix")
+        .unwrap()
+        .expect("a chat");
+    let fork = f.daemon.chats.fork(&chat, None, None).await.unwrap().id;
+    let log = claude.join("sidecar.log");
+    let sent = || -> Vec<serde_json::Value> {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .filter(|r| r["method"] == "session.start" || r["method"] == "session.send")
+            .collect()
+    };
+
+    f.daemon.chats.send(&chat, "change a.txt").await.unwrap();
+    let first = sent();
+    assert_eq!(first.len(), 1, "{first:?}");
+    let start = &first[0]["params"];
+    let prompt = start["prompt"].as_str().unwrap();
+    // The folder it ran in, its folder now, where shop lives, the folders it ran in.
+    for path in [&other, &ws, &ws.join("shop"), &fix] {
+        assert!(
+            prompt.contains(&path.display().to_string()),
+            "{path:?}\n{prompt}"
+        );
+    }
+    assert!(prompt.ends_with("change a.txt"), "{prompt}");
+    // Its guard: the workspace's clone, then the worktree the session ran in and the one it
+    // wrote in, each for shop's.
+    let guarded: Vec<(String, String)> = start["source_clones"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["clone"].as_str().unwrap().to_owned(),
+                c["worktree"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let shop_worktree = ws.join("shop").display().to_string();
+    assert_eq!(
+        guarded,
+        [
+            (shop.display().to_string(), shop_worktree.clone()),
+            (other.display().to_string(), shop_worktree.clone()),
+            (fix.display().to_string(), shop_worktree.clone()),
+            (third.display().to_string(), shop_worktree),
+        ]
+    );
+    // The fork: told, and kept off the same folders.
+    f.daemon.chats.send(&fork, "change a.txt").await.unwrap();
+    let forked = sent().pop().unwrap();
+    let forked = &forked["params"];
+    assert!(
+        forked["prompt"]
+            .as_str()
+            .unwrap()
+            .contains(&fix.display().to_string())
+    );
+    assert_eq!(forked["source_clones"], start["source_clones"]);
+
+    // Told once: not again, nor after a restart.
+    f.daemon.chats.send(&chat, "and b.txt").await.unwrap();
+    let restarted = open();
+    restarted.chats.send(&chat, "and c.txt").await.unwrap();
+    let later: Vec<String> = sent()[2..]
+        .iter()
+        .map(|r| {
+            let p = &r["params"];
+            p["prompt"]
+                .as_str()
+                .or(p["text"].as_str())
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(later.len(), 2, "{later:?}");
+    for text in &later {
+        assert!(!text.contains(&fix.display().to_string()), "{text}");
+    }
+}
+
+/// The fixture's `orchestrator` (feat/child, feat/held) becomes a parent on web, on a new branch
+/// named from its title, holding its chat, with a child per branch made without a prompt, the
+/// released one carrying its uncommitted change; the parent's chat is told of its children, its
+/// guard mapping the worktree it wrote feat/held in to that child's. A parent that cannot be
+/// made takes its children with it, nothing released.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() {
+    let _switch = SWITCH.lock().await;
+    // SAFETY: the tests reading the switch hold `SWITCH`; no other thread reads it meanwhile.
+    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    // First, web's worktrees cannot be made (a hook of the clone's that fails).
+    let f = importing();
+    let d = &f.daemon;
+    let hook = f.root.join("clones/web/.git/hooks/post-checkout");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let failed = import(&f, false).await;
+    let child = failed
+        .workspaces
+        .iter()
+        .find(|w| w.branch.as_deref() == Some("feat/held"))
+        .unwrap();
+    assert_eq!(child.outcome, ClaudeCodeOutcome::Failed);
+    assert!(
+        child.reason.as_deref().is_some_and(
+            |r| r.contains("its parent workspace orchestrate-the-release could not be made")
+        ),
+        "{child:?}"
+    );
+    assert!(
+        is_branch(&f.root.join("wt/held"), "feat/held"),
+        "nothing released"
+    );
+    std::fs::remove_file(&hook).unwrap();
+
+    // Then a Claude Code session runs in feat/held's worktree: that child fails, the rest is made.
+    let held_folder = f.root.join("wt/held");
+    std::fs::write(
+        f.claude.join("projects/-code/busy-held.jsonl"),
+        line(
+            &held_folder,
+            "feat/held",
+            &ago(1),
+            r#""message":{"content":[]}"#,
+        ) + "\n",
+    )
+    .unwrap();
+    let busy = f.claude.join(format!(
+        "sessions/{}.json",
+        std::os::unix::process::parent_id()
+    ));
+    std::fs::write(
+        &busy,
+        format!(
+            r#"{{"pid":{},"sessionId":"busy-held"}}"#,
+            std::os::unix::process::parent_id()
+        ),
+    )
+    .unwrap();
+    let plan = import(&f, false).await;
+    let (done, parent) = outcome(&plan, "orchestrator");
+    assert_eq!(done, ClaudeCodeOutcome::Imported, "{plan:?}");
+    let parent = d.workspaces.get(parent.as_deref().unwrap()).unwrap();
+    assert_eq!(parent.slug, "orchestrate-the-release");
+    let held_plan = plan
+        .workspaces
+        .iter()
+        .find(|w| w.branch.as_deref() == Some("feat/held"))
+        .unwrap();
+    assert_eq!(held_plan.outcome, ClaudeCodeOutcome::Failed, "{plan:?}");
+    // Once it is closed, a later run makes it under the same parent, no other parent made.
+    std::fs::remove_file(&busy).unwrap();
+    let later = import(&f, false).await;
+    let held_plan = later
+        .workspaces
+        .iter()
+        .find(|w| w.branch.as_deref() == Some("feat/held"))
+        .unwrap();
+    assert_eq!(held_plan.outcome, ClaudeCodeOutcome::Imported, "{later:?}");
+    assert_eq!(held_plan.parent.as_deref(), Some("orchestrate-the-release"));
+    let parent_row = d.workspaces.row(&parent.id).unwrap();
+    assert_eq!(parent_row.parent_id, None);
+    let mut children: Vec<(String, String)> = d
+        .store
+        .list_workspaces()
+        .unwrap()
+        .into_iter()
+        .filter(|w| w.parent_id.as_deref() == Some(&parent.id))
+        .map(|w| {
+            let worktrees = d.store.worktrees_of(&w.id).unwrap();
+            (w.slug, worktrees[0].branch.clone())
+        })
+        .collect();
+    children.sort();
+    assert_eq!(
+        children,
+        [
+            ("feat-child".to_string(), "feat/child".to_string()),
+            ("feat-held".into(), "feat/held".into()),
+        ]
+    );
+    let parent_branch = &d.store.worktrees_of(&parent.id).unwrap()[0].branch;
+    assert!(
+        parent_branch.ends_with("orchestrate-the-release"),
+        "{parent_branch}"
+    );
+    let held = d.workspaces.get("feat-held").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(Path::new(&held.path).join("web/README.md")).unwrap(),
+        "held, uncommitted\n"
+    );
+    for child in [&held, &d.workspaces.get("feat-child").unwrap()] {
+        let chats = d.store.chats_of(&child.id).unwrap();
+        assert!(
+            chats.iter().all(|c| c.agent_session_id.is_none()),
+            "{chats:?}"
+        );
+    }
+    // The parent's chat is told its branches are its children now, and kept off the worktree it
+    // wrote feat/held in, standing for that child's.
+    let chat = d
+        .store
+        .kv_get("claudecode_import:orchestrator")
+        .unwrap()
+        .unwrap();
+    d.chats.send(&chat, "go on").await.unwrap();
+    let start = std::fs::read_to_string(f.claude.join("sidecar.log"))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .rfind(|r| r["method"] == "session.start")
+        .unwrap();
+    let prompt = start["params"]["prompt"].as_str().unwrap();
+    for said in [
+        format!(
+            "feat-child (on feat/child, in {})",
+            d.workspaces.get("feat-child").unwrap().path
+        ),
+        format!("feat-held (on feat/held, in {})", held.path),
+        "`chauffeur status <child>`".to_string(),
+    ] {
+        assert!(prompt.contains(&said), "{said}\n{prompt}");
+    }
+    let held_folder = held_folder.display().to_string();
+    let guarded = start["params"]["source_clones"].as_array().unwrap();
+    let entry = guarded
+        .iter()
+        .find(|c| c["clone"] == held_folder.as_str())
+        .unwrap_or_else(|| panic!("{guarded:?}"));
+    assert_eq!(
+        entry["worktree"],
+        Path::new(&held.path).join("web").display().to_string()
+    );
+
+    // Its chat lost (as when it could not be made), the session goes back to its parent: no
+    // second parent.
+    d.store.kv_delete("claudecode_import:orchestrator").unwrap();
+    let again = import(&f, false).await;
+    assert_eq!(
+        outcome(&again, "orchestrator").1.as_deref(),
+        Some("orchestrate-the-release"),
+        "{again:?}"
+    );
+    let parents: Vec<_> = again
+        .workspaces
+        .iter()
+        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Parent)
+        .map(|w| (w.name.clone(), w.workspace.clone()))
+        .collect();
+    assert_eq!(
+        parents,
+        [(
+            "orchestrate-the-release".to_string(),
+            Some("orchestrate-the-release".to_string())
+        )]
+    );
+    let made: Vec<String> = d
+        .store
+        .list_workspaces()
+        .unwrap()
+        .into_iter()
+        .map(|w| w.slug)
+        .filter(|slug| slug.starts_with("orchestrate-the-release"))
+        .collect();
+    assert_eq!(made, ["orchestrate-the-release"]);
+    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
+}
+
+/// The uncommitted changes on the fixture's clones' default branches: web's go to the parent of
+/// the orchestration that ran on web, docs' to a workspace of their own on a new branch, from the
+/// commit docs' clone stands on (one not pushed: the changes apply there). Each clone keeps its
+/// copy; a later run carries them no more.
+#[tokio::test(flavor = "multi_thread")]
+async fn default_branch_changes_are_copied_once_into_a_workspace_the_clone_keeping_them() {
+    let _switch = SWITCH.lock().await;
+    // SAFETY: the tests reading the switch hold `SWITCH`; no other thread reads it meanwhile.
+    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    let f = importing();
+    let d = &f.daemon;
+    let docs_clone = f.root.join("clones/docs");
+    std::fs::write(docs_clone.join("local.md"), "one\n").unwrap();
+    git(&docs_clone, &["add", "local.md"]);
+    git(
+        &docs_clone,
+        &["commit", "-q", "-m", "local", "--", "local.md"],
+    );
+    std::fs::write(docs_clone.join("local.md"), "two\n").unwrap();
+
+    let plan = import(&f, false).await;
+    let read = |path: PathBuf| std::fs::read_to_string(path).unwrap();
+    let parent = d.workspaces.get("orchestrate-the-release").unwrap();
+    assert_eq!(
+        read(Path::new(&parent.path).join("web/README.md")),
+        "web, uncommitted on main\n"
+    );
+    let docs = d.workspaces.get("docs-changes").unwrap();
+    let checkout = Path::new(&docs.path).join("docs");
+    assert_eq!(
+        read(checkout.join("README.md")),
+        "docs, uncommitted on main\n"
+    );
+    assert_eq!(read(checkout.join("local.md")), "two\n");
+    assert_eq!(git(&checkout, &["log", "-1", "--format=%s"]), "local");
+    assert_ne!(d.store.worktrees_of(&docs.id).unwrap()[0].branch, "main");
+    for (clone, file, text) in [
+        ("web", "README.md", "web, uncommitted on main\n"),
+        ("docs", "README.md", "docs, uncommitted on main\n"),
+        ("docs", "local.md", "two\n"),
+    ] {
+        assert_eq!(read(f.root.join("clones").join(clone).join(file)), text);
+    }
+    assert!(
+        !plan
+            .warnings
+            .iter()
+            .any(|w| w.contains("could not be copied")),
+        "{:?}",
+        plan.warnings
+    );
+
+    // A later session on docs plans its changes again: carried earlier, not again.
+    std::fs::write(
+        f.claude.join("projects/-code/docs-again.jsonl"),
+        line(&docs_clone, "main", &ago(1), r#""message":{"content":[]}"#) + "\n",
+    )
+    .unwrap();
+    let later = import(&f, false).await;
+    let carried: Vec<_> = later
+        .workspaces
+        .iter()
+        .filter(|w| !w.changes_from.is_empty())
+        .map(|w| (w.outcome, w.workspace.clone()))
+        .collect();
+    assert_eq!(
+        carried,
+        [(
+            ClaudeCodeOutcome::AlreadyImported,
+            Some("docs-changes".to_string())
+        )]
+    );
+    assert!(d.workspaces.get("docs-changes-2").is_err());
+
+    // A new orchestration on web: its parent does not carry web's changes again.
+    let web = f.root.join("clones/web");
+    let mut lines = Vec::new();
+    for name in ["n1", "n2"] {
+        let at = f.root.join("wt").join(name);
+        git(
+            &web,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("feat/{name}"),
+                at.to_str().unwrap(),
+                "main",
+            ],
+        );
+        commit(&at, &format!("{name}.txt"), "work\n");
+        lines.push(line(
+            &web,
+            "main",
+            &ago(1),
+            &edit(&at.join(format!("{name}.txt"))),
+        ));
+    }
+    std::fs::write(
+        f.claude.join("projects/-code/new-orchestration.jsonl"),
+        lines.join("\n") + "\n",
+    )
+    .unwrap();
+    let planned = import(&f, true).await;
+    let parent = planned
+        .workspaces
+        .iter()
+        .find(|w| w.kind == ClaudeCodeWorkspaceKind::Parent && w.sessions == ["new-orchestration"])
+        .unwrap_or_else(|| panic!("{planned:?}"));
+    assert!(parent.changes_from.is_empty(), "{parent:?}");
+    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }
