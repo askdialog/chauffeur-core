@@ -24,12 +24,19 @@ pub struct ClaudeCodeImportParams {
     /// Claude Code's folder, when it is not `CLAUDE_CONFIG_DIR` or `~/.claude`.
     #[serde(default)]
     pub claude_dir: Option<String>,
+    /// A released checkout's changes, once copied, are also saved in a git ref kept 30 days, and
+    /// the checkout goes back to its default branch.
+    #[serde(default)]
+    pub move_changes: bool,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
 #[ts(export)]
 pub struct ClaudeCodeImportResult {
     pub dry_run: bool,
+    /// Asked with `move_changes`: the released checkouts are cleaned.
+    #[serde(default)]
+    pub move_changes: bool,
     /// The window read, in days; none with `all` or `since_date`.
     pub since_days: Option<u32>,
     /// The day the window starts, when asked by date.
@@ -175,6 +182,18 @@ pub struct ClaudeCodeRelease {
     /// branch's commits come, never its changes.
     #[serde(default)]
     pub commits_only: bool,
+    /// Moved out (`move_changes`): the ref its changes are saved in, and the branch (or commit)
+    /// it went back to.
+    #[serde(default)]
+    pub moved: Option<ClaudeCodeMoved>,
+}
+
+/// Where a released checkout's changes went with `move_changes`.
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[ts(export)]
+pub struct ClaudeCodeMoved {
+    pub saved_in: String,
+    pub back_on: String,
 }
 
 #[cfg(test)]

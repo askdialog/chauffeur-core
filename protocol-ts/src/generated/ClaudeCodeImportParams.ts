@@ -20,4 +20,9 @@ dry_run: boolean,
 /**
  * Claude Code's folder, when it is not `CLAUDE_CONFIG_DIR` or `~/.claude`.
  */
-claude_dir?: string, };
+claude_dir?: string, 
+/**
+ * A released checkout's changes, once copied, are also saved in a git ref kept 30 days, and
+ * the checkout goes back to its default branch.
+ */
+move_changes: boolean, };

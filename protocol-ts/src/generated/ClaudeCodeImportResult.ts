@@ -7,6 +7,10 @@ import type { ClaudeCodeWorkspacePlan } from "./ClaudeCodeWorkspacePlan";
 
 export type ClaudeCodeImportResult = { dry_run: boolean, 
 /**
+ * Asked with `move_changes`: the released checkouts are cleaned.
+ */
+move_changes: boolean, 
+/**
  * The window read, in days; none with `all` or `since_date`.
  */
 since_days: number | null, 

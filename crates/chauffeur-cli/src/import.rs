@@ -57,6 +57,10 @@ pub enum Source {
         /// Claude Code's folder, when it is not `CLAUDE_CONFIG_DIR` or `~/.claude`.
         #[arg(long)]
         claude_dir: Option<String>,
+        /// Also save a released checkout's changes, once copied, in a git ref kept 30 days, and
+        /// put the checkout back on its default branch: one copy of the work is left, Chauffeur's.
+        #[arg(long)]
+        move_changes: bool,
     },
 }
 
@@ -83,6 +87,7 @@ pub async fn run(source: Source, client: &mut Client, json: bool) -> anyhow::Res
             since,
             all,
             claude_dir,
+            move_changes,
         } => {
             // A number of days, or a date the daemon reads.
             let (since_days, since_date) = match since {
@@ -110,6 +115,7 @@ pub async fn run(source: Source, client: &mut Client, json: bool) -> anyhow::Res
                 all,
                 dry_run,
                 claude_dir,
+                move_changes,
             };
             claude_code(params, yes, client, json).await
         }
@@ -499,6 +505,8 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
         for r in &plan.releases {
             let only = if r.commits_only {
                 ", gone or half deleted: its commits only"
+            } else if plan.move_changes {
+                ", then cleaned (its changes saved in a git ref kept 30 days) and put back on its default branch"
             } else {
                 ""
             };
@@ -569,7 +577,7 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
     let released: Vec<&ClaudeCodeRelease> = plan
         .releases
         .iter()
-        .filter(|r| !r.commits_only && released_in(plan, r))
+        .filter(|r| !r.commits_only && r.moved.is_none() && released_in(plan, r))
         .collect();
     if !released.is_empty() {
         lines.push(
@@ -581,6 +589,19 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
                 shell_quoted(&r.folder),
                 r.repo,
                 r.branch
+            ));
+        }
+    }
+    // Moved out: one copy left, Chauffeur's; the other kept 30 days.
+    for r in &plan.releases {
+        if let Some(moved) = &r.moved {
+            lines.push(format!(
+                "{} is back on {}, cleaned; its changes are saved in {} for 30 days (`git -C {} checkout {} -- .` brings them back).",
+                r.folder,
+                moved.back_on,
+                moved.saved_in,
+                shell_quoted(&r.folder),
+                moved.saved_in
             ));
         }
     }
@@ -645,9 +666,11 @@ fn claude_code_release_warning(plan: &ClaudeCodeImportResult) -> String {
     for r in &plan.releases {
         out.push_str(&format!("  {} {}   in {}\n", r.repo, r.branch, r.folder));
     }
-    out.push_str(
-        "Those checkouts keep their files and uncommitted changes, on a detached HEAD on the same commit; the changes are copied into the workspace (not those of a checkout gone or half deleted).",
-    );
+    out.push_str(if plan.move_changes {
+        "Their uncommitted changes are copied into the workspace (not those of a checkout gone or half deleted), then saved in a git ref kept 30 days; the checkouts are cleaned and put back on their default branch."
+    } else {
+        "Those checkouts keep their files and uncommitted changes, on a detached HEAD on the same commit; the changes are copied into the workspace (not those of a checkout gone or half deleted)."
+    });
     out
 }
 
@@ -662,6 +685,7 @@ mod tests {
             branch: branch.into(),
             folder: folder.into(),
             commits_only,
+            moved: None,
         };
         let workspace = |branch: &str| ClaudeCodeWorkspacePlan {
             name: branch.into(),
@@ -677,6 +701,7 @@ mod tests {
         };
         ClaudeCodeImportResult {
             dry_run,
+            move_changes: false,
             since_days: Some(60),
             since_date: None,
             claude_dir: "/c".into(),
@@ -727,6 +752,30 @@ mod tests {
         // Nothing guessed: no guess to check.
         plan.setups.remove(0);
         assert!(!render_claude_code(&plan).contains("A guess"));
+    }
+
+    #[test]
+    fn with_move_changes_the_plan_says_who_is_cleaned_and_the_outcome_where_the_changes_went() {
+        let mut planned = claude_code_plan(true, ClaudeCodeOutcome::Import);
+        planned.move_changes = true;
+        let plan = render_claude_code(&planned);
+        assert!(
+            plan.contains("shop feat/a   checked out in /code/shop, then cleaned (its changes saved in a git ref kept 30 days) and put back on its default branch"),
+            "{plan}"
+        );
+        assert!(claude_code_release_warning(&planned).contains("the checkouts are cleaned"));
+        let mut done = claude_code_plan(false, ClaudeCodeOutcome::Imported);
+        done.move_changes = true;
+        done.releases[0].moved = Some(chauffeur_protocol::claudecode::ClaudeCodeMoved {
+            saved_in: "refs/chauffeur/claude-code/w/shop".into(),
+            back_on: "main".into(),
+        });
+        let said = claude_code_outcome(&done);
+        assert!(
+            said.contains("/code/shop is back on main, cleaned; its changes are saved in refs/chauffeur/claude-code/w/shop for 30 days (`git -C /code/shop checkout refs/chauffeur/claude-code/w/shop -- .` brings them back)."),
+            "{said}"
+        );
+        assert!(!said.contains("git -C /code/shop stash"), "{said}");
     }
 
     #[test]

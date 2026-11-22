@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chauffeur_protocol::claudecode::{
-    ClaudeCodeOutcome, ClaudeCodeWorkspaceKind, ClaudeCodeWorkspacePlan,
+    ClaudeCodeMoved, ClaudeCodeOutcome, ClaudeCodeWorkspaceKind, ClaudeCodeWorkspacePlan,
 };
 use chauffeur_protocol::client::CreateWorkspaceParams;
 use chauffeur_protocol::model::WorkspaceState;
@@ -118,6 +118,8 @@ pub(super) struct Found<'a> {
     pub(super) sessions: &'a HashMap<String, Session>,
     /// The folders Claude Code still runs in: no branch is released from under it.
     pub(super) running: &'a [PathBuf],
+    /// A released checkout's changes, once copied, are saved in a ref and it is cleaned.
+    pub(super) move_changes: bool,
 }
 
 /// The clone a workspace on a new branch is made from: Chauffeur's, else the user's it adopts.
@@ -134,8 +136,10 @@ pub(super) async fn import(
     workspaces: &mut [ClaudeCodeWorkspacePlan],
     found: &Found<'_>,
     report: &mut Report<'_>,
-) -> Result<()> {
+) -> Result<Vec<(PathBuf, ClaudeCodeMoved)>> {
     let git = Git::new(d.shell_env.clone());
+    // The released checkouts moved out (`move_changes`), each with where its changes went.
+    let mut moved = Vec::new();
     // Each parent made, by name (its children go under it); none for one that failed.
     let mut parents: HashMap<String, Option<String>> = HashMap::new();
     // Each parent's children as planned, kept with it for a later run to make those that fail.
@@ -184,7 +188,17 @@ pub(super) async fn import(
             (ClaudeCodeWorkspaceKind::Branch, Some(branch)) => {
                 match parent_id(&parents, workspace.parent.as_deref()) {
                     Ok(parent) => {
-                        make(d, &git, workspace, &branch, parent, found, report.warnings).await
+                        make(
+                            d,
+                            &git,
+                            workspace,
+                            &branch,
+                            parent,
+                            found,
+                            report.warnings,
+                            &mut moved,
+                        )
+                        .await
                     }
                     Err(error) => Err(error),
                 }
@@ -217,7 +231,7 @@ pub(super) async fn import(
             .import(d, claude, &row, &workspace.sessions, found.sessions, false)
             .await;
     }
-    Ok(())
+    Ok(moved)
 }
 
 /// The workspace a child goes under: its parent's, made earlier in the run; none for a plain one.
@@ -511,6 +525,7 @@ async fn make(
     parent: Option<String>,
     found: &Found<'_>,
     warnings: &mut Vec<String>,
+    moved: &mut Vec<(PathBuf, ClaudeCodeMoved)>,
 ) -> Result<WorkspaceRow> {
     let existing = existing(d, workspace, branch)?;
     let missing = missing_repos(d, workspace, branch, existing.as_ref())?;
@@ -581,6 +596,36 @@ async fn make(
                 checkout.folder.display(),
                 row.slug
             ));
+            continue;
+        }
+        // Copied: with `move_changes`, the checkout keeps them no more (a released one only).
+        if !found.move_changes || checkout.kept {
+            continue;
+        }
+        let base = d
+            .store
+            .worktrees_of(&row.id)?
+            .into_iter()
+            .find(|w| w.repo == repo_folder(&checkout.at.repo))
+            .map(|w| w.base_branch)
+            .unwrap_or_default();
+        let out = super::moved::move_out(
+            d,
+            git,
+            &checkout.folder,
+            &checkout.clone,
+            &checkout.at.repo,
+            &base,
+            &row,
+        )
+        .await;
+        match out {
+            Ok(done) => moved.push((checkout.folder.clone(), done)),
+            Err(error) => warnings.push(format!(
+                "The changes of {} are in {}, but it could not be cleaned ({error:#}): clean it by hand once you no longer need them there.",
+                checkout.folder.display(),
+                row.slug
+            )),
         }
     }
     match failed {

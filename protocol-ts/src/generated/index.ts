@@ -75,6 +75,7 @@ export type { ClaudeCodeBranch } from "./ClaudeCodeBranch";
 export type { ClaudeCodeHistoryPlan } from "./ClaudeCodeHistoryPlan";
 export type { ClaudeCodeImportParams } from "./ClaudeCodeImportParams";
 export type { ClaudeCodeImportResult } from "./ClaudeCodeImportResult";
+export type { ClaudeCodeMoved } from "./ClaudeCodeMoved";
 export type { ClaudeCodeOutcome } from "./ClaudeCodeOutcome";
 export type { ClaudeCodeRelease } from "./ClaudeCodeRelease";
 export type { ClaudeCodeSessionPlan } from "./ClaudeCodeSessionPlan";

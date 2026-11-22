@@ -3465,7 +3465,9 @@ impl WorkspaceManager {
             }
             d.store.clear_snapshot_ref(&worktree.id)?;
         }
-        Ok(expired.len())
+        // The refs an import from Claude Code saved a checkout's changes in, as long.
+        let moved = crate::claudecode::moved::purge(&d, &git, &cutoff.to_rfc3339()).await?;
+        Ok(expired.len() + moved)
     }
 
     // --- waiting ---
