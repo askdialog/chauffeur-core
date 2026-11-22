@@ -434,8 +434,8 @@ pub async fn import(
             running: &running_folders,
             move_changes: params.move_changes,
         };
-        let moved = branches::import(d, &claude, &mut plan.workspaces, &found, &mut report).await?;
-        for (folder, done) in moved {
+        branches::import(d, &claude, &mut plan.workspaces, &found, &mut report).await?;
+        for (folder, done) in std::mem::take(&mut report.moved) {
             if let Some(release) = releases
                 .iter_mut()
                 .find(|r| crate::conductor::same_folder(Path::new(&r.folder), &folder))

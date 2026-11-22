@@ -57,8 +57,9 @@ pub enum Source {
         /// Claude Code's folder, when it is not `CLAUDE_CONFIG_DIR` or `~/.claude`.
         #[arg(long)]
         claude_dir: Option<String>,
-        /// Also save a released checkout's changes, once copied, in a git ref kept 30 days, and
-        /// put the checkout back on its default branch: one copy of the work is left, Chauffeur's.
+        /// Also save a released checkout's changes, once copied, in a git ref kept as long as an
+        /// archive's snapshot (30 days by default), and put the checkout back on its default
+        /// branch: one copy of the work is left, Chauffeur's.
         #[arg(long)]
         move_changes: bool,
     },
@@ -506,7 +507,7 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
             let only = if r.commits_only {
                 ", gone or half deleted: its commits only"
             } else if plan.move_changes {
-                ", then cleaned (its changes saved in a git ref kept 30 days) and put back on its default branch"
+                ", then cleaned (its changes saved in a git ref kept as an archive's snapshot is) and put back on its default branch"
             } else {
                 ""
             };
@@ -592,16 +593,14 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
             ));
         }
     }
-    // Moved out: one copy left, Chauffeur's; the other kept 30 days.
+    // Moved out: one copy left, Chauffeur's; the other kept as an archive's snapshot is.
     for r in &plan.releases {
         if let Some(moved) = &r.moved {
+            let folder = shell_quoted(&r.folder);
+            let saved = &moved.saved_in;
             lines.push(format!(
-                "{} is back on {}, cleaned; its changes are saved in {} for 30 days (`git -C {} checkout {} -- .` brings them back).",
-                r.folder,
-                moved.back_on,
-                moved.saved_in,
-                shell_quoted(&r.folder),
-                moved.saved_in
+                "{} is back on {}, cleaned; its changes are saved in {saved} as an archive's snapshot is. To bring them back as they were (detached on the branch's commit): git -C {folder} switch --detach {saved}^ && git -C {folder} read-tree -u --reset {saved} && git -C {folder} reset -q",
+                r.folder, moved.back_on,
             ));
         }
     }
@@ -667,7 +666,7 @@ fn claude_code_release_warning(plan: &ClaudeCodeImportResult) -> String {
         out.push_str(&format!("  {} {}   in {}\n", r.repo, r.branch, r.folder));
     }
     out.push_str(if plan.move_changes {
-        "Their uncommitted changes are copied into the workspace (not those of a checkout gone or half deleted), then saved in a git ref kept 30 days; the checkouts are cleaned and put back on their default branch."
+        "Their uncommitted changes are copied into the workspace (not those of a checkout gone or half deleted), then saved in a git ref kept as an archive's snapshot is (30 days by default); the checkouts are cleaned and put back on their default branch."
     } else {
         "Those checkouts keep their files and uncommitted changes, on a detached HEAD on the same commit; the changes are copied into the workspace (not those of a checkout gone or half deleted)."
     });
@@ -760,7 +759,7 @@ mod tests {
         planned.move_changes = true;
         let plan = render_claude_code(&planned);
         assert!(
-            plan.contains("shop feat/a   checked out in /code/shop, then cleaned (its changes saved in a git ref kept 30 days) and put back on its default branch"),
+            plan.contains("shop feat/a   checked out in /code/shop, then cleaned (its changes saved in a git ref kept as an archive's snapshot is) and put back on its default branch"),
             "{plan}"
         );
         assert!(claude_code_release_warning(&planned).contains("the checkouts are cleaned"));
@@ -772,7 +771,7 @@ mod tests {
         });
         let said = claude_code_outcome(&done);
         assert!(
-            said.contains("/code/shop is back on main, cleaned; its changes are saved in refs/chauffeur/claude-code/w/shop for 30 days (`git -C /code/shop checkout refs/chauffeur/claude-code/w/shop -- .` brings them back)."),
+            said.contains("/code/shop is back on main, cleaned; its changes are saved in refs/chauffeur/claude-code/w/shop as an archive's snapshot is. To bring them back as they were (detached on the branch's commit): git -C /code/shop switch --detach refs/chauffeur/claude-code/w/shop^ && git -C /code/shop read-tree -u --reset refs/chauffeur/claude-code/w/shop && git -C /code/shop reset -q"),
             "{said}"
         );
         assert!(!said.contains("git -C /code/shop stash"), "{said}");

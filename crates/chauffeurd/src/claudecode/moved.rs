@@ -1,12 +1,14 @@
 //! `--move-changes`: a released checkout's changes, once copied into the workspace, are also saved
-//! in a git ref kept as long as an archive's snapshot (30 days), and the checkout goes back to its
-//! default branch, so that one copy of the work is left: Chauffeur's.
+//! in a git ref kept as long as an archive's snapshot (`snapshot_retention_days`, 30 by default),
+//! and the checkout goes back to its default branch, so that one copy of the work is left:
+//! Chauffeur's.
 
 use std::path::{Path, PathBuf};
 
 use chauffeur_protocol::claudecode::ClaudeCodeMoved;
 use serde::{Deserialize, Serialize};
 
+use super::branches::Released;
 use crate::git::Git;
 use crate::store::WorkspaceRow;
 use crate::{Daemon, Result};
@@ -22,26 +24,25 @@ struct Saved {
     at: String,
 }
 
-/// Saves the changes of `folder` (a checkout of `repo` released for `row`) in a ref, then cleans
+/// Saves the changes of a checkout `released` for `row` in a ref, then cleans
 /// it and puts it back on `base`, the repo's default branch: the clone's own checkout on it, a
 /// worktree of the user's detached at it (the clone's is where the default branch goes), as is
 /// one whose branch another checkout holds.
 pub(super) async fn move_out(
     d: &Daemon,
     git: &Git,
-    folder: &Path,
-    clone: &Path,
-    repo: &str,
+    released: &Released,
     base: &str,
     row: &WorkspaceRow,
 ) -> anyhow::Result<ClaudeCodeMoved> {
+    let folder = released.folder.as_path();
     let reference = format!(
         "refs/chauffeur/claude-code/{}/{}",
         row.id,
-        crate::repos::repo_folder(repo)
+        crate::repos::repo_folder(&released.at.repo)
     );
     git.snapshot(folder, &reference).await?;
-    remember(d, clone, &reference)?;
+    remember(d, &released.clone, &reference)?;
     git.run(folder, &["reset", "--hard", "-q"]).await?;
     git.run(folder, &["clean", "-fdq"]).await?;
     let linked = git
@@ -76,15 +77,14 @@ fn remember(d: &Daemon, clone: &Path, reference: &str) -> Result<()> {
 }
 
 fn read(d: &Daemon) -> Result<Vec<Saved>> {
-    Ok(d.store
-        .kv_get(SAVED)?
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default())
+    match d.store.kv_get(SAVED)? {
+        Some(text) => Ok(serde_json::from_str(&text)?),
+        None => Ok(Vec::new()),
+    }
 }
 
 fn write(d: &Daemon, saved: &[Saved]) -> Result<()> {
-    let text = serde_json::to_string(saved).map_err(|e| crate::Error::Internal(e.into()))?;
-    d.store.kv_set(SAVED, &text)
+    d.store.kv_set(SAVED, &serde_json::to_string(saved)?)
 }
 
 /// Deletes the refs saved before `cutoff`; how many.

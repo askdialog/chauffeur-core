@@ -2780,11 +2780,20 @@ async fn move_changes_leaves_one_copy_of_the_work_in_chauffeur() {
         git(&shop, &["show", &format!("{}:README.md", b.saved_in)]),
         "shop, b's change"
     );
-    // The command the output gives brings them back.
-    git(&shop, &["checkout", &a.saved_in, "--", "."]);
+    // The command the output gives brings them back as they were, on the branch's commit.
+    git(
+        &shop,
+        &["switch", "-q", "--detach", &format!("{}^", a.saved_in)],
+    );
+    git(&shop, &["read-tree", "-u", "--reset", &a.saved_in]);
+    git(&shop, &["reset", "-q"]);
     assert_eq!(
-        std::fs::read_to_string(shop.join("new.txt")).unwrap(),
-        "new\n"
+        git(&shop, &["status", "--porcelain"]),
+        "M README.md\n?? new.txt"
+    );
+    assert_eq!(
+        std::fs::read_to_string(shop.join("README.md")).unwrap(),
+        "shop, a's change\n"
     );
     // Past the retention, the daily purge deletes the refs.
     daemon

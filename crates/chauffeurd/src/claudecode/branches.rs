@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chauffeur_protocol::claudecode::{
-    ClaudeCodeMoved, ClaudeCodeOutcome, ClaudeCodeWorkspaceKind, ClaudeCodeWorkspacePlan,
+    ClaudeCodeOutcome, ClaudeCodeWorkspaceKind, ClaudeCodeWorkspacePlan,
 };
 use chauffeur_protocol::client::CreateWorkspaceParams;
 use chauffeur_protocol::model::WorkspaceState;
@@ -136,10 +136,8 @@ pub(super) async fn import(
     workspaces: &mut [ClaudeCodeWorkspacePlan],
     found: &Found<'_>,
     report: &mut Report<'_>,
-) -> Result<Vec<(PathBuf, ClaudeCodeMoved)>> {
+) -> Result<()> {
     let git = Git::new(d.shell_env.clone());
-    // The released checkouts moved out (`move_changes`), each with where its changes went.
-    let mut moved = Vec::new();
     // Each parent made, by name (its children go under it); none for one that failed.
     let mut parents: HashMap<String, Option<String>> = HashMap::new();
     // Each parent's children as planned, kept with it for a later run to make those that fail.
@@ -187,12 +185,7 @@ pub(super) async fn import(
             }
             (ClaudeCodeWorkspaceKind::Branch, Some(branch)) => {
                 match parent_id(&parents, workspace.parent.as_deref()) {
-                    Ok(parent) => make(d, &git, workspace, &branch, parent, found, report.warnings)
-                        .await
-                        .map(|(row, out)| {
-                            moved.extend(out);
-                            row
-                        }),
+                    Ok(parent) => make(d, &git, workspace, &branch, parent, found, report).await,
                     Err(error) => Err(error),
                 }
             }
@@ -224,7 +217,7 @@ pub(super) async fn import(
             .import(d, claude, &row, &workspace.sessions, found.sessions, false)
             .await;
     }
-    Ok(moved)
+    Ok(())
 }
 
 /// The workspace a child goes under: its parent's, made earlier in the run; none for a plain one.
@@ -474,10 +467,10 @@ async fn carry_changes(
 
 /// A checkout the branch was released from (or whose changes were read, the branch kept there),
 /// to put back if the workspace cannot be made.
-struct Released {
-    at: RepoBranch,
-    folder: PathBuf,
-    clone: PathBuf,
+pub(super) struct Released {
+    pub(super) at: RepoBranch,
+    pub(super) folder: PathBuf,
+    pub(super) clone: PathBuf,
     /// The branch's commit when it was released.
     head: String,
     /// Its folder is gone: its HEAD is in the clone's `.git` only.
@@ -517,14 +510,14 @@ async fn make(
     branch: &str,
     parent: Option<String>,
     found: &Found<'_>,
-    warnings: &mut Vec<String>,
-) -> Result<(WorkspaceRow, Vec<(PathBuf, ClaudeCodeMoved)>)> {
+    report: &mut Report<'_>,
+) -> Result<WorkspaceRow> {
     let existing = existing(d, workspace, branch)?;
     let missing = missing_repos(d, workspace, branch, existing.as_ref())?;
     if let Some(row) = &existing
         && missing.is_empty()
     {
-        return Ok((row.clone(), Vec::new()));
+        return Ok(row.clone());
     }
     let mut released = Vec::new();
     let prepared = prepare(d, git, &missing, branch, found, &mut released).await;
@@ -570,21 +563,20 @@ async fn make(
         .chain(std::iter::once(branch_record(branch)));
     for record in records {
         if let Err(error) = d.store.kv_set(&record, &row.id) {
-            warnings.push(format!(
+            report.warnings.push(format!(
                 "{} was made, but could not be recorded ({error}): a later import will not add to it.",
                 row.slug
             ));
         }
     }
     let root = PathBuf::from(&row.path);
-    let mut moved = Vec::new();
     for checkout in released.iter().filter(|r| added.contains(&r.at.repo)) {
         let Some(changes) = &checkout.changes else {
             continue;
         };
         let into = root.join(repo_folder(&checkout.at.repo));
         if let Err(error) = conductor::reapply(git, changes, &checkout.folder, &into).await {
-            warnings.push(format!(
+            report.warnings.push(format!(
                 "Some uncommitted changes of {} could not be copied into {} ({error:#}): they are still there.",
                 checkout.folder.display(),
                 row.slug
@@ -601,20 +593,17 @@ async fn make(
             .into_iter()
             .find(|w| w.repo == repo_folder(&checkout.at.repo))
             .map(|w| w.base_branch)
-            .unwrap_or_default();
-        let out = super::moved::move_out(
-            d,
-            git,
-            &checkout.folder,
-            &checkout.clone,
-            &checkout.at.repo,
-            &base,
-            &row,
-        )
-        .await;
-        match out {
-            Ok(done) => moved.push((checkout.folder.clone(), done)),
-            Err(error) => warnings.push(format!(
+            .filter(|base| !base.is_empty());
+        let Some(base) = base else {
+            report.warnings.push(format!(
+                "{} is left as it is: its default branch is unknown. Clean it by hand once you no longer need its changes there.",
+                checkout.folder.display()
+            ));
+            continue;
+        };
+        match super::moved::move_out(d, git, checkout, &base, &row).await {
+            Ok(done) => report.moved.push((checkout.folder.clone(), done)),
+            Err(error) => report.warnings.push(format!(
                 "The changes of {} are in {}, but it could not be cleaned ({error:#}): clean it by hand once you no longer need them there.",
                 checkout.folder.display(),
                 row.slug
@@ -623,7 +612,7 @@ async fn make(
     }
     match failed {
         Some(error) => Err(error),
-        None => Ok((row, moved)),
+        None => Ok(row),
     }
 }
 

@@ -22,7 +22,8 @@ dry_run: boolean,
  */
 claude_dir?: string, 
 /**
- * A released checkout's changes, once copied, are also saved in a git ref kept 30 days, and
- * the checkout goes back to its default branch.
+ * A released checkout's changes, once copied, are also saved in a git ref kept as an
+ * archive's snapshot is (30 days by default), and the checkout goes back to its default
+ * branch.
  */
 move_changes: boolean, };

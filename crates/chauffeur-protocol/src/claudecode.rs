@@ -24,8 +24,9 @@ pub struct ClaudeCodeImportParams {
     /// Claude Code's folder, when it is not `CLAUDE_CONFIG_DIR` or `~/.claude`.
     #[serde(default)]
     pub claude_dir: Option<String>,
-    /// A released checkout's changes, once copied, are also saved in a git ref kept 30 days, and
-    /// the checkout goes back to its default branch.
+    /// A released checkout's changes, once copied, are also saved in a git ref kept as an
+    /// archive's snapshot is (30 days by default), and the checkout goes back to its default
+    /// branch.
     #[serde(default)]
     pub move_changes: bool,
 }
