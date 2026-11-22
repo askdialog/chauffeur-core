@@ -152,10 +152,21 @@ pub(super) async fn import(
         }
     }
     for workspace in workspaces.iter_mut() {
+        // The default-branch changes it could not carry: no longer said to.
+        let mut uncarried = Vec::new();
         let made = match (workspace.kind, workspace.branch.clone()) {
             (ClaudeCodeWorkspaceKind::Parent, _) => {
                 let children = planned.remove(&workspace.name).unwrap_or_default();
-                let made = make_parent(d, &git, workspace, children, found, report.warnings).await;
+                let made = make_parent(
+                    d,
+                    &git,
+                    workspace,
+                    children,
+                    found,
+                    report.warnings,
+                    &mut uncarried,
+                )
+                .await;
                 let id = made.as_ref().ok().map(|row| row.id.clone());
                 parents.insert(workspace.name.clone(), id);
                 made
@@ -168,7 +179,7 @@ pub(super) async fn import(
                     workspace.workspace = Some(earlier.slug);
                     continue;
                 }
-                make_changes(d, &git, workspace, found, report.warnings).await
+                make_changes(d, &git, workspace, found, report.warnings, &mut uncarried).await
             }
             (ClaudeCodeWorkspaceKind::Branch, Some(branch)) => {
                 match parent_id(&parents, workspace.parent.as_deref()) {
@@ -197,6 +208,9 @@ pub(super) async fn import(
                 continue;
             }
         };
+        workspace
+            .changes_from
+            .retain(|repo| !uncarried.contains(repo));
         workspace.outcome = ClaudeCodeOutcome::Imported;
         workspace.workspace = Some(row.slug.clone());
         report
@@ -268,13 +282,16 @@ async fn make_parent(
     children: Vec<PlannedChild>,
     found: &Found<'_>,
     warnings: &mut Vec<String>,
+    uncarried: &mut Vec<String>,
 ) -> Result<WorkspaceRow> {
     if let Some(earlier) = &workspace.workspace {
         return d.workspaces.row(earlier);
     }
     let (repo, row) = make_on_new_branch(d, git, workspace, found).await?;
     for changed in &workspace.changes_from {
-        carry_changes(d, git, changed, &row, found, warnings).await;
+        if !carry_changes(d, git, changed, &row, found, warnings).await {
+            uncarried.push(changed.clone());
+        }
     }
     let record = ParentRecord {
         workspace: row.id.clone(),
@@ -319,9 +336,12 @@ async fn make_changes(
     workspace: &ClaudeCodeWorkspacePlan,
     found: &Found<'_>,
     warnings: &mut Vec<String>,
+    uncarried: &mut Vec<String>,
 ) -> Result<WorkspaceRow> {
     let (repo, row) = make_on_new_branch(d, git, workspace, found).await?;
-    carry_changes(d, git, &repo, &row, found, warnings).await;
+    if !carry_changes(d, git, &repo, &row, found, warnings).await {
+        uncarried.push(repo);
+    }
     Ok(row)
 }
 
@@ -406,7 +426,7 @@ async fn branch_at(d: &Daemon, git: &Git, clone: &Path, from: &Path, name: &str)
 
 /// The uncommitted changes on `repo`'s default branch in the user's clone, copied into `row`'s
 /// worktree of it, the clone keeping them; recorded, so that a later run copies them no more.
-/// What cannot be copied is said.
+/// What cannot be copied is said; true when all were.
 async fn carry_changes(
     d: &Daemon,
     git: &Git,
@@ -414,13 +434,13 @@ async fn carry_changes(
     row: &WorkspaceRow,
     found: &Found<'_>,
     warnings: &mut Vec<String>,
-) {
+) -> bool {
     let Some(from) = found.changed.get(repo) else {
-        return;
+        return false;
     };
     // Carried by an earlier import: not again.
     if changes_workspace(d, repo).is_ok_and(|earlier| earlier.is_some_and(|e| e.id != row.id)) {
-        return;
+        return false;
     }
     let into = PathBuf::from(&row.path).join(repo_folder(repo));
     let copied = async {
@@ -428,7 +448,7 @@ async fn carry_changes(
         conductor::reapply(git, &changes, from, &into).await
     }
     .await;
-    if let Err(error) = copied {
+    if let Err(error) = &copied {
         warnings.push(format!(
             "Some uncommitted changes on the default branch of {} could not be copied into {} ({error:#}): copy them there by hand, or archive {} and run the import again.",
             from.display(),
@@ -442,6 +462,7 @@ async fn carry_changes(
             row.slug
         ));
     }
+    copied.is_ok()
 }
 
 /// A checkout the branch was released from (or whose changes were read, the branch kept there),

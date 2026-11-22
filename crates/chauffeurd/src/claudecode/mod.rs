@@ -260,8 +260,17 @@ pub async fn import(
     for repo in &touched {
         for clone in repos.clones.get(repo).cloned().unwrap_or_default() {
             let base = repos.refs(&clone).await.base.clone();
-            if !changed.contains_key(repo) && repos.default_has_changes(&clone, &base).await {
-                changed.insert(repo.clone(), clone.clone());
+            if repos.default_has_changes(&clone, &base).await {
+                match changed.get(repo) {
+                    None => {
+                        changed.insert(repo.clone(), clone.clone());
+                    }
+                    Some(first) => warnings.push(format!(
+                        "The uncommitted changes on the default branch of {} are not carried: those of {}, another clone of {repo}, are. Carry them by hand if they are needed.",
+                        clone.display(),
+                        first.display()
+                    )),
+                }
             }
             bases.entry(repo.clone()).or_insert(base);
         }
@@ -284,6 +293,20 @@ pub async fn import(
     }
     for (session, row, record) in earlier_parents {
         with_earlier_parent(d, &mut plan, session, &row, &record)?;
+    }
+    // Changes an earlier import carried: no new parent carries them again.
+    for workspace in plan
+        .workspaces
+        .iter_mut()
+        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Parent)
+    {
+        let mut kept = Vec::new();
+        for repo in std::mem::take(&mut workspace.changes_from) {
+            if branches::changes_workspace(d, &repo)?.is_none() {
+                kept.push(repo);
+            }
+        }
+        workspace.changes_from = kept;
     }
     // The branches this version makes workspaces of (a plain one's, a parent's child), in the
     // repos an earlier import's workspace on it lacks (all, without one). Each repo's clone is

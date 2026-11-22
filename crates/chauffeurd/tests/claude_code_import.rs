@@ -2572,5 +2572,43 @@ async fn default_branch_changes_are_copied_once_into_a_workspace_the_clone_keepi
         )]
     );
     assert!(d.workspaces.get("docs-changes-2").is_err());
+
+    // A new orchestration on web: its parent does not carry web's changes again.
+    let web = f.root.join("clones/web");
+    let mut lines = Vec::new();
+    for name in ["n1", "n2"] {
+        let at = f.root.join("wt").join(name);
+        git(
+            &web,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                &format!("feat/{name}"),
+                at.to_str().unwrap(),
+                "main",
+            ],
+        );
+        commit(&at, &format!("{name}.txt"), "work\n");
+        lines.push(line(
+            &web,
+            "main",
+            &ago(1),
+            &edit(&at.join(format!("{name}.txt"))),
+        ));
+    }
+    std::fs::write(
+        f.claude.join("projects/-code/new-orchestration.jsonl"),
+        lines.join("\n") + "\n",
+    )
+    .unwrap();
+    let planned = import(&f, true).await;
+    let parent = planned
+        .workspaces
+        .iter()
+        .find(|w| w.kind == ClaudeCodeWorkspaceKind::Parent && w.sessions == ["new-orchestration"])
+        .unwrap_or_else(|| panic!("{planned:?}"));
+    assert!(parent.changes_from.is_empty(), "{parent:?}");
     unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }

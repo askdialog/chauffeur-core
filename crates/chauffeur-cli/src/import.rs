@@ -608,7 +608,7 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
     {
         let slug = w.workspace.as_deref().unwrap_or(&w.name);
         lines.push(format!(
-            "The uncommitted changes on the default branch of {} are copied into {slug}; the clone keeps them as well: once you no longer need them there, stash them in it.",
+            "The uncommitted changes on the default branch of {} are copied into {slug}; the clone keeps them as well: once you no longer need them there, put them away in it (`git stash --include-untracked`).",
             w.changes_from.join(", ")
         ));
     }
