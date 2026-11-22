@@ -839,21 +839,21 @@ export function RequestFrame({
   return (
     <div
       className={cx(
-        "my-2 rounded-lg border px-3 py-2.5",
+        "my-2 rounded-lg border px-3 py-2.5 wrap-anywhere",
         state === "open" ? "border-attention/40 bg-attention/[0.06]" : "border-line bg-panel",
       )}
       data-request-state={state}
     >
       <div className="mb-1.5 flex items-center gap-2">
-        <span className={state === "open" ? "text-attention" : "text-faint"}>{icon}</span>
-        <span className="font-medium text-fg">{title}</span>
+        <span className={cx("shrink-0", state === "open" ? "text-attention" : "text-faint")}>{icon}</span>
+        <span className="min-w-0 font-medium text-fg">{title}</span>
         {state !== "open" && (
-          <Badge tone={state === "expired" ? "neutral" : outcomeTone} className="ml-auto">
+          <Badge tone={state === "expired" ? "neutral" : outcomeTone} className="ml-auto shrink-0">
             {state === "expired" ? "expired" : (outcome ?? "answered")}
           </Badge>
         )}
         {state === "open" && waitingFor && (
-          <Badge tone="attention" className="ml-auto" data-testid="request-waiting">
+          <Badge tone="attention" className="ml-auto shrink-0" data-testid="request-waiting">
             Waiting for {waitingFor}
           </Badge>
         )}

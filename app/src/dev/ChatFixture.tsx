@@ -57,6 +57,8 @@ const ago = (seconds: number, event: ChatEvent): EventEnvelope => ({
   ts: new Date(Date.now() - seconds * 1000).toISOString(),
 });
 
+const longCommand = `curl --header "If-None-Match: ${"0123456789abcdef".repeat(36)}" https://example.test/api/checkout`;
+
 const events: EventEnvelope[] = [
   p({ type: "session_started", agent_session_id: "s1", model: "opus" }),
   ...history.map(p),
@@ -148,6 +150,14 @@ const events: EventEnvelope[] = [
   p({ type: "notice", level: "warning", message: "Claude usage limit nearly reached (seven_day), resets at 2026-10-21T11:00:00.000Z" }),
   p({ type: "notice", level: "error", message: "Claude usage limit reached (five_hour), resets at 2026-10-21T11:00:00.000Z" }),
   p({ type: "notice", level: "warning", message: "Chauffeur restarted and interrupted the agent; send a message to resume" }),
+  p({
+    type: "permission_request",
+    request_id: "long-bash",
+    tool_name: "Bash",
+    input: { command: longCommand },
+    title: `bash: ${longCommand}`,
+  }),
+  p({ type: "request_resolved", request_id: "long-bash", outcome: "allowed", rules: [`Bash(${longCommand})`] }),
   e({ type: "thinking_delta", message_id: "m3", text: "Waiting for the answer before running the tests" }),
   e({ type: "text_delta", message_id: "m4", text: "While you decide, I am reading `beta/api/orders.py`" }),
 ];
