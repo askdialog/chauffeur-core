@@ -604,7 +604,7 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
     }
     if later > 0 {
         lines.push(format!(
-            "{later} in an orchestration or with default-branch changes come in a later version: nothing changed for them."
+            "{later} with default-branch changes come in a later version: nothing changed for them."
         ));
     }
     lines.join("\n")

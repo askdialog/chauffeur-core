@@ -204,6 +204,7 @@ pub async fn import(
         let stood = resume::Checkout {
             repo: repo.clone(),
             folder: home.top.clone(),
+            branch: home.branch.clone(),
         };
         for checkout in std::iter::once(stood).chain(checkouts) {
             if !session.checkouts.contains(&checkout) {
@@ -694,6 +695,7 @@ impl<'a> Repos<'a> {
                 checkouts.push(resume::Checkout {
                     repo: repo.clone(),
                     folder: stood.top.clone(),
+                    branch: write.branch.clone(),
                 });
             }
             let dir = path.parent().unwrap_or(&path).to_path_buf();
@@ -721,6 +723,7 @@ impl<'a> Repos<'a> {
                 checkouts.push(resume::Checkout {
                     repo: repo.clone(),
                     folder: checkout.top.clone(),
+                    branch: branch.clone(),
                 });
                 if let Some(branch) = branch {
                     found.push((repo, checkout.clone, branch));
@@ -739,6 +742,7 @@ impl<'a> Repos<'a> {
                 checkouts.push(resume::Checkout {
                     repo: repo.clone(),
                     folder: checkout.top.clone(),
+                    branch: Some(created.branch.clone()),
                 });
                 found.push((repo, checkout.clone, created.branch.clone()));
             }
