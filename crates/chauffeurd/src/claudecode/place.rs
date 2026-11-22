@@ -2,7 +2,8 @@
 //! live branch is a workspace, the same branch in several repos one workspace, its sessions its
 //! chats. A session with two live branches or more is a parent workspace on its folder's repo,
 //! holding it, with one child per branch; a branch two such sessions wrote goes to the most
-//! recent one. A clone's uncommitted default-branch changes go to a workspace of their own, or to
+//! recent one, the other keeping the rest (one branch: a chat of its workspace; none: its repo's
+//! history). A clone's uncommitted default-branch changes go to a workspace of their own, or to
 //! the most recent parent on that repo. A session with no live branch lands in its repo's history.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -49,12 +50,34 @@ pub fn place(sessions: &[Session], changes: &[String], bases: &HashMap<String, S
     }
     let mut taken: BTreeSet<String> = repos_of.keys().cloned().collect();
     let mut plan = Plan::default();
-    // Parents, oldest first: a branch two of them wrote ends with the most recent.
+    // A branch two orchestrations wrote goes to the most recent; one left with two branches or
+    // more is a parent, oldest first.
+    let orchestrations: Vec<&Session> = by_age
+        .iter()
+        .copied()
+        .filter(|s| names(s).len() >= 2)
+        .collect();
+    let mut wrote_last: HashMap<String, &str> = HashMap::new();
+    for session in &orchestrations {
+        for branch in names(session) {
+            wrote_last.insert(branch, &session.id);
+        }
+    }
+    // An orchestration's branches that a more recent one did not take; a plain session's all.
+    let kept = |s: &Session| -> BTreeSet<String> {
+        let all = names(s);
+        if all.len() < 2 {
+            return all;
+        }
+        all.into_iter()
+            .filter(|b| wrote_last.get(b).is_none_or(|id| *id == s.id))
+            .collect()
+    };
     let mut parents: Vec<(String, &Session)> = Vec::new();
     let mut owner: HashMap<String, String> = HashMap::new();
-    for session in by_age.iter().filter(|s| names(s).len() >= 2) {
+    for session in orchestrations.iter().filter(|s| kept(s).len() >= 2) {
         let name = unique(&mut taken, &slugify(&session.title, 48), &session.id);
-        for branch in names(session) {
+        for branch in kept(session) {
             owner.insert(branch, name.clone());
         }
         plan.lands_in.insert(session.id.clone(), name.clone());
@@ -64,10 +87,10 @@ pub fn place(sessions: &[Session], changes: &[String], bases: &HashMap<String, S
     let mut latest: BTreeMap<String, String> = BTreeMap::new();
     let mut histories: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for session in &by_age {
-        let branches = names(session);
-        for branch in &branches {
-            latest.insert(branch.clone(), session.last_active.clone());
+        for branch in names(session) {
+            latest.insert(branch, session.last_active.clone());
         }
+        let branches = kept(session);
         match branches.len() {
             0 => {
                 histories
@@ -262,12 +285,36 @@ mod tests {
                 "Parent session-new on (new) [web] parent=- chats=new changes=",
                 "Branch b on b [web] parent=session-new chats=simple changes=",
                 "Branch c on c [api] parent=session-new chats= changes=",
-                "Parent session-old on (new) [web] parent=- chats=old changes=",
-                "Branch a on a [web] parent=session-old chats= changes=",
+                "Branch a on a [web] parent=- chats=old changes=",
             ]
         );
         assert_eq!(plan.lands_in["simple"], "b");
         assert_eq!(plan.lands_in["new"], "session-new");
+    }
+
+    #[test]
+    fn a_parent_left_one_branch_is_a_chat_of_it_and_none_its_repos_history() {
+        let plan = place(
+            &[
+                session("one", "01", "web", &[("web", "a"), ("web", "b")]),
+                session("none", "02", "api", &[("web", "b"), ("api", "c")]),
+                session("new", "05", "web", &[("web", "b"), ("api", "c")]),
+            ],
+            &[],
+            &HashMap::new(),
+        );
+        assert_eq!(
+            shape(&plan),
+            [
+                "Parent session-new on (new) [web] parent=- chats=new changes=",
+                "Branch b on b [web] parent=session-new chats= changes=",
+                "Branch c on c [api] parent=session-new chats= changes=",
+                "Branch a on a [web] parent=- chats=one changes=",
+            ]
+        );
+        assert_eq!(plan.lands_in["one"], "a");
+        assert_eq!(plan.lands_in["none"], "history of api");
+        assert_eq!(plan.histories[0].sessions, ["none"]);
     }
 
     #[test]

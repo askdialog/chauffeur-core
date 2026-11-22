@@ -101,13 +101,21 @@ pub(super) struct Source {
 /// What the plan found, for the import.
 pub(super) struct Found<'a> {
     pub(super) sources: &'a HashMap<RepoBranch, Source>,
+    /// Each parent's repo's clone, by repo.
+    pub(super) parents: &'a HashMap<String, ParentClone>,
     pub(super) sessions: &'a HashMap<String, Session>,
     /// The folders Claude Code still runs in: no branch is released from under it.
     pub(super) running: &'a [PathBuf],
 }
 
-/// The workspaces of the live branches this version imports (a branch's own, not an
-/// orchestration's), and their sessions as chats; `plans` say how each went.
+/// The clone a parent workspace's repo is chosen from: Chauffeur's, else the user's it adopts.
+pub(super) struct ParentClone {
+    pub(super) clone: PathBuf,
+    pub(super) adopt: bool,
+}
+
+/// The workspaces of the live branches this version imports and of the orchestrations' parents,
+/// and their sessions as chats; `plans` say how each went.
 pub(super) async fn import(
     d: &Arc<Daemon>,
     claude: &Path,
@@ -116,14 +124,35 @@ pub(super) async fn import(
     report: &mut Report<'_>,
 ) -> Result<()> {
     let git = Git::new(d.shell_env.clone());
-    for workspace in workspaces
-        .iter_mut()
-        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Branch && w.parent.is_none())
-    {
-        let Some(branch) = workspace.branch.clone() else {
-            continue;
+    // Each parent made, by name (its children go under it); none for one that failed.
+    let mut parents: HashMap<String, Option<String>> = HashMap::new();
+    for workspace in workspaces.iter_mut() {
+        let made = match (workspace.kind, workspace.branch.clone()) {
+            (ClaudeCodeWorkspaceKind::Parent, _) => {
+                let made = make_parent(d, workspace, found).await;
+                let id = made.as_ref().ok().map(|row| row.id.clone());
+                parents.insert(workspace.name.clone(), id);
+                made
+            }
+            (ClaudeCodeWorkspaceKind::Branch, Some(branch)) => {
+                let parent = match &workspace.parent {
+                    None => Ok(None),
+                    Some(name) => match parents.get(name) {
+                        Some(Some(id)) => Ok(Some(id.clone())),
+                        _ => Err(Error::Conflict(format!(
+                            "its parent workspace {name} could not be made"
+                        ))),
+                    },
+                };
+                match parent {
+                    Ok(parent) => {
+                        make(d, &git, workspace, &branch, parent, found, report.warnings).await
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            _ => continue,
         };
-        let made = make(d, &git, workspace, &branch, found, report.warnings).await;
         let row = match made {
             Ok(row) => row,
             Err(error) => {
@@ -148,6 +177,33 @@ pub(super) async fn import(
             .await;
     }
     Ok(())
+}
+
+/// An orchestration's parent: a workspace on its folder's repo, on a new branch named after it,
+/// from the clone chosen for that repo (the user's becomes Chauffeur's).
+async fn make_parent(
+    d: &Arc<Daemon>,
+    workspace: &ClaudeCodeWorkspacePlan,
+    found: &Found<'_>,
+) -> Result<WorkspaceRow> {
+    let repo = workspace.repos.first().cloned().unwrap_or_default();
+    let Some(parent) = found.parents.get(&repo) else {
+        return Err(Error::BadRequest(format!(
+            "none of the clones of {repo} the sessions ran in is left: open a session in one, then run the import again"
+        )));
+    };
+    if parent.adopt {
+        adopt(d, &repo, &parent.clone)?;
+    }
+    let made = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some(workspace.name.clone()),
+            repos: vec![repo],
+            ..Default::default()
+        })
+        .await?;
+    d.workspaces.row(&made.workspace.id)
 }
 
 /// A checkout the branch was released from (or whose changes were read, the branch kept there),
@@ -193,6 +249,7 @@ async fn make(
     git: &Git,
     workspace: &ClaudeCodeWorkspacePlan,
     branch: &str,
+    parent: Option<String>,
     found: &Found<'_>,
     warnings: &mut Vec<String>,
 ) -> Result<WorkspaceRow> {
@@ -219,6 +276,7 @@ async fn make(
                 name: Some(workspace.name.clone()),
                 repos: workspace.repos.clone(),
                 branch: Some(branch.to_owned()),
+                parent,
                 ..Default::default()
             })
             .await
