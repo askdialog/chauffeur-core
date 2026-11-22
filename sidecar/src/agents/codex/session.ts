@@ -558,7 +558,12 @@ export class CodexSession implements AgentSession {
     } catch (error) {
       this.host.log.warn(`hooks/list failed: ${errorMessage(error)}`);
     }
-    this.emit(notice("warning", "Chauffeur's `git worktree add` guard is not active for this Codex chat; the workspace instructions still forbid it"));
+    this.emit(
+      notice(
+        "warning",
+        "Chauffeur's guards are not active for this Codex chat: `git worktree add`, and writes into the user's own clones; the workspace instructions still forbid both",
+      ),
+    );
     return undefined;
   }
 

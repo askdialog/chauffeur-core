@@ -2,7 +2,7 @@ import { describe as group, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AcpEventMapper, describe } from "../src/agents/acp/events.ts";
+import { AcpEventMapper, type AcpToolCall, describe } from "../src/agents/acp/events.ts";
 import { decide, type PermissionContext } from "../src/agents/acp/permissions.ts";
 
 group("AcpEventMapper", () => {
@@ -85,6 +85,32 @@ group("decide", () => {
     // Reads of the clone, and writes in the worktree, as before.
     expect(decide(shell("cat /code/web/README.md"), { ...guarded, mode: "bypass_permissions" }).type).toBe("allow");
     expect(decide(edit("/w/web/src/app.ts"), guarded).type).toBe("allow");
+  });
+
+  test("a process's own folder and variables, and what is written to one, count for the clone guard", () => {
+    const guarded: PermissionContext = { ...context, mode: "bypass_permissions", clones: [{ clone: "/code/web", worktree: "/w/web" }] };
+    const process = (rawInput: Record<string, unknown>) => describe({ toolCallId: "p", kind: "execute", title: "Running", rawInput: rawInput as never });
+    expect(decide(process({ command: "touch notes.md", cwd: "/code/web" }), guarded).type).toBe("deny");
+    expect(decide(process({ command: "git commit -am wip", cwd: "/code/web" }), guarded).type).toBe("deny");
+    expect(decide(process({ command: "git clean -fdx", env: { GIT_WORK_TREE: "/code/web", GIT_DIR: "/code/web/.git" } }), guarded).type).toBe("deny");
+    expect(decide(process({ processId: "ab", text: "echo x > /code/web/a\n" }), guarded).type).toBe("deny");
+    expect(decide(process({ processId: "ab", bytesBase64: Buffer.from("echo x > /code/web/a\n").toString("base64") }), guarded).type).toBe("deny");
+    // In the worktree, or reading the clone: as before.
+    expect(decide(process({ command: "touch notes.md", cwd: "/w/web" }), guarded).type).toBe("allow");
+    expect(decide(process({ command: "ls", cwd: "/code/web" }), guarded).type).toBe("allow");
+  });
+
+  test("a permission is decided on the call as its updates left it", () => {
+    const guarded: PermissionContext = { ...context, mode: "bypass_permissions", clones: [{ clone: "/code/web", worktree: "/w/web" }] };
+    const mapper = new AcpEventMapper();
+    mapper.map({ sessionUpdate: "tool_call", toolCallId: "u1", title: "Running", kind: "execute", status: "pending" });
+    mapper.map({ sessionUpdate: "tool_call_update", toolCallId: "u1", rawInput: { command: "touch /code/web/a" } });
+    expect(decide(mapper.tool("u1") as AcpToolCall, guarded).type).toBe("deny");
+    mapper.map({ sessionUpdate: "tool_call", toolCallId: "u2", title: "Writing", kind: "edit", status: "pending" });
+    mapper.map({ sessionUpdate: "tool_call_update", toolCallId: "u2", locations: [{ path: "/code/web/a.ts" }] });
+    expect(decide(mapper.tool("u2") as AcpToolCall, guarded).type).toBe("deny");
+    // What the update leaves out stays.
+    expect(mapper.tool("u2")?.title).toBe("Writing");
   });
 
   test("worktrees and add-repo are refused whatever the mode", () => {

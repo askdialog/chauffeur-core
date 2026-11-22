@@ -704,6 +704,9 @@ describe("git from a workspace's worktree, which shares its clone's branches and
     "git switch --force-create=main feat/x",
     'cp scripts/pre-commit "$(git rev-parse --git-path hooks)/pre-commit"',
     'git config --file "$(git rev-parse --git-common-dir)/config" user.email x',
+    // Found by the CHF-32 red team: the clone's folder read from `git worktree list`.
+    'git -C "$(git worktree list | awk \'NR==1{print $1}\')" pull',
+    'cd "$(git worktree list --porcelain | head -1 | cut -d\' \' -f2)" && git checkout -- .',
     "git filter-branch --tree-filter 'rm -f secret' -- --all",
     "git push . --delete main",
     "git push . -d main",

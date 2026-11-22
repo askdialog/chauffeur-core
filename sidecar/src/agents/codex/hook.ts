@@ -28,12 +28,14 @@ const READ_ONLY_DENIALS: Record<HookGuard, string> = { "read-only": READ_ONLY_DE
 
 /** The hook's answer to a PreToolUse payload: a deny decision, or nothing to let the call run. */
 export function preToolUseAnswer(payload: string, { guard, clones }: HookSetup = { clones: [] }): string | undefined {
-  let input: { tool_input?: { command?: unknown }; cwd?: unknown };
+  let parsed: unknown;
   try {
-    input = JSON.parse(payload) as typeof input;
+    parsed = JSON.parse(payload);
   } catch {
     return undefined;
   }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const input: { tool_input?: { command?: unknown }; cwd?: unknown } = parsed;
   const command = commandText(input.tool_input?.command);
   if (command === undefined) return undefined;
   const reason = runsGitWorktreeAdd(command)
@@ -80,9 +82,15 @@ export async function runCodexHook(subcommand: string | undefined, args: string[
     process.stderr.write(`${setup}\n`);
     return 2;
   }
-  const answer = preToolUseAnswer(await Bun.stdin.text(), setup);
-  if (answer) process.stdout.write(`${answer}\n`);
-  return 0;
+  // A hook that fails lets the call run: 2, which Codex reads as a refusal, whatever went wrong.
+  try {
+    const answer = preToolUseAnswer(await Bun.stdin.text(), setup);
+    if (answer) process.stdout.write(`${answer}\n`);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`Chauffeur's hook failed, the command is refused: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 2;
+  }
 }
 
 /** The hook's arguments, as `hookCommandLine` writes them: `[read-only|design] [--clones <base64 JSON>]`; else why not. */

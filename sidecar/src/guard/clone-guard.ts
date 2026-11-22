@@ -729,9 +729,12 @@ class Judge {
       // `xargs` gives it more operands, only known as the line runs.
       const change = sharedChange(sub.text, fed ? [...rest, UNKNOWN] : rest, sharing, where);
       if (change) this.verdict.shared ??= { clone: sharing, ...change };
-      // `$(git rev-parse --git-path hooks)` prints a path in the clone's `.git`: a line writing
-      // where it says writes into the clone.
-      if (sub.text === "rev-parse" && texts.some((text) => GIT_PATHS.has(option(text)[0]))) this.verdict.pointed ??= sharing;
+      // `$(git rev-parse --git-path hooks)` prints a path in the clone's `.git`, and `git worktree
+      // list` the clone's own folder first: a line writing where they say writes into the clone.
+      const listsWorktrees = sub.text === "worktree" && rest.find((arg) => !arg.text.startsWith("-"))?.text === "list";
+      if ((sub.text === "rev-parse" && texts.some((text) => GIT_PATHS.has(option(text)[0]))) || listsWorktrees) {
+        this.verdict.pointed ??= sharing;
+      }
     }
     if (!sub.known) this.verdict.blind = true;
     else if (sub.text === "submodule" && texts.includes("foreach")) {
