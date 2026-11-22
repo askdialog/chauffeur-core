@@ -689,6 +689,8 @@ describe("git from a workspace's worktree, which shares its clone's branches and
     'git worktree "$ACTION" /code/web/.wt/other',
     'git remote "$ACTION" origin',
     'git reflog "$ACTION" --all',
+    'git push "$REMOTE" HEAD:main',
+    'git push "$REMOTE" :main',
   ], true);
 
   table("allowed", [
@@ -745,6 +747,8 @@ describe("git from a workspace's worktree, which shares its clone's branches and
     "git stash pop",
     "git stash apply stash@{0}",
     'git stash -m "$MESSAGE"',
+    'git push "$REMOTE" HEAD:feat/x',
+    'git push "$REMOTE"',
     'git stash push -m "$MESSAGE"',
     'git worktree add "$DIR" -b feat/y main',
     "git rebase main",

@@ -1321,10 +1321,14 @@ function refspecChange(
   if (repo) operands.unshift(repo);
   if (sub === "push") {
     // Pushing to the repository itself (`.`, its folder) moves its branches; to a remote, the remote's.
+    // One only known as the line runs may be the repository itself.
     const remote = operands[0];
-    const path = remote?.known && (remote.text === "." || /^\.{1,2}\//.test(remote.text) || isAbsolute(remote.text));
-    const target = path && where !== undefined ? resolve(where, remote.text) : undefined;
-    if (target === undefined || !(inside(target, clone.worktree) || inside(target, clone.clone))) return undefined;
+    if (remote === undefined) return undefined;
+    if (remote.known) {
+      const path = remote.text === "." || /^\.{1,2}\//.test(remote.text) || isAbsolute(remote.text);
+      const target = path && where !== undefined ? resolve(where, remote.text) : undefined;
+      if (target === undefined || !(inside(target, clone.worktree) || inside(target, clone.clone))) return undefined;
+    }
   }
   for (const spec of operands.slice(1)) {
     // Only known as the line runs: it may name one of the clone's branches as its destination.
