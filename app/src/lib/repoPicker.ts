@@ -154,22 +154,25 @@ export function repoPickerSearch(owner: string, filter: string) {
 }
 
 export function repoPickerView({
-  repos, pages, selected, search, account, knownOwners,
+  repos, pages, selected, pinned = selected, search, account, knownOwners,
 }: {
   repos: RepoInfo[];
   pages: RepoInfo[];
   selected: string[];
+  /** The repos listed first (Selected): the chosen ones as the list last settled, so that a
+   *  click does not move rows under the pointer. Defaults to `selected`. */
+  pinned?: string[];
   search: ReturnType<typeof repoPickerSearch>;
   account: string | null;
   knownOwners: string[];
 }) {
-  const cached = !search.owner && search.filter.trim() ? repos : cachedPickerRepos(repos, selected);
+  const cached = !search.owner && search.filter.trim() ? repos : cachedPickerRepos(repos, [...selected, ...pinned]);
   const all = mergeRepos(cached, pages);
   const pastedKey = search.pasted?.toLowerCase();
   const listed = pastedKey && all.some((repo) => repo.key.toLowerCase() === pastedKey || repo.full_name.toLowerCase() === pastedKey);
   const offered = search.pasted && !listed && search.filter.trim().includes("/") ? search.pasted : null;
   let start = offered ? 1 : 0;
-  const sections = repoSections(all, { owner: offered ? ALL_OWNERS : search.owner, query: search.query, account, selected })
+  const sections = repoSections(all, { owner: offered ? ALL_OWNERS : search.owner, query: search.query, account, selected: pinned })
     .map((section) => {
       const indexed = { ...section, start };
       start += section.repos.length;

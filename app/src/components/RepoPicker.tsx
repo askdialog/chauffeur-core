@@ -42,7 +42,7 @@ export function RepoPopover({
   single?: boolean;
   allowCreate?: boolean;
 }) {
-  const { filter, setFilter, owner, setOwner, view, navigation, pages, status, pick, onKeyDown, showScopeHint, catalogCount } = useRepoPicker(selection, onToggle);
+  const { filter, setFilter, owner, setOwner, view, navigation, pages, status, pick, pickCreated, onKeyDown, showScopeHint, catalogCount } = useRepoPicker(selection, onToggle);
   // GitHub unless the installation is set to a GitLab, where repos are listed, not created.
   const forge = useForge();
   const gitlab = forge === "gitlab";
@@ -64,7 +64,7 @@ export function RepoPopover({
           onCancel={() => setCreating(null)}
           onCreated={(repo) => {
             setCreating(null);
-            pick(repo.key);
+            pickCreated(repo.key);
           }}
         />
       </Popover>
