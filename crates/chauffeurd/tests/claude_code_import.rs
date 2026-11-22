@@ -2672,14 +2672,15 @@ async fn move_changes_leaves_one_copy_of_the_work_in_chauffeur() {
     let claude = root.join("claude");
     let projects = claude.join("projects").join("-code");
     std::fs::create_dir_all(&projects).unwrap();
-    for (id, folder, branch) in [
-        ("s-a", &shop, "feat/a"),
-        ("s-b", &wt_b, "feat/b"),
-        ("s-d", &docs, "feat/d"),
+    // The worktree's session the most recent: made first, it does not take main from the clone.
+    for (id, folder, branch, days) in [
+        ("s-a", &shop, "feat/a", 3),
+        ("s-b", &wt_b, "feat/b", 1),
+        ("s-d", &docs, "feat/d", 2),
     ] {
         std::fs::write(
             projects.join(format!("{id}.jsonl")),
-            line(folder, branch, &ago(1), &edit(&folder.join("README.md"))) + "\n",
+            line(folder, branch, &ago(days), &edit(&folder.join("README.md"))) + "\n",
         )
         .unwrap();
     }

@@ -187,19 +187,12 @@ pub(super) async fn import(
             }
             (ClaudeCodeWorkspaceKind::Branch, Some(branch)) => {
                 match parent_id(&parents, workspace.parent.as_deref()) {
-                    Ok(parent) => {
-                        make(
-                            d,
-                            &git,
-                            workspace,
-                            &branch,
-                            parent,
-                            found,
-                            report.warnings,
-                            &mut moved,
-                        )
+                    Ok(parent) => make(d, &git, workspace, &branch, parent, found, report.warnings)
                         .await
-                    }
+                        .map(|(row, out)| {
+                            moved.extend(out);
+                            row
+                        }),
                     Err(error) => Err(error),
                 }
             }
@@ -525,14 +518,13 @@ async fn make(
     parent: Option<String>,
     found: &Found<'_>,
     warnings: &mut Vec<String>,
-    moved: &mut Vec<(PathBuf, ClaudeCodeMoved)>,
-) -> Result<WorkspaceRow> {
+) -> Result<(WorkspaceRow, Vec<(PathBuf, ClaudeCodeMoved)>)> {
     let existing = existing(d, workspace, branch)?;
     let missing = missing_repos(d, workspace, branch, existing.as_ref())?;
     if let Some(row) = &existing
         && missing.is_empty()
     {
-        return Ok(row.clone());
+        return Ok((row.clone(), Vec::new()));
     }
     let mut released = Vec::new();
     let prepared = prepare(d, git, &missing, branch, found, &mut released).await;
@@ -585,6 +577,7 @@ async fn make(
         }
     }
     let root = PathBuf::from(&row.path);
+    let mut moved = Vec::new();
     for checkout in released.iter().filter(|r| added.contains(&r.at.repo)) {
         let Some(changes) = &checkout.changes else {
             continue;
@@ -630,7 +623,7 @@ async fn make(
     }
     match failed {
         Some(error) => Err(error),
-        None => Ok(row),
+        None => Ok((row, moved)),
     }
 }
 

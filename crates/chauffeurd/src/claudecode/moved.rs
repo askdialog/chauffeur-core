@@ -23,8 +23,9 @@ struct Saved {
 }
 
 /// Saves the changes of `folder` (a checkout of `repo` released for `row`) in a ref, then cleans
-/// it and puts it back on `base`, the repo's default branch: detached at it when another
-/// checkout holds it.
+/// it and puts it back on `base`, the repo's default branch: the clone's own checkout on it, a
+/// worktree of the user's detached at it (the clone's is where the default branch goes), as is
+/// one whose branch another checkout holds.
 pub(super) async fn move_out(
     d: &Daemon,
     git: &Git,
@@ -43,11 +44,20 @@ pub(super) async fn move_out(
     remember(d, clone, &reference)?;
     git.run(folder, &["reset", "--hard", "-q"]).await?;
     git.run(folder, &["clean", "-fdq"]).await?;
-    let back_on = if git.ok(folder, &["switch", "-q", base]).await {
+    let linked = git
+        .run(folder, &["rev-parse", "--absolute-git-dir"])
+        .await?
+        != git
+            .run(
+                folder,
+                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            )
+            .await?;
+    let back_on = if !linked && git.ok(folder, &["switch", "-q", base]).await {
         base.to_owned()
     } else {
         git.run(folder, &["switch", "-q", "--detach", base]).await?;
-        format!("{base} (detached: another checkout holds it)")
+        format!("{base}, detached")
     };
     Ok(ClaudeCodeMoved {
         saved_in: reference,
