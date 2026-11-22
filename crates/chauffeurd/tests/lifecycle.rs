@@ -9487,6 +9487,143 @@ async fn an_agent_delegates_a_task_to_a_subagent_chat_and_gets_its_answer() {
     assert!(matches!(refused, Err(Error::Conflict(_))), "{refused:?}");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_delegated_chat_answers_once_its_background_subagents_are_done() {
+    use chauffeur_protocol::events::{ChatEvent, TaskKind, TaskStatus};
+    use chauffeur_protocol::model::{PermissionMode, TurnOutcome};
+    use chauffeur_protocol::sidecar::{ToolDelegateChildParams, ToolDelegateParams};
+    let f = fixture(49575);
+    let d = &f.daemon;
+    let log = f.root.join("sidecar.log");
+    d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("delegating-to-reviewers".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let parent = d
+        .chats
+        .create(CreateChatParams {
+            workspace: ws.id.clone(),
+            agent: Some(AgentKind::Claude),
+            permission_mode: Some(PermissionMode::AcceptEdits),
+            prompt: Some("review the docs".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let started = d
+        .chats
+        .tool_delegate(ToolDelegateParams {
+            chat_id: parent.id.clone(),
+            prompt: "Review docs/reference, report evidence".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let child = started.chat;
+    let task = |task_id: &str, kind: TaskKind| ChatEvent::TaskStarted {
+        task_id: task_id.into(),
+        kind,
+        description: task_id.into(),
+        subagent_type: Some("general-purpose".into()),
+        tool_use_id: None,
+        background: true,
+        parent_task_id: None,
+    };
+    let task_ended = |task_id: &str| ChatEvent::TaskEnded {
+        task_id: task_id.into(),
+        status: TaskStatus::Completed,
+        summary: None,
+    };
+    let said = |id: &str, text: &str| ChatEvent::AssistantText {
+        message_id: id.into(),
+        text: text.into(),
+        parent_tool_use_id: None,
+    };
+    let turn_ended = || ChatEvent::TurnEnded {
+        outcome: TurnOutcome::Success,
+        duration_ms: None,
+        cost_usd: None,
+        estimated_cost_usd: None,
+        session_tokens: None,
+        tokens: None,
+        context_tokens: None,
+        error: None,
+        fork_point: None,
+    };
+    let waiting = {
+        let d = d.clone();
+        let params = ToolDelegateChildParams {
+            chat_id: parent.id.clone(),
+            child: child.clone(),
+        };
+        tokio::spawn(async move { d.chats.tool_delegate_wait(params).await })
+    };
+
+    // The agent starts two reviewers in the background, and a dev server, then ends its turn.
+    d.chats.on_event(&child, ChatEvent::TurnStarted);
+    d.chats
+        .on_event(&child, task("reviewer-a", TaskKind::Subagent));
+    d.chats
+        .on_event(&child, task("reviewer-b", TaskKind::Subagent));
+    d.chats
+        .on_event(&child, task("dev-server", TaskKind::Command));
+    d.chats.on_event(
+        &child,
+        said(
+            "m1",
+            "Two reviewers are checking; I'll compile once they report.",
+        ),
+    );
+    d.chats.on_event(&child, turn_ended());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !waiting.is_finished(),
+        "its reviewers still run: it has not answered"
+    );
+
+    // A reviewer ends: the agent is woken to read it, and still waits on the other.
+    d.chats.on_event(&child, task_ended("reviewer-a"));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !waiting.is_finished(),
+        "the turn that reads the reviewer is coming"
+    );
+    d.chats.on_event(&child, ChatEvent::TurnStarted);
+    d.chats.on_event(
+        &child,
+        said("m2", "One reviewer is done; waiting on the other."),
+    );
+    d.chats.on_event(&child, turn_ended());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!waiting.is_finished(), "one reviewer still runs");
+
+    // The last reviewer ends; the turn it wakes compiles the answer. The dev server holds nothing.
+    d.chats.on_event(&child, task_ended("reviewer-b"));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !waiting.is_finished(),
+        "the turn that reads the last reviewer is coming"
+    );
+    d.chats.on_event(&child, ChatEvent::TurnStarted);
+    d.chats
+        .on_event(&child, said("m3", "Done: 7 fixes in 5 files."));
+    d.chats.on_event(&child, turn_ended());
+    let answer = tokio::time::timeout(Duration::from_secs(10), waiting)
+        .await
+        .expect("the wait ends with the turn after the last reviewer")
+        .unwrap()
+        .unwrap();
+    assert_eq!(answer.outcome, Some(TurnOutcome::Success));
+    assert_eq!(answer.text.as_deref(), Some("Done: 7 fixes in 5 files."));
+    assert_eq!(d.chats.running_tasks(&child), 1, "the dev server runs on");
+}
+
 /// A fake sidecar that lists each agent's models and reads Claude's 5h window `claude_5h` % used;
 /// Codex reads as not installed unless `codex_installed`.
 fn catalog_sidecar(root: &Path, claude_5h: u32, codex_installed: bool) -> PathBuf {

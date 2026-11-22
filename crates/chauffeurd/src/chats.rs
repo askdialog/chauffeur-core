@@ -11,7 +11,7 @@ use chauffeur_protocol::client::{
 };
 use chauffeur_protocol::events::{
     ChatEvent, CompactionBy, ContextCategoryKind, ContextCompaction, ContextUsage, DelegatedAnswer,
-    Event, EventEnvelope, ForkPoint, NoticeLevel, RegistryEvent, TaskStatus,
+    Event, EventEnvelope, ForkPoint, NoticeLevel, RegistryEvent, TaskKind, TaskStatus,
 };
 use chauffeur_protocol::model::{
     AgentKind, AgentModels, Attachment, BriefState, ChatInfo, ChatKind, ChatProgress, ChatStatus,
@@ -109,6 +109,9 @@ pub struct ChatManager {
     unread_told: std::sync::Mutex<HashSet<String>>,
     /// The agents' tasks running now (between `task_started` and `task_ended`), by chat.
     tasks: std::sync::Mutex<HashMap<String, HashSet<String>>>,
+    /// Of those, the subagents running in the background, by chat: each wakes the agent when it
+    /// ends, so its chat is not done with its task before (`chat_settled`).
+    background_subagents: std::sync::Mutex<HashMap<String, HashSet<String>>>,
     /// The permission mode each chat's agent last reported running in.
     effective_modes: std::sync::Mutex<HashMap<String, PermissionMode>>,
     /// How far each chat's agent is through its plan, as read (kept in the store between runs).
@@ -171,6 +174,8 @@ struct Delegation {
 
 /// How often a wait on a chat looks again without an event: a lagging receiver misses some.
 const WAIT_RECHECK: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long after one of its tasks ended an idle agent may take to start the turn that reads it.
+const TASK_WAKE_GRACE: std::time::Duration = std::time::Duration::from_secs(20);
 
 struct FirstMessage {
     chat_id: String,
@@ -196,6 +201,7 @@ impl ChatManager {
             stale_briefing: Default::default(),
             unread_told: Default::default(),
             tasks: Default::default(),
+            background_subagents: Default::default(),
             effective_modes: Default::default(),
             progress: Default::default(),
             plan_tasks: Default::default(),
@@ -1996,6 +2002,7 @@ impl ChatManager {
 
     /// Follows the tasks a chat's agent runs; true when their number changed.
     fn track_task(&self, chat_id: &str, event: &ChatEvent) -> bool {
+        self.track_background_subagent(chat_id, event);
         let changed = {
             let mut tasks = self.tasks.lock().unwrap();
             match event {
@@ -2021,6 +2028,32 @@ impl ChatManager {
         changed
     }
 
+    fn track_background_subagent(&self, chat_id: &str, event: &ChatEvent) {
+        let mut running = self.background_subagents.lock().unwrap();
+        match event {
+            ChatEvent::TaskStarted {
+                task_id,
+                kind: TaskKind::Subagent,
+                background: true,
+                ..
+            } => {
+                running
+                    .entry(chat_id.to_string())
+                    .or_default()
+                    .insert(task_id.clone());
+            }
+            ChatEvent::TaskEnded { task_id, .. } => {
+                if let Some(ids) = running.get_mut(chat_id) {
+                    ids.remove(task_id);
+                    if ids.is_empty() {
+                        running.remove(chat_id);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Keeps the running tasks in the store, for a daemon restart to report them stopped.
     fn save_tasks(&self) {
         let json = serde_json::to_string(&*self.tasks.lock().unwrap()).unwrap_or_default();
@@ -2044,6 +2077,7 @@ impl ChatManager {
     /// The agent session of a chat is gone (the sidecar exited, the daemon restarted): its tasks
     /// went with it.
     fn end_tasks(&self, chat_id: &str, why: &str) {
+        self.background_subagents.lock().unwrap().remove(chat_id);
         let ids = self.tasks.lock().unwrap().remove(chat_id);
         let Some(ids) = ids else {
             return;
@@ -3711,6 +3745,7 @@ impl ChatManager {
         for firsts in self.first_messages.lock().unwrap().values_mut() {
             firsts.retain(|first| first.chat_id != chat_id);
         }
+        self.background_subagents.lock().unwrap().remove(chat_id);
         if self.tasks.lock().unwrap().remove(chat_id).is_some() {
             self.save_tasks();
         }
@@ -3814,7 +3849,7 @@ impl ChatManager {
         {
             Some(id) => {
                 let child = self.child_of(&parent.id, id)?;
-                if !self.chat_settled(&child, false)? || child.status == ChatStatus::NeedsInput {
+                if !self.delegate_answered(&child)? || child.status == ChatStatus::NeedsInput {
                     return Err(Error::Conflict(format!(
                         "the delegated chat {id} is still working (the user may be talking with it): wait for it, or start another"
                     )));
@@ -3862,7 +3897,7 @@ impl ChatManager {
         params: ToolDelegateChildParams,
     ) -> Result<ToolDelegateResult> {
         let child = self.child_of(&params.chat_id, &params.child)?;
-        let (child, _) = self.wait_settled(&child.id, true, None).await?;
+        let child = self.wait_answered(&child.id).await?;
         let result = self.delegate_result(&child)?;
         self.close_once_answered(&result);
         Ok(result)
@@ -3886,7 +3921,7 @@ impl ChatManager {
         let d = self.d();
         tokio::spawn(async move {
             let forwarded = async {
-                let (child, _) = d.chats.wait_settled(&child.id, true, None).await?;
+                let child = d.chats.wait_answered(&child.id).await?;
                 let result = d.chats.delegate_result(&child)?;
                 let from = Sender::DelegatedChat(DelegatedAnswer {
                     chat: result.chat.clone(),
@@ -4022,11 +4057,72 @@ impl ChatManager {
         Ok(self.last_seq(&chat.id, "user_message")? <= self.last_seq(&chat.id, "turn_ended")?)
     }
 
+    /// Whether a delegated chat has answered: settled through its questions, with no subagent
+    /// running in the background and no task just ended whose wake-up turn has not started yet.
+    /// An agent that ends its turn on "I'll report once my reviewers are done" has not answered;
+    /// for the sidebar and `wait`, it rests all the same (ADR 0013).
+    fn delegate_answered(&self, chat: &ChatInfo) -> Result<bool> {
+        if !self.chat_settled(chat, true)? {
+            return Ok(false);
+        }
+        if chat.status != ChatStatus::Idle || !self.is_live(&chat.id) {
+            return Ok(true);
+        }
+        if self
+            .background_subagents
+            .lock()
+            .unwrap()
+            .contains_key(&chat.id)
+        {
+            return Ok(false);
+        }
+        let turn_ended = self.last_seq(&chat.id, "turn_ended")?;
+        Ok(!self.task_wake_pending(&chat.id, turn_ended)?)
+    }
+
+    /// Whether a task of the chat's agent ended after its last turn, a moment ago: the agent is
+    /// woken to read its result, and reports the turn a moment later. Past `TASK_WAKE_GRACE`
+    /// without a turn, none is coming (a task stopped with its agent's session, say).
+    fn task_wake_pending(&self, chat_id: &str, turn_ended: i64) -> Result<bool> {
+        let Some(ended) = self
+            .d()
+            .store
+            .last_events_of_type(chat_id, "task_ended", 1)?
+            .into_iter()
+            .next()
+            .filter(|envelope| envelope.seq.unwrap_or(0) > turn_ended)
+        else {
+            return Ok(false);
+        };
+        Ok(
+            chrono::DateTime::parse_from_rfc3339(&ended.ts).is_ok_and(|at| {
+                chrono::Utc::now().signed_duration_since(at)
+                    < chrono::Duration::from_std(TASK_WAKE_GRACE).unwrap_or_default()
+            }),
+        )
+    }
+
     /// Waits until a chat is settled (`chat_settled`), or the timeout; true when it timed out.
     pub async fn wait_settled(
         &self,
         chat_id: &str,
         through_input: bool,
+        timeout: Option<std::time::Duration>,
+    ) -> Result<(ChatInfo, bool)> {
+        let done = |chat: &ChatInfo| self.chat_settled(chat, through_input);
+        self.wait_until(chat_id, done, timeout).await
+    }
+
+    /// Waits until a delegated chat has answered (`delegate_answered`).
+    async fn wait_answered(&self, chat_id: &str) -> Result<ChatInfo> {
+        let done = |chat: &ChatInfo| self.delegate_answered(chat);
+        Ok(self.wait_until(chat_id, done, None).await?.0)
+    }
+
+    async fn wait_until(
+        &self,
+        chat_id: &str,
+        done: impl Fn(&ChatInfo) -> Result<bool>,
         timeout: Option<std::time::Duration>,
     ) -> Result<(ChatInfo, bool)> {
         let d = self.d();
@@ -4035,7 +4131,7 @@ impl ChatManager {
         let deadline = timeout.map(|t| tokio::time::Instant::now() + t);
         loop {
             let chat = self.current(chat_id)?;
-            if self.chat_settled(&chat, through_input)? {
+            if done(&chat)? {
                 return Ok((chat, false));
             }
             let next = async {
