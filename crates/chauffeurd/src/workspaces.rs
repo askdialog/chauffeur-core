@@ -1692,7 +1692,7 @@ impl WorkspaceManager {
         })
     }
 
-    async fn branch_prefix(&self) -> String {
+    pub(crate) async fn branch_prefix(&self) -> String {
         let prefix = self.d().settings.get().branch_prefix.clone();
         if !prefix.is_empty() {
             return prefix;

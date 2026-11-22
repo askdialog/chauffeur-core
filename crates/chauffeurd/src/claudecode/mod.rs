@@ -253,15 +253,14 @@ pub async fn import(
                 .flat_map(|p| p.branches.iter().map(|b| b.repo.clone())),
         )
         .collect();
-    let mut changes = Vec::new();
-    // The user's clone each repo's changes are read from: the first holding some.
-    let mut changed: HashMap<String, PathBuf> = HashMap::new();
+    // The repos whose clone holds uncommitted changes on its default branch, each with the clone
+    // they are read from: the first holding some.
+    let mut changed: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut bases = HashMap::new();
     for repo in &touched {
         for clone in repos.clones.get(repo).cloned().unwrap_or_default() {
             let base = repos.refs(&clone).await.base.clone();
-            if repos.default_has_changes(&clone, &base).await && !changes.contains(repo) {
-                changes.push(repo.clone());
+            if !changed.contains_key(repo) && repos.default_has_changes(&clone, &base).await {
                 changed.insert(repo.clone(), clone.clone());
             }
             bases.entry(repo.clone()).or_insert(base);
@@ -276,6 +275,7 @@ pub async fn import(
             }
         }
     }
+    let changes: Vec<String> = changed.keys().cloned().collect();
     let mut plan = place::place(&placed, &changes, &bases, &made);
     for session in &mut plans {
         if let Some(lands_in) = plan.lands_in.get(&session.id) {
@@ -349,7 +349,7 @@ pub async fn import(
     }
     // The repo of a workspace on a new branch (a parent's, a changes one's): the clone chosen for
     // it, else the user's its session ran in, or holding the changes, else the first met.
-    let mut parents: HashMap<String, branches::RepoClone> = HashMap::new();
+    let mut new_branch_clones: HashMap<String, branches::RepoClone> = HashMap::new();
     for workspace in plan.workspaces.iter().filter(|w| {
         matches!(
             w.kind,
@@ -364,10 +364,10 @@ pub async fn import(
         let user = ran_in.or(changed.get(repo)).or(first);
         let (clone, adopt) = chosen_clone(d, &mut chosen, repo, user);
         if let Some(clone) = clone {
-            parents.insert(repo.clone(), branches::RepoClone { clone, adopt });
+            new_branch_clones.insert(repo.clone(), branches::RepoClone { clone, adopt });
         }
     }
-    let trees = workspace_trees(d, &sources, &parents, &plan.histories, &repos).await?;
+    let trees = workspace_trees(d, &sources, &new_branch_clones, &plan.histories, &repos).await?;
     let setups = setup::guess_all(d, &repos.git, &trees).await;
     // Every repo whose sessions the run imports, into a new workspace or an earlier one's.
     let user_clones: BTreeMap<String, Vec<PathBuf>> = touched
@@ -404,7 +404,7 @@ pub async fn import(
         let mut report = copy::Report::new(&mut plans, &mut warnings);
         let found = branches::Found {
             sources: &sources,
-            parents: &parents,
+            new_branch_clones: &new_branch_clones,
             changed: &changed,
             sessions: &found,
             running: &running_folders,

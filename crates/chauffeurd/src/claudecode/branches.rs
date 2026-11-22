@@ -7,7 +7,7 @@
 //! keep it. A checkout gone, or half deleted by a cleanup, carries the branch's commits only. A
 //! workspace that fails to import puts back what it released; the others go on.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -112,9 +112,9 @@ pub(super) struct Found<'a> {
     pub(super) sources: &'a HashMap<RepoBranch, Source>,
     /// The clone of each repo a workspace is made in on a new branch (a parent's, a changes
     /// one's), by repo.
-    pub(super) parents: &'a HashMap<String, RepoClone>,
+    pub(super) new_branch_clones: &'a HashMap<String, RepoClone>,
     /// The user's clone holding uncommitted changes on its default branch, by repo.
-    pub(super) changed: &'a HashMap<String, PathBuf>,
+    pub(super) changed: &'a BTreeMap<String, PathBuf>,
     pub(super) sessions: &'a HashMap<String, Session>,
     /// The folders Claude Code still runs in: no branch is released from under it.
     pub(super) running: &'a [PathBuf],
@@ -272,26 +272,7 @@ async fn make_parent(
     if let Some(earlier) = &workspace.workspace {
         return d.workspaces.row(earlier);
     }
-    let Some(repo) = workspace.repos.first().cloned() else {
-        return Err(Error::Internal(anyhow::anyhow!("a parent with no repo")));
-    };
-    let Some(parent) = found.parents.get(&repo) else {
-        return Err(Error::BadRequest(format!(
-            "none of the clones of {repo} the sessions ran in is left: open a session in one, then run the import again"
-        )));
-    };
-    if parent.adopt {
-        adopt(d, &repo, &parent.clone)?;
-    }
-    let made = d
-        .workspaces
-        .create(CreateWorkspaceParams {
-            name: Some(workspace.name.clone()),
-            repos: vec![repo.clone()],
-            ..Default::default()
-        })
-        .await?;
-    let row = d.workspaces.row(&made.workspace.id)?;
+    let (repo, row) = make_on_new_branch(d, git, workspace, found).await?;
     for changed in &workspace.changes_from {
         carry_changes(d, git, changed, &row, found, warnings).await;
     }
@@ -339,30 +320,88 @@ async fn make_changes(
     found: &Found<'_>,
     warnings: &mut Vec<String>,
 ) -> Result<WorkspaceRow> {
+    let (repo, row) = make_on_new_branch(d, git, workspace, found).await?;
+    carry_changes(d, git, &repo, &row, found, warnings).await;
+    Ok(row)
+}
+
+/// A workspace on a new branch of its repo (a parent's, a changes one's), from the clone chosen
+/// for it (the user's becomes Chauffeur's): from the default branch; when it carries the user's
+/// default-branch changes, from the commit their clone stands on, where those changes apply.
+async fn make_on_new_branch(
+    d: &Arc<Daemon>,
+    git: &Git,
+    workspace: &ClaudeCodeWorkspacePlan,
+    found: &Found<'_>,
+) -> Result<(String, WorkspaceRow)> {
     let Some(repo) = workspace.repos.first().cloned() else {
         return Err(Error::Internal(anyhow::anyhow!(
-            "a changes workspace with no repo"
+            "a workspace planned with no repo"
         )));
     };
-    let Some(clone) = found.parents.get(&repo) else {
+    let Some(chosen) = found.new_branch_clones.get(&repo) else {
         return Err(Error::BadRequest(format!(
             "none of the clones of {repo} the sessions ran in is left: open a session in one, then run the import again"
         )));
     };
-    if clone.adopt {
-        adopt(d, &repo, &clone.clone)?;
+    if chosen.adopt {
+        adopt(d, &repo, &chosen.clone)?;
     }
+    let changed = found
+        .changed
+        .get(&repo)
+        .filter(|_| workspace.changes_from.contains(&repo));
+    let branch = match changed {
+        Some(from) => Some(branch_at(d, git, &chosen.clone, from, &workspace.name).await?),
+        None => None,
+    };
     let made = d
         .workspaces
         .create(CreateWorkspaceParams {
             name: Some(workspace.name.clone()),
             repos: vec![repo.clone()],
+            branch: branch.clone(),
             ..Default::default()
         })
-        .await?;
-    let row = d.workspaces.row(&made.workspace.id)?;
-    carry_changes(d, git, &repo, &row, found, warnings).await;
-    Ok(row)
+        .await;
+    match made {
+        Ok(made) => Ok((repo, d.workspaces.row(&made.workspace.id)?)),
+        Err(error) => {
+            // Made for it: it goes with it.
+            if let Some(branch) = &branch {
+                let _ = git.delete_branch(&chosen.clone, branch).await;
+            }
+            Err(error)
+        }
+    }
+}
+
+/// A new branch in `clone`, named as a workspace `name`'s would be, at the commit the user's
+/// clone `from` stands on (fetched from it, when another clone).
+async fn branch_at(d: &Daemon, git: &Git, clone: &Path, from: &Path, name: &str) -> Result<String> {
+    let base = format!("{}/{name}", d.workspaces.branch_prefix().await);
+    let mut branch = base.clone();
+    for n in 2.. {
+        if !git.branch_exists(clone, &branch).await {
+            break;
+        }
+        branch = format!("{base}-{n}");
+    }
+    let from_text = from.to_string_lossy();
+    git.run(
+        clone,
+        &[
+            "fetch",
+            "--no-tags",
+            &from_text,
+            &format!("HEAD:refs/heads/{branch}"),
+        ],
+    )
+    .await
+    .map_err(|e| {
+        Error::Internal(e.context(format!("starting {branch} where {} stands", from.display())))
+    })?;
+    Ok(branch)
 }
 
 /// The uncommitted changes on `repo`'s default branch in the user's clone, copied into `row`'s
@@ -391,8 +430,9 @@ async fn carry_changes(
     .await;
     if let Err(error) = copied {
         warnings.push(format!(
-            "Some uncommitted changes on the default branch of {} could not be copied into {} ({error:#}): they are still there.",
+            "Some uncommitted changes on the default branch of {} could not be copied into {} ({error:#}): copy them there by hand, or archive {} and run the import again.",
             from.display(),
+            row.slug,
             row.slug
         ));
     }

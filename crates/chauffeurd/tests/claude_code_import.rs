@@ -2391,38 +2391,6 @@ async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() 
         .unwrap();
     assert_eq!(held_plan.outcome, ClaudeCodeOutcome::Imported, "{later:?}");
     assert_eq!(held_plan.parent.as_deref(), Some("orchestrate-the-release"));
-    // The default-branch changes: web's in the parent, docs' in a workspace of their own, each
-    // clone keeping its copy; a later run carries them no more.
-    let read = |path: PathBuf| std::fs::read_to_string(path).unwrap();
-    assert_eq!(
-        read(Path::new(&parent.path).join("web/README.md")),
-        "web, uncommitted on main\n"
-    );
-    let docs = d.workspaces.get("docs-changes").unwrap();
-    assert_eq!(
-        read(Path::new(&docs.path).join("docs/README.md")),
-        "docs, uncommitted on main\n"
-    );
-    assert_ne!(d.store.worktrees_of(&docs.id).unwrap()[0].branch, "main");
-    for clone in ["web", "docs"] {
-        assert_eq!(
-            read(f.root.join("clones").join(clone).join("README.md")),
-            format!("{clone}, uncommitted on main\n")
-        );
-    }
-    let carried: Vec<_> = later
-        .workspaces
-        .iter()
-        .filter(|w| !w.changes_from.is_empty())
-        .map(|w| (w.outcome, w.workspace.clone()))
-        .collect();
-    assert!(
-        carried
-            .iter()
-            .all(|(outcome, _)| *outcome == ClaudeCodeOutcome::AlreadyImported),
-        "{carried:?}"
-    );
-    assert!(d.workspaces.get("docs-changes-2").is_err());
     let parent_row = d.workspaces.row(&parent.id).unwrap();
     assert_eq!(parent_row.parent_id, None);
     let mut children: Vec<(String, String)> = d
@@ -2528,5 +2496,81 @@ async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() 
         .filter(|slug| slug.starts_with("orchestrate-the-release"))
         .collect();
     assert_eq!(made, ["orchestrate-the-release"]);
+    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
+}
+
+/// The uncommitted changes on the fixture's clones' default branches: web's go to the parent of
+/// the orchestration that ran on web, docs' to a workspace of their own on a new branch, from the
+/// commit docs' clone stands on (one not pushed: the changes apply there). Each clone keeps its
+/// copy; a later run carries them no more.
+#[tokio::test(flavor = "multi_thread")]
+async fn default_branch_changes_are_copied_once_into_a_workspace_the_clone_keeping_them() {
+    let _switch = SWITCH.lock().await;
+    // SAFETY: the tests reading the switch hold `SWITCH`; no other thread reads it meanwhile.
+    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    let f = importing();
+    let d = &f.daemon;
+    let docs_clone = f.root.join("clones/docs");
+    std::fs::write(docs_clone.join("local.md"), "one\n").unwrap();
+    git(&docs_clone, &["add", "local.md"]);
+    git(
+        &docs_clone,
+        &["commit", "-q", "-m", "local", "--", "local.md"],
+    );
+    std::fs::write(docs_clone.join("local.md"), "two\n").unwrap();
+
+    let plan = import(&f, false).await;
+    let read = |path: PathBuf| std::fs::read_to_string(path).unwrap();
+    let parent = d.workspaces.get("orchestrate-the-release").unwrap();
+    assert_eq!(
+        read(Path::new(&parent.path).join("web/README.md")),
+        "web, uncommitted on main\n"
+    );
+    let docs = d.workspaces.get("docs-changes").unwrap();
+    let checkout = Path::new(&docs.path).join("docs");
+    assert_eq!(
+        read(checkout.join("README.md")),
+        "docs, uncommitted on main\n"
+    );
+    assert_eq!(read(checkout.join("local.md")), "two\n");
+    assert_eq!(git(&checkout, &["log", "-1", "--format=%s"]), "local");
+    assert_ne!(d.store.worktrees_of(&docs.id).unwrap()[0].branch, "main");
+    for (clone, file, text) in [
+        ("web", "README.md", "web, uncommitted on main\n"),
+        ("docs", "README.md", "docs, uncommitted on main\n"),
+        ("docs", "local.md", "two\n"),
+    ] {
+        assert_eq!(read(f.root.join("clones").join(clone).join(file)), text);
+    }
+    assert!(
+        !plan
+            .warnings
+            .iter()
+            .any(|w| w.contains("could not be copied")),
+        "{:?}",
+        plan.warnings
+    );
+
+    // A later session on docs plans its changes again: carried earlier, not again.
+    std::fs::write(
+        f.claude.join("projects/-code/docs-again.jsonl"),
+        line(&docs_clone, "main", &ago(1), r#""message":{"content":[]}"#) + "\n",
+    )
+    .unwrap();
+    let later = import(&f, false).await;
+    let carried: Vec<_> = later
+        .workspaces
+        .iter()
+        .filter(|w| !w.changes_from.is_empty())
+        .map(|w| (w.outcome, w.workspace.clone()))
+        .collect();
+    assert_eq!(
+        carried,
+        [(
+            ClaudeCodeOutcome::AlreadyImported,
+            Some("docs-changes".to_string())
+        )]
+    );
+    assert!(d.workspaces.get("docs-changes-2").is_err());
     unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }
