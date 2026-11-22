@@ -89,6 +89,15 @@ describe("cloneWriteRefusal", () => {
       expect(cloneWriteRefusal("Write", { file_path: join(root, "new.ts") }, CWD, linked)).toContain(
         "Write /ws/feat/web/new.ts instead",
       );
+      // A link in the workspace's worktree that leads into the clone: refused as the clone.
+      const worktree = join(root, "ws");
+      mkdirSync(worktree);
+      symlinkSync(real, join(worktree, "into"));
+      const inWorktree: SourceClone[] = [{ clone: real, worktree }];
+      expect(cloneWriteRefusal("Write", { file_path: join(worktree, "into", "a.ts") }, CWD, inWorktree)).toContain(
+        `Write ${join(worktree, "a.ts")} instead`,
+      );
+      expect(cloneWriteRefusal("Write", { file_path: join(worktree, "a.ts") }, CWD, inWorktree)).toBeUndefined();
       symlinkSync(join(root, "nowhere", "x.ts"), join(root, "loose.ts"));
       expect(cloneWriteRefusal("Write", { file_path: join(root, "loose.ts") }, CWD, linked)).toBeUndefined();
     } finally {

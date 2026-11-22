@@ -27,6 +27,8 @@ import { type Command, type Group, type List, readLine, type Word } from "./shel
 /** A source clone, and its worktree's git folder in the clone's `.git` when it has one. */
 export interface GuardedClone extends SourceClone {
   gitdir?: string;
+  /** `gitdir` through the links it goes by, when it differs (`/var` is `/private/var`). */
+  realGitdir?: string;
 }
 
 /**
@@ -45,7 +47,11 @@ export function withRealPaths(clones: SourceClone[]): GuardedClone[] {
     const resolved = { ...given, clone: real(given.clone), worktree: real(given.worktree) };
     return resolved.clone === given.clone && resolved.worktree === given.worktree ? [given] : [given, resolved];
   });
-  return all.map((clone) => ({ ...clone, gitdir: gitdirOf(clone.worktree) }));
+  return all.map((clone) => {
+    const gitdir = gitdirOf(clone.worktree);
+    const realGitdir = gitdir === undefined ? undefined : realOf(gitdir);
+    return { ...clone, gitdir, realGitdir: realGitdir === gitdir ? undefined : realGitdir };
+  });
 }
 
 /** A worktree's `.git` file names its git folder: `gitdir: <path>`. */
@@ -1496,8 +1502,9 @@ function isLink(path: string): boolean {
  * that stands for it in the workspace.
  */
 function cloneOf(path: string, clones: GuardedClone[]): GuardedClone | undefined {
+  // Each form on its own: a link in the worktree may lead into a clone.
   for (const form of forms(path)) {
-    if (exempt(form, clones)) return undefined;
+    if (exempt(form, clones)) continue;
     let found: GuardedClone | undefined;
     for (const candidate of clones) {
       if (inside(form, candidate.clone) && (found === undefined || candidate.clone.length > found.clone.length)) found = candidate;
@@ -1509,7 +1516,10 @@ function cloneOf(path: string, clones: GuardedClone[]): GuardedClone | undefined
 
 /** The clone whose worktree, or its git folder, holds a path. */
 function worktreeOf(path: string, clones: GuardedClone[]): GuardedClone | undefined {
-  return clones.find(({ worktree, gitdir }) => inside(path, worktree) || (gitdir !== undefined && inside(path, gitdir)));
+  return clones.find(
+    ({ worktree, gitdir, realGitdir }) =>
+      inside(path, worktree) || [gitdir, realGitdir].some((dir) => dir !== undefined && inside(path, dir)),
+  );
 }
 
 /** A path in a worktree of the workspace, or in its git folder in the clone's `.git`. */
