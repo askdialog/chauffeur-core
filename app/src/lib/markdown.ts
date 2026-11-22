@@ -18,13 +18,20 @@ function remarkMathWithCurrency(this: Processor) {
   if (!math || Array.isArray(math)) return;
   const tokenize = math.tokenize;
   math.tokenize = function (effects, ok, nok) {
+    const previous = this.events.at(-1);
     return tokenize.call(this, effects, (code) => {
       // Reject at tokenization so that Markdown can still parse the emphasis between two prices.
       const token = this.events.at(-1)?.[1];
       const source = token ? this.sliceSerialize(token) : "";
+      if (source.startsWith("$$")) return ok(code);
       const followedByDigit = code !== null && code >= 48 && code <= 57;
-      if (!source.startsWith("$$") && (/^\$\s|\s\$$/.test(source) || followedByDigit)) {
-        return nok(code);
+      if (/^\$\s|\s\$$/.test(source) || followedByDigit) return nok(code);
+
+      // `200 k$` is attached to its amount. A spaced `$` can open math after a number,
+      // unless punctuation or a Markdown closer follows it, as in `500 $.` or `**500 $**`.
+      if (previous?.[0] === "exit" && previous[1].type === "data") {
+        const amount = /\d(?:\s*[kmb])?(\s*)$/i.exec(this.sliceSerialize(previous[1]));
+        if (amount && (!amount[1] || /^\$[.,;:!?/)\]}*_~]/.test(source))) return nok(code);
       }
       return ok(code);
     }, nok);

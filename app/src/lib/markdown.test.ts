@@ -120,6 +120,19 @@ test("dollar prices retain their signs and Markdown emphasis", () => {
   expect(markdownText("De $5 à $10, puis $2 + 3$.")).toBe("De $5 à $10, puis 2 + 3.");
 });
 
+test("a dollar after a price cannot open a formula across prose", () => {
+  for (const [price, separator] of [["+150–500 $", " "], ["+150–500 $", "\n"], ["500$", " "]]) {
+    const text = `${price}.${separator}Donc oui, les 200 k$ de crédits. Étape 2 $x^2$.`;
+    const html = renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins, rehypePlugins: [rehypeKatex] }, text));
+    expect(html).toContain(`${price}.`);
+    expect(html).toContain("Donc oui, les 200 k$ de crédits.");
+    expect(markdownText(text)).toContain(`${price}.`);
+    expect(html.match(/<annotation encoding="application\/x-tex">.*?<\/annotation>/g)).toEqual([
+      '<annotation encoding="application/x-tex">x^2</annotation>',
+    ]);
+  }
+});
+
 test("a formula is drawn by KaTeX and a broken one stays as written", () => {
   const html = (text: string) =>
     renderToStaticMarkup(createElement(ReactMarkdown, { remarkPlugins, rehypePlugins: [[rehypeKatex, { throwOnError: false, strict: false }]] }, text));
