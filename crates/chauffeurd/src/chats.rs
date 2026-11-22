@@ -1187,7 +1187,7 @@ impl ChatManager {
             // folder where the workspace's generated settings do not apply, nor an exploration,
             // read-only whatever the user allows elsewhere.
             local_allow: if design_dir.is_none() && !workspace.explore {
-                crate::genconfig::local_allow_rules(&config_repos)
+                crate::genconfig::local_allow_rules(config_repos)
             } else {
                 Vec::new()
             },
