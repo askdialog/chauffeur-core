@@ -660,7 +660,7 @@ echo cc > "$CC/web/cc.txt" && git -C "$CC/web" add -A && git -C "$CC/web" commit
 git -C "$CC/web" switch -q main
 NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 # A transcript as Claude Code writes it: <id> <title> <folder> <branch> <tool uses>, a prompt and
-# the answer it chains to.
+# the answer it chains to. Its id is one as Claude Code makes them: the agent sidecar reads no other.
 cc_session() {
   local common="\"sessionId\":\"$1\",\"cwd\":\"$3\",\"gitBranch\":\"$4\",\"entrypoint\":\"cli\",\"version\":\"2.1.0\",\"userType\":\"external\",\"isSidechain\":false,\"timestamp\":\"$NOW\""
   {
@@ -669,7 +669,7 @@ cc_session() {
     echo "{\"type\":\"assistant\",\"uuid\":\"$1-a\",\"parentUuid\":\"$1-u\",$common,\"message\":{\"id\":\"msg_$1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-haiku-5-5\",\"content\":[{\"type\":\"text\",\"text\":\"On it.\"}$5],\"stop_reason\":\"end_turn\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}"
   } > "$CC/claude/projects/-e2e/$1.jsonl"
 }
-cc_edit() { echo ",{\"type\":\"tool_use\",\"id\":\"toolu_$RANDOM\",\"name\":\"Edit\",\"input\":{\"file_path\":\"$1\"}}"; }
+cc_edit() { echo ",{\"type\":\"tool_use\",\"id\":\"toolu_$(basename "$1" .txt)\",\"name\":\"Edit\",\"input\":{\"file_path\":\"$1\"}}"; }
 cc_session 11111111-1111-4111-8111-111111111111 "E2E work" "$CC/web" feat/cc "$(cc_edit "$CC/web/cc.txt")"
 cc_files() { (cd "$CC" && find . -type f -print0 | sort -z | xargs -0 shasum | shasum); }
 cc_before=$(cc_files)
@@ -691,8 +691,11 @@ cc_session 33333333-3333-4333-8333-333333333333 "E2E question" "$CC/web" main ""
 cc_session 44444444-4444-4444-8444-444444444444 "E2E open" "$CC/web" main ""
 mkdir -p "$CC/claude/sessions"
 echo "{\"pid\":$$,\"sessionId\":\"44444444-4444-4444-8444-444444444444\"}" > "$CC/claude/sessions/$$.json"
-# The chats read the sessions back through the agent sidecar, which takes Claude Code's ids only.
+# The import reads each session back from its copy through the agent sidecar: built from here.
 (cd sidecar && bun run build >/dev/null)
+# Branches to release, asked first: without --yes and nobody to answer, nothing is imported.
+refuses "Pass --yes" c import claude-code --claude-dir "$CC/claude" </dev/null
+git -C "$CC/wt/o1" symbolic-ref -q HEAD >/dev/null || { echo "feat/o1 was released without a yes"; exit 1; }
 c --json import claude-code --yes --claude-dir "$CC/claude" > "$T/cc-import.json" ||
   { echo "the import failed:"; cat "$T/cc-import.json"; exit 1; }
 python3 -c '
@@ -716,9 +719,17 @@ read -r CC_PARENT CC_HISTORY < "$T/cc-made"
 c ls > "$T/cc-ls"
 has "↳ feat-o1" < "$T/cc-ls"
 has "↳ feat-o2" < "$T/cc-ls"
-c --json chats "$CC_PARENT" | python3 -c 'import sys,json; c=json.load(sys.stdin)["chats"]; assert any(x.get("agent_session_id") == "22222222-2222-4222-8222-222222222222" for x in c), c'
-c --json chats feat-cc | python3 -c 'import sys,json; c=json.load(sys.stdin)["chats"]; assert any(x.get("agent_session_id") == "11111111-1111-4111-8111-111111111111" for x in c), c'
-c --json chats --all "$CC_HISTORY" | python3 -c 'import sys,json; c=json.load(sys.stdin)["chats"]; assert any(x.get("agent_session_id") == "33333333-3333-4333-8333-333333333333" and x["closed"] for x in c), c'
+# <workspace> <session id> [--all]: a chat of the workspace resumes that session.
+has_chat() {
+  c --json chats ${3:-} "$1" | python3 -c '
+import sys, json
+chats = json.load(sys.stdin)["chats"]
+assert any(c.get("agent_session_id") == sys.argv[1] for c in chats), chats' "$2"
+}
+has_chat "$CC_PARENT" 22222222-2222-4222-8222-222222222222
+has_chat feat-cc 11111111-1111-4111-8111-111111111111
+# The history's, a closed tab.
+has_chat "$CC_HISTORY" 33333333-3333-4333-8333-333333333333 --all
 # The worktrees the orchestration wrote in: released, on a detached HEAD.
 if git -C "$CC/wt/o1" symbolic-ref -q HEAD; then echo "feat/o1 was not released"; exit 1; fi
 # Again: nothing more.
