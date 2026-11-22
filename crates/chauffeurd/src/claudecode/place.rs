@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chauffeur_protocol::claudecode::{
-    ClaudeCodeHistoryPlan, ClaudeCodeWorkspaceKind, ClaudeCodeWorkspacePlan,
+    ClaudeCodeHistoryPlan, ClaudeCodeOutcome, ClaudeCodeWorkspaceKind, ClaudeCodeWorkspacePlan,
 };
 
 use crate::slug::slugify;
@@ -101,6 +101,9 @@ pub fn place(sessions: &[Session], changes: &[String], bases: &HashMap<String, S
         parent: owner.get(branch).cloned(),
         sessions: chats.get(branch).cloned().unwrap_or_default(),
         changes_from: Vec::new(),
+        outcome: ClaudeCodeOutcome::Import,
+        reason: None,
+        workspace: None,
     };
     // The most recent parent first, each followed by its children; then the other branches,
     // the most recently written first; then the changes.
@@ -113,6 +116,9 @@ pub fn place(sessions: &[Session], changes: &[String], bases: &HashMap<String, S
             parent: None,
             sessions: vec![session.id.clone()],
             changes_from: Vec::new(),
+            outcome: ClaudeCodeOutcome::Import,
+            reason: None,
+            workspace: None,
         });
         for branch in repos_of.keys().filter(|b| owner.get(*b) == Some(name)) {
             plan.workspaces.push(branch_workspace(branch));
@@ -144,6 +150,9 @@ pub fn place(sessions: &[Session], changes: &[String], bases: &HashMap<String, S
                     parent: None,
                     sessions: Vec::new(),
                     changes_from: vec![repo.clone()],
+                    outcome: ClaudeCodeOutcome::Import,
+                    reason: None,
+                    workspace: None,
                 });
             }
         }

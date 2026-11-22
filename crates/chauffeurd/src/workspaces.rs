@@ -1913,6 +1913,7 @@ impl WorkspaceManager {
             }
         };
         self.progress(&row.id, format!("creating the {} worktree", repo.name));
+        let created_branch = !git.branch_exists(&repo.clone_path, branch).await;
         git.worktree_add(&repo.clone_path, path, branch, &start)
             .await
             .map_err(|e| Error::Internal(e.context(format!("worktree of {}", repo.name))))?;
@@ -1931,6 +1932,7 @@ impl WorkspaceManager {
             removed: false,
             snapshot_ref: None,
             created_at: now(),
+            created_branch,
         };
         d.store.insert_worktree(&worktree)?;
         d.events.workspace(
@@ -2006,6 +2008,8 @@ impl WorkspaceManager {
             removed: false,
             snapshot_ref: None,
             created_at: now(),
+            // Detached: an exploration's checkout makes no branch.
+            created_branch: false,
         };
         d.store.insert_worktree(&worktree)?;
         d.events.workspace(
@@ -2062,9 +2066,12 @@ impl WorkspaceManager {
             let _ = git
                 .worktree_remove(Path::new(&worktree.clone_path), Path::new(&worktree.path))
                 .await;
-            let _ = git
-                .delete_branch(Path::new(&worktree.clone_path), &worktree.branch)
-                .await;
+            // A branch that was there before (the user's, an import's) stays.
+            if worktree.created_branch {
+                let _ = git
+                    .delete_branch(Path::new(&worktree.clone_path), &worktree.branch)
+                    .await;
+            }
             let _ = d.store.set_worktree_removed(&worktree.id, true, None);
         }
         let _ = std::fs::remove_dir_all(&row.path);
@@ -3831,6 +3838,10 @@ pub(crate) fn copy_dir(from: &Path, to: &Path) -> anyhow::Result<()> {
             std::fs::create_dir_all(&target)?;
         } else if entry.file_type().is_file() {
             std::fs::copy(entry.path(), &target)?;
+        } else if entry.file_type().is_symlink() {
+            // A link stays a link, pointing where it pointed.
+            let _ = std::fs::remove_file(&target);
+            std::os::unix::fs::symlink(std::fs::read_link(entry.path())?, &target)?;
         }
     }
     Ok(())

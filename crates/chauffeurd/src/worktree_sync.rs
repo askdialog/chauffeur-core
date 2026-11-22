@@ -209,6 +209,8 @@ async fn adopt_unknown(
                 removed: false,
                 snapshot_ref: None,
                 created_at: now(),
+                // An agent's own worktree: its branch is none of a creation's.
+                created_branch: false,
             })?;
             synced
                 .adopted
@@ -321,6 +323,7 @@ mod tests {
                 removed: false,
                 snapshot_ref: None,
                 created_at: now(),
+                created_branch: false,
             })
             .unwrap();
         Fixture {
