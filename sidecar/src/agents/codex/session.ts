@@ -30,6 +30,7 @@ import {
   type RequestResponse,
   type SessionStartParams,
   type SessionStartResult,
+  type SourceClone,
 } from "../../protocol.ts";
 import { RpcError, type RpcId } from "../../rpc/peer.ts";
 import { CODEX_APP_SERVER_VERSION, SIDECAR_VERSION } from "../../version.ts";
@@ -87,7 +88,7 @@ export interface CodexSessionDeps {
   resolveExecutable: (env: Record<string, string | undefined>) => string;
   baseEnv: Record<string, string | undefined>;
   /** The guard hook's command line, or undefined to run without it. */
-  hookCommand: (guard: HookGuard | undefined) => string | undefined;
+  hookCommand: (guard: HookGuard | undefined, clones: SourceClone[]) => string | undefined;
   /** How long `start` waits for the app-server to initialize and open the thread. */
   initTimeoutMs?: number;
   /** Bounds how long the first message can wait for the app-server's catalog. */
@@ -216,7 +217,10 @@ export class CodexSession implements AgentSession {
     let hook: string | undefined;
     try {
       const executable = this.deps.resolveExecutable(env);
-      hook = this.deps.hookCommand(this.params.design_dir ? "design" : this.params.read_only ? "read-only" : undefined);
+      hook = this.deps.hookCommand(
+        this.params.design_dir ? "design" : this.params.read_only ? "read-only" : undefined,
+        this.params.source_clones ?? [],
+      );
       server = this.deps.spawn({
         executable,
         args: appServerArgs(hook),

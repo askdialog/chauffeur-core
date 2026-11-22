@@ -6,7 +6,9 @@
 // alone runs them without asking.
 //
 // - Chauffeur's own tools always run: `add_repo` puts its question to the user itself.
-// - Always refused: `git worktree add` and `chauffeur add-repo` (worktree-guard.ts).
+// - Always refused: `git worktree add` and `chauffeur add-repo` (worktree-guard.ts), and an edit
+//   or a shell command writing into one of the workspace's source clones (clone-guard.ts), naming
+//   the worktree to use instead.
 // - An exploration: no edit; shell commands that write git history or refs, or GitHub, refused, the
 //   others asked.
 // - A design chat: edits inside its design folder only; shell commands as in an exploration.
@@ -17,6 +19,7 @@
 
 import { resolve, sep } from "node:path";
 import type { PermissionMode } from "../../protocol.ts";
+import { clonePathRefusal, cloneCommandRefusal, type GuardedClone } from "../../guard/clone-guard.ts";
 import { designGuardDenial, planPathRefusal } from "../../guard/plan-guard.ts";
 import { DESIGN_READ_ONLY_DENIAL, READ_ONLY_DENIAL, writesOutsideTheCheckout } from "../../guard/read-only-guard.ts";
 import { ADD_REPO_DENIAL, runsChauffeurAddRepo, runsGitWorktreeAdd, WORKTREE_ADD_DENIAL } from "../../guard/worktree-guard.ts";
@@ -32,6 +35,8 @@ export interface PermissionContext {
   cwd: string;
   /** The folders edits may go to without asking: the workspace folder and its repos. */
   roots: string[];
+  /** The workspace's source clones, the user's: never written. */
+  clones: GuardedClone[];
 }
 
 const EXPLORATION_EDIT_DENIAL =
@@ -50,8 +55,16 @@ export function decide(tool: AcpToolCall, context: PermissionContext): Decision 
   if (command !== undefined) {
     if (runsGitWorktreeAdd(command)) return deny(WORKTREE_ADD_DENIAL);
     if (runsChauffeurAddRepo(command)) return deny(ADD_REPO_DENIAL);
+    const intoClone = cloneCommandRefusal(command, context.cwd, context.clones);
+    if (intoClone) return deny(intoClone);
   }
   const edits = tool.kind === "edit" || tool.kind === "delete" || tool.kind === "move";
+  if (edits) {
+    for (const path of tool.paths) {
+      const intoClone = clonePathRefusal(path, context.cwd, context.clones);
+      if (intoClone) return deny(intoClone);
+    }
+  }
   if (context.designDir) {
     if (edits) {
       if (tool.paths.length === 0) return deny(designGuardDenial(context.designDir, "an edit that names no file"));

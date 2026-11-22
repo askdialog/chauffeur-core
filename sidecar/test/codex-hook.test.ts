@@ -49,6 +49,27 @@ describe("the Codex PreToolUse hook", () => {
     expect(hookCommandLine("design")).toEndWith(" codex-hook pre-tool-use design");
   });
 
+  test("refuses a command writing into a source clone, naming the worktree, in every mode", () => {
+    const clones = [{ clone: "/code/web", worktree: "/w/web" }];
+    const answer = JSON.parse(preToolUseAnswer(payload("echo x > /code/web/notes.md"), undefined, clones) as string);
+    expect(answer.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(answer.hookSpecificOutput.permissionDecisionReason).toContain("/code/web");
+    expect(preToolUseAnswer(payload(["bash", "-lc", "cd /code/web && git commit -am x"]), undefined, clones)).toBeDefined();
+    expect(preToolUseAnswer(payload("cat /code/web/README.md"), undefined, clones)).toBeUndefined();
+    expect(preToolUseAnswer(payload("echo x > /w/web/notes.md"), undefined, clones)).toBeUndefined();
+    // Without the clones given, as before.
+    expect(preToolUseAnswer(payload("echo x > /code/web/notes.md"))).toBeUndefined();
+  });
+
+  test("its command line carries the clones, read back by the hook", async () => {
+    const clones = [{ clone: "/code/it's web", worktree: "/w/web" }];
+    const line = hookCommandLine("read-only", clones);
+    const words = line.split(" ");
+    const given = words[words.indexOf("--clones") + 1] ?? "";
+    expect(words.slice(-4, -2)).toEqual(["pre-tool-use", "read-only"]);
+    expect(JSON.parse(Buffer.from(given.replaceAll("'", ""), "base64").toString("utf8"))).toEqual(clones);
+  });
+
   test("reads argv-style commands too", () => {
     expect(preToolUseAnswer(payload(["bash", "-lc", "git worktree add ../x"]))).toBeDefined();
     expect(preToolUseAnswer(payload(["git", "worktree", "add", "../x"]))).toBeDefined();

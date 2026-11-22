@@ -70,9 +70,22 @@ group("AcpEventMapper", () => {
 });
 
 group("decide", () => {
-  const context: PermissionContext = { mode: "auto", readOnly: false, designDir: undefined, cwd: "/w", roots: ["/w", "/w/web"] };
+  const context: PermissionContext = { mode: "auto", readOnly: false, designDir: undefined, cwd: "/w", roots: ["/w", "/w/web"], clones: [] };
   const shell = (command: string) => describe({ toolCallId: "c", kind: "execute", rawInput: { command } });
   const edit = (path: string) => describe({ toolCallId: "e", kind: "edit", content: [{ type: "diff", path, oldText: "a", newText: "b" }] });
+
+  test("an edit or a shell command writing into a source clone is refused whatever the mode, naming the worktree", () => {
+    const guarded: PermissionContext = { ...context, clones: [{ clone: "/code/web", worktree: "/w/web" }] };
+    for (const mode of ["auto", "bypass_permissions", "default", "accept_edits"] as const) {
+      const refused = decide(edit("/code/web/src/app.ts"), { ...guarded, mode });
+      expect(refused).toEqual({ type: "deny", reason: expect.stringContaining("Write /w/web/src/app.ts instead") });
+      expect(decide(shell("echo x > /code/web/notes.md"), { ...guarded, mode }).type).toBe("deny");
+      expect(decide(shell("cd /code/web && git commit -am x"), { ...guarded, mode }).type).toBe("deny");
+    }
+    // Reads of the clone, and writes in the worktree, as before.
+    expect(decide(shell("cat /code/web/README.md"), { ...guarded, mode: "bypass_permissions" }).type).toBe("allow");
+    expect(decide(edit("/w/web/src/app.ts"), guarded).type).toBe("allow");
+  });
 
   test("worktrees and add-repo are refused whatever the mode", () => {
     for (const mode of ["auto", "bypass_permissions", "default"] as const) {

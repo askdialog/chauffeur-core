@@ -117,6 +117,13 @@ export function cloneWriteRefusal(toolName: string, toolInput: unknown, cwd: str
   return clone && writeDenial(path, clone);
 }
 
+/** The denial for a write to `written` (a file an agent names, from `cwd`) in a clone, or undefined. */
+export function clonePathRefusal(written: string, cwd: string, clones: GuardedClone[]): string | undefined {
+  const path = at(cwd, written);
+  const clone = cloneOf(path, clones);
+  return clone && writeDenial(path, clone);
+}
+
 /** The denial for a shell command that changes, or may change, a clone, or undefined. */
 export function cloneCommandRefusal(command: string, cwd: string, clones: GuardedClone[]): string | undefined {
   const judge = new Judge(clones);
