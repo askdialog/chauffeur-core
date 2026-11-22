@@ -9,36 +9,10 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use super::real;
-use crate::Daemon;
-
-/// Claude Code's state file for the folder `claude`: `~/.claude.json` for `~/.claude`, else
-/// inside it (as with `CLAUDE_CONFIG_DIR`).
-fn state_file(claude: &Path, home: Option<&Path>) -> PathBuf {
-    match home {
-        Some(home) if real(claude) == real(&home.join(".claude")) => home.join(".claude.json"),
-        _ => claude.join(".claude.json"),
-    }
-}
 
 /// A warning per clone in `clones` (the user's clones of each imported repo) with local-scope MCP
-/// servers in the state file of `claude`, Claude Code's folder read.
-pub(super) fn warnings(
-    d: &Daemon,
-    claude: &Path,
-    clones: &BTreeMap<String, Vec<PathBuf>>,
-) -> Vec<String> {
-    let home = d
-        .shell_env
-        .vars()
-        .get("HOME")
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
-    named(&state_file(claude, home.as_deref()), clones)
-}
-
-/// A warning per clone in `clones` with local-scope MCP servers in `state`.
-fn named(state: &Path, clones: &BTreeMap<String, Vec<PathBuf>>) -> Vec<String> {
+/// servers in `state`, Claude Code's state file.
+pub(super) fn warnings(state: &Path, clones: &BTreeMap<String, Vec<PathBuf>>) -> Vec<String> {
     let Some(servers) = local_servers(state) else {
         return Vec::new();
     };
@@ -50,7 +24,7 @@ fn named(state: &Path, clones: &BTreeMap<String, Vec<PathBuf>>) -> Vec<String> {
             };
             let names: Vec<&str> = names.iter().map(String::as_str).collect();
             warnings.push(format!(
-                "{repo}: Claude Code's MCP servers {} are local to {}, so its workspaces' agents do not get them. To give them to every folder, add each with `claude mcp add --scope user <name> …` (`claude mcp get <name>`, run in {1}, shows its settings).",
+                "{repo}: Claude Code's MCP servers {} are local to {}, which its workspaces' agents do not get: add each for every folder with `claude mcp add --scope user <name> …` (`claude mcp get <name>` in {1} shows its settings).",
                 names.join(", "),
                 clone.display(),
             ));
@@ -99,23 +73,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_state_file_is_beside_the_default_folder_else_inside_it() {
-        let home = Path::new("/h");
-        assert_eq!(
-            state_file(&home.join(".claude"), Some(home)),
-            home.join(".claude.json")
-        );
-        assert_eq!(
-            state_file(Path::new("/c"), Some(home)),
-            Path::new("/c/.claude.json")
-        );
-        assert_eq!(
-            state_file(Path::new("/c"), None),
-            Path::new("/c/.claude.json")
-        );
-    }
-
-    #[test]
     fn local_servers_are_named_by_clone_without_their_settings() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
@@ -143,9 +100,9 @@ mod tests {
             ("shop".to_string(), vec![shop.clone()]),
             ("docs".to_string(), vec![root.join("docs")]),
         ]);
-        let warnings = named(&state, &clones);
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        let warning = &warnings[0];
+        let named = warnings(&state, &clones);
+        assert_eq!(named.len(), 1, "{named:?}");
+        let warning = &named[0];
         assert!(
             warning.starts_with(&format!(
                 "shop: Claude Code's MCP servers linear, sentry are local to {}",
@@ -161,8 +118,8 @@ mod tests {
             assert!(!warning.contains(value), "{warning}");
         }
         // No state file, or one unreadable: nothing to say.
-        assert!(named(&root.join("none.json"), &clones).is_empty());
+        assert!(warnings(&root.join("none.json"), &clones).is_empty());
         std::fs::write(&state, "{").unwrap();
-        assert!(named(&state, &clones).is_empty());
+        assert!(warnings(&state, &clones).is_empty());
     }
 }

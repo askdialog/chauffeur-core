@@ -1851,7 +1851,7 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     std::fs::write(
         claude.join(".claude.json"),
         serde_json::json!({ "projects": { pn.to_string_lossy(): {
-            "mcpServers": { "linear": { "env": { "TOKEN": "s3cret" } } }
+            "mcpServers": { "linear": {} }
         } } })
         .to_string(),
     )
@@ -1962,7 +1962,6 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     let named = mcp(&planned);
     assert_eq!(named.len(), 1, "{named:?}");
     assert!(named[0].starts_with("pn: Claude Code's MCP servers linear are local to"));
-    assert!(!named[0].contains("s3cret"));
     assert_eq!(
         std::fs::read_to_string(home.join("settings.toml")).unwrap(),
         before

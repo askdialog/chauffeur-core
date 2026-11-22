@@ -69,6 +69,17 @@ impl Locations {
         &self.config
     }
 
+    /// The state file of Claude Code run with `claude` as its folder: `~/.claude.json` for
+    /// `~/.claude`, else inside it (as `CLAUDE_CONFIG_DIR` puts it).
+    pub(crate) fn state_for(&self, claude: &Path) -> PathBuf {
+        let default = self.home.join(".claude");
+        if claude == default || crate::conductor::same_folder(claude, &default) {
+            self.home.join(".claude.json")
+        } else {
+            claude.join(".claude.json")
+        }
+    }
+
     pub(crate) fn of(vars: &BTreeMap<String, String>) -> Option<Locations> {
         let set = |name: &str| vars.get(name).filter(|v| !v.is_empty()).map(PathBuf::from);
         let home = set("HOME").or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
@@ -859,5 +870,15 @@ mod tests {
         let set = Locations::of(&vars(&[("HOME", "/h"), ("CLAUDE_CONFIG_DIR", "/c")])).unwrap();
         assert_eq!(set.config, Path::new("/c"));
         assert_eq!(set.state, Path::new("/c/.claude.json"));
+        // A folder read: the default one's state is beside it, any other's inside it.
+        assert_eq!(
+            set.state_for(Path::new("/h/.claude")),
+            Path::new("/h/.claude.json")
+        );
+        assert_eq!(set.state_for(Path::new("/c")), Path::new("/c/.claude.json"));
+        assert_eq!(
+            plain.state_for(Path::new("/x")),
+            Path::new("/x/.claude.json")
+        );
     }
 }
