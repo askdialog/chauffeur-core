@@ -10,6 +10,6 @@ export type ClaudeCodeSetup = { repo: string,
  */
 command: string | null, 
 /**
- * The lockfiles it was read from: at the root, else in subfolders.
+ * The lockfiles it was read from, at the root; with no command, those in subfolders.
  */
 lockfiles: Array<string>, };

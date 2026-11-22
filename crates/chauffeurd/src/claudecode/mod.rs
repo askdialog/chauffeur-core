@@ -317,8 +317,9 @@ pub async fn import(
     }
     let trees = workspace_trees(d, &sources, &plan.histories, &repos).await?;
     let setups = setup::guess_all(d, &repos.git, &trees).await;
-    let user_clones: BTreeMap<String, Vec<PathBuf>> = trees
-        .keys()
+    // Every repo whose sessions the run imports, into a new workspace or an earlier one's.
+    let user_clones: BTreeMap<String, Vec<PathBuf>> = touched
+        .iter()
         .map(|repo| {
             (
                 repo.clone(),

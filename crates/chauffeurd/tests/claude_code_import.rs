@@ -2076,7 +2076,14 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
         .collect();
     assert_eq!(commands, ["pnpm install"]);
 
-    // A second run makes no workspace: it guesses nothing.
+    // A second run makes no workspace: it guesses nothing. A session found later on pn's branch
+    // goes into its workspace, its MCP server named again.
+    std::fs::write(
+        projects.join("s-pn-2.jsonl"),
+        line(&pn, "feat/pn", &ago(1), &edit(&pn.join("README.md"))) + "\n",
+    )
+    .unwrap();
     let again = import(&f, true).await;
     assert!(again.setups.is_empty(), "{again:?}");
+    assert_eq!(mcp(&again), named);
 }
