@@ -7,7 +7,7 @@
 //! keep it. A checkout gone, or half deleted by a cleanup, carries the branch's commits only. A
 //! workspace that fails to import puts back what it released; the others go on.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -110,15 +110,18 @@ pub(super) struct Source {
 /// What the plan found, for the import.
 pub(super) struct Found<'a> {
     pub(super) sources: &'a HashMap<RepoBranch, Source>,
-    /// Each parent's repo's clone, by repo.
-    pub(super) parents: &'a HashMap<String, ParentClone>,
+    /// The clone of each repo a workspace is made in on a new branch (a parent's, a changes
+    /// one's), by repo.
+    pub(super) new_branch_clones: &'a HashMap<String, RepoClone>,
+    /// The user's clone holding uncommitted changes on its default branch, by repo.
+    pub(super) changed: &'a BTreeMap<String, PathBuf>,
     pub(super) sessions: &'a HashMap<String, Session>,
     /// The folders Claude Code still runs in: no branch is released from under it.
     pub(super) running: &'a [PathBuf],
 }
 
-/// The clone a parent workspace's repo is chosen from: Chauffeur's, else the user's it adopts.
-pub(super) struct ParentClone {
+/// The clone a workspace on a new branch is made from: Chauffeur's, else the user's it adopts.
+pub(super) struct RepoClone {
     pub(super) clone: PathBuf,
     pub(super) adopt: bool,
 }
@@ -149,13 +152,34 @@ pub(super) async fn import(
         }
     }
     for workspace in workspaces.iter_mut() {
+        // The default-branch changes it could not carry: no longer said to.
+        let mut uncarried = Vec::new();
         let made = match (workspace.kind, workspace.branch.clone()) {
             (ClaudeCodeWorkspaceKind::Parent, _) => {
                 let children = planned.remove(&workspace.name).unwrap_or_default();
-                let made = make_parent(d, workspace, children, found, report.warnings).await;
+                let made = make_parent(
+                    d,
+                    &git,
+                    workspace,
+                    children,
+                    found,
+                    report.warnings,
+                    &mut uncarried,
+                )
+                .await;
                 let id = made.as_ref().ok().map(|row| row.id.clone());
                 parents.insert(workspace.name.clone(), id);
                 made
+            }
+            (ClaudeCodeWorkspaceKind::Changes, _) => {
+                // Carried by an earlier import: nothing more.
+                let repo = workspace.repos.first().cloned().unwrap_or_default();
+                if let Some(earlier) = changes_workspace(d, &repo)? {
+                    workspace.outcome = ClaudeCodeOutcome::AlreadyImported;
+                    workspace.workspace = Some(earlier.slug);
+                    continue;
+                }
+                make_changes(d, &git, workspace, found, report.warnings, &mut uncarried).await
             }
             (ClaudeCodeWorkspaceKind::Branch, Some(branch)) => {
                 match parent_id(&parents, workspace.parent.as_deref()) {
@@ -184,6 +208,9 @@ pub(super) async fn import(
                 continue;
             }
         };
+        workspace
+            .changes_from
+            .retain(|repo| !uncarried.contains(repo));
         workspace.outcome = ClaudeCodeOutcome::Imported;
         workspace.workspace = Some(row.slug.clone());
         report
@@ -250,34 +277,22 @@ pub(super) fn recorded_parent(
 /// repo (the user's becomes Chauffeur's), recorded with its `children`.
 async fn make_parent(
     d: &Arc<Daemon>,
+    git: &Git,
     workspace: &ClaudeCodeWorkspacePlan,
     children: Vec<PlannedChild>,
     found: &Found<'_>,
     warnings: &mut Vec<String>,
+    uncarried: &mut Vec<String>,
 ) -> Result<WorkspaceRow> {
     if let Some(earlier) = &workspace.workspace {
         return d.workspaces.row(earlier);
     }
-    let Some(repo) = workspace.repos.first().cloned() else {
-        return Err(Error::Internal(anyhow::anyhow!("a parent with no repo")));
-    };
-    let Some(parent) = found.parents.get(&repo) else {
-        return Err(Error::BadRequest(format!(
-            "none of the clones of {repo} the sessions ran in is left: open a session in one, then run the import again"
-        )));
-    };
-    if parent.adopt {
-        adopt(d, &repo, &parent.clone)?;
+    let (repo, row) = make_on_new_branch(d, git, workspace, found).await?;
+    for changed in &workspace.changes_from {
+        if !carry_changes(d, git, changed, &row, found, warnings).await {
+            uncarried.push(changed.clone());
+        }
     }
-    let made = d
-        .workspaces
-        .create(CreateWorkspaceParams {
-            name: Some(workspace.name.clone()),
-            repos: vec![repo.clone()],
-            ..Default::default()
-        })
-        .await?;
-    let row = d.workspaces.row(&made.workspace.id)?;
     let record = ParentRecord {
         workspace: row.id.clone(),
         repo,
@@ -297,6 +312,157 @@ async fn make_parent(
         ));
     }
     Ok(row)
+}
+
+/// `<prefix><repo>` → the workspace an earlier import made carrying the uncommitted changes on
+/// the repo's default branch (a parent's, a changes one's): a later run makes none again.
+const CHANGES: &str = "claudecode_changes:";
+
+/// The workspace an earlier import made carrying `repo`'s default-branch changes, while ready.
+pub(super) fn changes_workspace(d: &Daemon, repo: &str) -> Result<Option<WorkspaceRow>> {
+    let Some(id) = d.store.kv_get(&format!("{CHANGES}{repo}"))? else {
+        return Ok(None);
+    };
+    Ok(d.store
+        .find_workspace(&id)?
+        .filter(|row| row.state == WorkspaceState::Ready))
+}
+
+/// A workspace on a new branch from the default branch of its repo, carrying the uncommitted
+/// changes of the user's clone there (which keeps its own).
+async fn make_changes(
+    d: &Arc<Daemon>,
+    git: &Git,
+    workspace: &ClaudeCodeWorkspacePlan,
+    found: &Found<'_>,
+    warnings: &mut Vec<String>,
+    uncarried: &mut Vec<String>,
+) -> Result<WorkspaceRow> {
+    let (repo, row) = make_on_new_branch(d, git, workspace, found).await?;
+    if !carry_changes(d, git, &repo, &row, found, warnings).await {
+        uncarried.push(repo);
+    }
+    Ok(row)
+}
+
+/// A workspace on a new branch of its repo (a parent's, a changes one's), from the clone chosen
+/// for it (the user's becomes Chauffeur's): from the default branch; when it carries the user's
+/// default-branch changes, from the commit their clone stands on, where those changes apply.
+async fn make_on_new_branch(
+    d: &Arc<Daemon>,
+    git: &Git,
+    workspace: &ClaudeCodeWorkspacePlan,
+    found: &Found<'_>,
+) -> Result<(String, WorkspaceRow)> {
+    let Some(repo) = workspace.repos.first().cloned() else {
+        return Err(Error::Internal(anyhow::anyhow!(
+            "a workspace planned with no repo"
+        )));
+    };
+    let Some(chosen) = found.new_branch_clones.get(&repo) else {
+        return Err(Error::BadRequest(format!(
+            "none of the clones of {repo} the sessions ran in is left: open a session in one, then run the import again"
+        )));
+    };
+    if chosen.adopt {
+        adopt(d, &repo, &chosen.clone)?;
+    }
+    let changed = found
+        .changed
+        .get(&repo)
+        .filter(|_| workspace.changes_from.contains(&repo));
+    let branch = match changed {
+        Some(from) => Some(branch_at(d, git, &chosen.clone, from, &workspace.name).await?),
+        None => None,
+    };
+    let made = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some(workspace.name.clone()),
+            repos: vec![repo.clone()],
+            branch: branch.clone(),
+            ..Default::default()
+        })
+        .await;
+    match made {
+        Ok(made) => Ok((repo, d.workspaces.row(&made.workspace.id)?)),
+        Err(error) => {
+            // Made for it: it goes with it.
+            if let Some(branch) = &branch {
+                let _ = git.delete_branch(&chosen.clone, branch).await;
+            }
+            Err(error)
+        }
+    }
+}
+
+/// A new branch in `clone`, named as a workspace `name`'s would be, at the commit the user's
+/// clone `from` stands on (fetched from it, when another clone).
+async fn branch_at(d: &Daemon, git: &Git, clone: &Path, from: &Path, name: &str) -> Result<String> {
+    let base = format!("{}/{name}", d.workspaces.branch_prefix().await);
+    let mut branch = base.clone();
+    for n in 2.. {
+        if !git.branch_exists(clone, &branch).await {
+            break;
+        }
+        branch = format!("{base}-{n}");
+    }
+    let from_text = from.to_string_lossy();
+    git.run(
+        clone,
+        &[
+            "fetch",
+            "--no-tags",
+            &from_text,
+            &format!("HEAD:refs/heads/{branch}"),
+        ],
+    )
+    .await
+    .map_err(|e| {
+        Error::Internal(e.context(format!("starting {branch} where {} stands", from.display())))
+    })?;
+    Ok(branch)
+}
+
+/// The uncommitted changes on `repo`'s default branch in the user's clone, copied into `row`'s
+/// worktree of it, the clone keeping them; recorded, so that a later run copies them no more.
+/// What cannot be copied is said; true when all were.
+async fn carry_changes(
+    d: &Daemon,
+    git: &Git,
+    repo: &str,
+    row: &WorkspaceRow,
+    found: &Found<'_>,
+    warnings: &mut Vec<String>,
+) -> bool {
+    let Some(from) = found.changed.get(repo) else {
+        return false;
+    };
+    // Carried by an earlier import: not again.
+    if changes_workspace(d, repo).is_ok_and(|earlier| earlier.is_some_and(|e| e.id != row.id)) {
+        return false;
+    }
+    let into = PathBuf::from(&row.path).join(repo_folder(repo));
+    let copied = async {
+        let changes = conductor::changes(git, from).await?;
+        conductor::reapply(git, &changes, from, &into).await
+    }
+    .await;
+    if let Err(error) = &copied {
+        warnings.push(format!(
+            "Some uncommitted changes on the default branch of {} could not be copied into {} ({error:#}): copy them there by hand, or archive {} and run the import again.",
+            from.display(),
+            row.slug,
+            row.slug
+        ));
+    }
+    if let Err(error) = d.store.kv_set(&format!("{CHANGES}{repo}"), &row.id) {
+        warnings.push(format!(
+            "{} was made, but could not be recorded ({error}): a later import will make another.",
+            row.slug
+        ));
+    }
+    copied.is_ok()
 }
 
 /// A checkout the branch was released from (or whose changes were read, the branch kept there),

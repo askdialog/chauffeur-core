@@ -253,13 +253,24 @@ pub async fn import(
                 .flat_map(|p| p.branches.iter().map(|b| b.repo.clone())),
         )
         .collect();
-    let mut changes = Vec::new();
+    // The repos whose clone holds uncommitted changes on its default branch, each with the clone
+    // they are read from: the first holding some.
+    let mut changed: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut bases = HashMap::new();
     for repo in &touched {
         for clone in repos.clones.get(repo).cloned().unwrap_or_default() {
             let base = repos.refs(&clone).await.base.clone();
-            if repos.default_has_changes(&clone, &base).await && !changes.contains(repo) {
-                changes.push(repo.clone());
+            if repos.default_has_changes(&clone, &base).await {
+                match changed.get(repo) {
+                    None => {
+                        changed.insert(repo.clone(), clone.clone());
+                    }
+                    Some(first) => warnings.push(format!(
+                        "The uncommitted changes on the default branch of {} are not carried: those of {}, another clone of {repo}, are. Carry them by hand if they are needed.",
+                        clone.display(),
+                        first.display()
+                    )),
+                }
             }
             bases.entry(repo.clone()).or_insert(base);
         }
@@ -273,6 +284,7 @@ pub async fn import(
             }
         }
     }
+    let changes: Vec<String> = changed.keys().cloned().collect();
     let mut plan = place::place(&placed, &changes, &bases, &made);
     for session in &mut plans {
         if let Some(lands_in) = plan.lands_in.get(&session.id) {
@@ -281,6 +293,20 @@ pub async fn import(
     }
     for (session, row, record) in earlier_parents {
         with_earlier_parent(d, &mut plan, session, &row, &record)?;
+    }
+    // Changes an earlier import carried: no new parent carries them again.
+    for workspace in plan
+        .workspaces
+        .iter_mut()
+        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Parent)
+    {
+        let mut kept = Vec::new();
+        for repo in std::mem::take(&mut workspace.changes_from) {
+            if branches::changes_workspace(d, &repo)?.is_none() {
+                kept.push(repo);
+            }
+        }
+        workspace.changes_from = kept;
     }
     // The branches this version makes workspaces of (a plain one's, a parent's child), in the
     // repos an earlier import's workspace on it lacks (all, without one). Each repo's clone is
@@ -344,24 +370,27 @@ pub async fn import(
             );
         }
     }
-    // A parent's repo, on a new branch: the clone chosen for it, else the first of the user's.
-    let mut parents: HashMap<String, branches::ParentClone> = HashMap::new();
-    for workspace in plan
-        .workspaces
-        .iter()
-        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Parent)
-    {
+    // The repo of a workspace on a new branch (a parent's, a changes one's): the clone chosen for
+    // it, else the user's its session ran in, or holding the changes, else the first met.
+    let mut new_branch_clones: HashMap<String, branches::RepoClone> = HashMap::new();
+    for workspace in plan.workspaces.iter().filter(|w| {
+        matches!(
+            w.kind,
+            ClaudeCodeWorkspaceKind::Parent | ClaudeCodeWorkspaceKind::Changes
+        )
+    }) {
         let Some(repo) = workspace.repos.first() else {
             continue;
         };
         let ran_in = workspace.sessions.first().and_then(|id| homes.get(id));
         let first = repos.clones.get(repo).and_then(|c| c.first());
-        let (clone, adopt) = chosen_clone(d, &mut chosen, repo, ran_in.or(first));
+        let user = ran_in.or(changed.get(repo)).or(first);
+        let (clone, adopt) = chosen_clone(d, &mut chosen, repo, user);
         if let Some(clone) = clone {
-            parents.insert(repo.clone(), branches::ParentClone { clone, adopt });
+            new_branch_clones.insert(repo.clone(), branches::RepoClone { clone, adopt });
         }
     }
-    let trees = workspace_trees(d, &sources, &parents, &plan.histories, &repos).await?;
+    let trees = workspace_trees(d, &sources, &new_branch_clones, &plan.histories, &repos).await?;
     let setups = setup::guess_all(d, &repos.git, &trees).await;
     // Every repo whose sessions the run imports, into a new workspace or an earlier one's.
     let user_clones: BTreeMap<String, Vec<PathBuf>> = touched
@@ -386,6 +415,10 @@ pub async fn import(
             if let Some(branch) = workspace.branch.clone() {
                 workspace.workspace =
                     branches::existing(d, workspace, &branch)?.map(|row| row.slug);
+            } else if workspace.kind == ClaudeCodeWorkspaceKind::Changes
+                && let Some(repo) = workspace.repos.first()
+            {
+                workspace.workspace = branches::changes_workspace(d, repo)?.map(|row| row.slug);
             }
         }
     } else {
@@ -394,7 +427,8 @@ pub async fn import(
         let mut report = copy::Report::new(&mut plans, &mut warnings);
         let found = branches::Found {
             sources: &sources,
-            parents: &parents,
+            new_branch_clones: &new_branch_clones,
+            changed: &changed,
             sessions: &found,
             running: &running_folders,
         };
@@ -423,7 +457,7 @@ pub async fn import(
 async fn workspace_trees(
     d: &Daemon,
     sources: &HashMap<branches::RepoBranch, branches::Source>,
-    parents: &HashMap<String, branches::ParentClone>,
+    parents: &HashMap<String, branches::RepoClone>,
     histories: &[ClaudeCodeHistoryPlan],
     repos: &Repos<'_>,
 ) -> Result<BTreeMap<String, Vec<setup::Tree>>> {
