@@ -2644,6 +2644,38 @@ async fn move_changes_leaves_one_copy_of_the_work_in_chauffeur() {
     commit(&shop, "a.txt", "a\n");
     std::fs::write(shop.join("README.md"), "shop, a's change\n").unwrap();
     std::fs::write(shop.join("new.txt"), "new\n").unwrap();
+    // feat/a checked out a second time, with a file of its own: a ref of its own too.
+    let wt_a2 = root.join("wt/a2");
+    git(
+        &shop,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-f",
+            wt_a2.to_str().unwrap(),
+            "feat/a",
+        ],
+    );
+    std::fs::write(wt_a2.join("two.txt"), "two\n").unwrap();
+    // feat/c with a file git is told to leave alone, changed: left as it is.
+    let wt_c = root.join("wt/c");
+    git(
+        &shop,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/c",
+            wt_c.to_str().unwrap(),
+            "main",
+        ],
+    );
+    commit(&wt_c, "conf.txt", "source\n");
+    git(&wt_c, &["update-index", "--assume-unchanged", "conf.txt"]);
+    std::fs::write(wt_c.join("conf.txt"), "local secret\n").unwrap();
+    std::fs::write(wt_c.join("README.md"), "shop, c's change\n").unwrap();
     let docs = clone_repo(&root, "docs", &[]);
     git(&docs, &["switch", "-q", "-c", "feat/d"]);
     commit(&docs, "d.txt", "d\n");
@@ -2677,6 +2709,7 @@ async fn move_changes_leaves_one_copy_of_the_work_in_chauffeur() {
         ("s-a", &shop, "feat/a", 3),
         ("s-b", &wt_b, "feat/b", 1),
         ("s-d", &docs, "feat/d", 2),
+        ("s-c", &wt_c, "feat/c", 2),
     ] {
         std::fs::write(
             projects.join(format!("{id}.jsonl")),
@@ -2719,7 +2752,7 @@ async fn move_changes_leaves_one_copy_of_the_work_in_chauffeur() {
     // The dry run says which checkouts it would clean, and cleans none.
     let planned = run(true).await.unwrap();
     assert!(planned.move_changes);
-    assert_eq!(planned.releases.len(), 2, "{planned:?}");
+    assert_eq!(planned.releases.len(), 4, "{planned:?}");
     assert!(planned.releases.iter().all(|r| r.moved.is_none()));
     assert!(is_branch(&shop, "feat/a"));
 
@@ -2747,6 +2780,35 @@ async fn move_changes_leaves_one_copy_of_the_work_in_chauffeur() {
         assert_eq!(git(folder, &["status", "--porcelain"]), "", "{folder:?}");
     }
     assert!(is_branch(&docs, "feat/d"));
+    // The second checkout of feat/a: saved apart.
+    let a2 = moved(&wt_a2);
+    assert_ne!(a2.saved_in, a.saved_in);
+    assert_eq!(
+        git(&shop, &["show", &format!("{}:two.txt", a2.saved_in)]),
+        "two"
+    );
+    // The one git hides changes of: left as it is, said.
+    assert!(
+        plan.releases
+            .iter()
+            .any(|r| Path::new(&r.folder) == wt_c && r.moved.is_none())
+    );
+    assert_eq!(
+        std::fs::read_to_string(wt_c.join("conf.txt")).unwrap(),
+        "local secret\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(wt_c.join("README.md")).unwrap(),
+        "shop, c's change\n"
+    );
+    assert!(
+        plan.warnings.iter().any(|w| w.contains(&format!(
+            "{} is left as it is (some of its files are marked --assume-unchanged",
+            wt_c.display()
+        ))),
+        "{:?}",
+        plan.warnings
+    );
     assert_eq!(
         std::fs::read_to_string(docs.join("README.md")).unwrap(),
         "docs, d's change\n"

@@ -597,10 +597,14 @@ fn claude_code_outcome(plan: &ClaudeCodeImportResult) -> String {
     for r in &plan.releases {
         if let Some(moved) = &r.moved {
             let folder = shell_quoted(&r.folder);
-            let saved = &moved.saved_in;
+            // Quoted: `^` is a pattern to zsh with `extendedglob`.
+            let (saved, parent) = (
+                shell_quoted(&moved.saved_in),
+                shell_quoted(&format!("{}^", moved.saved_in)),
+            );
             lines.push(format!(
-                "{} is back on {}, cleaned; its changes are saved in {saved} as an archive's snapshot is. To bring them back as they were (detached on the branch's commit): git -C {folder} switch --detach {saved}^ && git -C {folder} read-tree -u --reset {saved} && git -C {folder} reset -q",
-                r.folder, moved.back_on,
+                "{} is back on {}, cleaned; its changes are saved in {} as an archive's snapshot is. To bring them back as they were (detached on the branch's commit): git -C {folder} switch --detach {parent} && git -C {folder} read-tree -u --reset {saved} && git -C {folder} reset -q",
+                r.folder, moved.back_on, moved.saved_in,
             ));
         }
     }
@@ -771,7 +775,7 @@ mod tests {
         });
         let said = claude_code_outcome(&done);
         assert!(
-            said.contains("/code/shop is back on main, cleaned; its changes are saved in refs/chauffeur/claude-code/w/shop as an archive's snapshot is. To bring them back as they were (detached on the branch's commit): git -C /code/shop switch --detach refs/chauffeur/claude-code/w/shop^ && git -C /code/shop read-tree -u --reset refs/chauffeur/claude-code/w/shop && git -C /code/shop reset -q"),
+            said.contains("/code/shop is back on main, cleaned; its changes are saved in refs/chauffeur/claude-code/w/shop as an archive's snapshot is. To bring them back as they were (detached on the branch's commit): git -C /code/shop switch --detach 'refs/chauffeur/claude-code/w/shop^' && git -C /code/shop read-tree -u --reset refs/chauffeur/claude-code/w/shop && git -C /code/shop reset -q"),
             "{said}"
         );
         assert!(!said.contains("git -C /code/shop stash"), "{said}");

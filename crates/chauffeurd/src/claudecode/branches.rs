@@ -601,11 +601,23 @@ async fn make(
             ));
             continue;
         };
+        let folder = checkout.folder.display();
         match super::moved::move_out(d, git, checkout, &base, &row).await {
-            Ok(done) => report.moved.push((checkout.folder.clone(), done)),
+            Ok(super::moved::Moved::Saved(done, stopped)) => {
+                if let Some(stopped) = stopped {
+                    report.warnings.push(format!(
+                        "The changes of {folder} are in {} and saved in {}, but cleaning it stopped ({stopped}): it is on {}; finish by hand.",
+                        row.slug, done.saved_in, done.back_on
+                    ));
+                }
+                report.moved.push((checkout.folder.clone(), done));
+            }
+            Ok(super::moved::Moved::Left(reason)) => report.warnings.push(format!(
+                "{folder} is left as it is ({reason}): its changes are in {}; clean it by hand once you no longer need them there.",
+                row.slug
+            )),
             Err(error) => report.warnings.push(format!(
-                "The changes of {} are in {}, but it could not be cleaned ({error:#}): clean it by hand once you no longer need them there.",
-                checkout.folder.display(),
+                "{folder} is left as it is: its changes could not be saved ({error:#}); they are in {}, clean it by hand once you no longer need them there.",
                 row.slug
             )),
         }
