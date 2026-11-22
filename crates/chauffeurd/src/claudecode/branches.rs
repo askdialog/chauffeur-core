@@ -187,7 +187,7 @@ pub(super) fn missing_repos(
 
 /// The branch's workspace: an earlier import's, the repos it lacks added; else a new one. The
 /// branch is made available in each new repo's clone and its changes copied in; what was
-/// released is put back if the workspace cannot be made or extended.
+/// released for a repo that could not be added is put back.
 async fn make(
     d: &Arc<Daemon>,
     git: &Git,
@@ -205,9 +205,14 @@ async fn make(
     }
     let mut released = Vec::new();
     let prepared = prepare(d, git, &missing, branch, found, &mut released).await;
-    let made = match (prepared, &existing) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Some(row)) => extend(d, row, &missing).await.map(|()| row.id.clone()),
+    // The repos now in a workspace on the branch: all of them, or none, or (an extension failing
+    // on one) those added before; what was released for the others is put back.
+    let (made, added) = match (prepared, &existing) {
+        (Err(error), _) => (Err(error), Vec::new()),
+        (Ok(()), Some(row)) => {
+            let (added, extended) = extend(d, row, &missing).await;
+            (extended.map(|()| row.id.clone()), added)
+        }
         (Ok(()), None) => d
             .workspaces
             .create(CreateWorkspaceParams {
@@ -217,20 +222,25 @@ async fn make(
                 ..Default::default()
             })
             .await
-            .map(|created| created.workspace.id),
+            .map_or_else(
+                |error| (Err(error), Vec::new()),
+                |created| (Ok(created.workspace.id), missing.clone()),
+            ),
     };
-    let id = match made {
-        Ok(id) => id,
-        Err(error) => {
-            for checkout in released.iter().filter(|r| !r.kept) {
-                put_back(git, checkout).await;
-            }
-            return Err(error);
-        }
+    for checkout in released
+        .iter()
+        .filter(|r| !r.kept && !added.contains(&r.at.repo))
+    {
+        put_back(git, checkout).await;
+    }
+    let (id, failed) = match (made, &existing) {
+        (Ok(id), _) => (id, None),
+        (Err(error), Some(row)) if !added.is_empty() => (row.id.clone(), Some(error)),
+        (Err(error), _) => return Err(error),
     };
     let row = d.workspaces.row(&id)?;
     // Made: a record that cannot be written only makes a later run miss it.
-    let records = missing
+    let records = added
         .iter()
         .map(|repo| RepoBranch::new(repo, branch).record())
         .chain(std::iter::once(branch_record(branch)));
@@ -243,7 +253,7 @@ async fn make(
         }
     }
     let root = PathBuf::from(&row.path);
-    for checkout in &released {
+    for checkout in released.iter().filter(|r| added.contains(&r.at.repo)) {
         let Some(changes) = &checkout.changes else {
             continue;
         };
@@ -256,15 +266,27 @@ async fn make(
             ));
         }
     }
-    Ok(row)
+    match failed {
+        Some(error) => Err(error),
+        None => Ok(row),
+    }
 }
 
-/// The repos an earlier import's workspace lacks, added to it on its branch.
-async fn extend(d: &Arc<Daemon>, row: &WorkspaceRow, repos: &[String]) -> Result<()> {
+/// The repos an earlier import's workspace lacks, added to it on its branch in order until one
+/// fails: those added, and how it went.
+async fn extend(
+    d: &Arc<Daemon>,
+    row: &WorkspaceRow,
+    repos: &[String],
+) -> (Vec<String>, Result<()>) {
+    let mut added = Vec::new();
     for repo in repos {
-        d.workspaces.add_repo(&row.id, repo).await?;
+        if let Err(error) = d.workspaces.add_repo(&row.id, repo).await {
+            return (added, Err(error));
+        }
+        added.push(repo.clone());
     }
-    Ok(())
+    (added, Ok(()))
 }
 
 /// For each repo, the branch in the clone chosen at planning: released from the user's

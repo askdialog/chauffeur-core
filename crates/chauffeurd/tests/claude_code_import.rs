@@ -1607,6 +1607,63 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
         );
     }
     assert_eq!(outcome(&again, "s-both").0, ClaudeCodeOutcome::Failed);
+
+    // feat/held, imported for shop, found in docs and in a worktree of lab's, whose new worktree
+    // cannot be made: docs stays in the workspace, lab's checkout gets its branch back.
+    let docs = f.root.join("clones/docs");
+    for (clone, folder) in [(&docs, "wt/docs-held"), (&lab, "wt/lab-held")] {
+        let at = f.root.join(folder);
+        git(
+            clone,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feat/held",
+                at.to_str().unwrap(),
+                "main",
+            ],
+        );
+        commit(&at, "held.txt", "held\n");
+        let name = folder.replace('/', "-");
+        std::fs::write(
+            f.claude.join(format!("projects/-code/s-{name}.jsonl")),
+            line(&at, "feat/held", &ago(4), &edit(&at.join("held.txt"))) + "\n",
+        )
+        .unwrap();
+    }
+    let hook = lab.join(".git/hooks/post-checkout");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let third = import(f, false).await;
+    let held = d
+        .workspaces
+        .get(made("feat/held").1.as_deref().unwrap())
+        .unwrap();
+    assert_eq!(
+        outcome(&third, "s-wt-lab-held").0,
+        ClaudeCodeOutcome::Failed,
+        "{third:?}"
+    );
+    assert!(is_branch(&Path::new(&held.path).join("docs"), "feat/held"));
+    assert!(!Path::new(&held.path).join("lab").exists());
+    assert!(
+        is_branch(&f.root.join("wt/lab-held"), "feat/held"),
+        "put back"
+    );
+    // Once the hook is gone, lab joins, docs already in.
+    std::fs::remove_file(&hook).unwrap();
+    let fourth = import(f, false).await;
+    for id in ["s-wt-docs-held", "s-wt-lab-held"] {
+        assert_eq!(
+            outcome(&fourth, id),
+            (ClaudeCodeOutcome::Imported, made("feat/held").1),
+            "{fourth:?}"
+        );
+    }
+    assert!(is_branch(&Path::new(&held.path).join("lab"), "feat/held"));
     unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }
 
