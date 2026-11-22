@@ -1961,7 +1961,7 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     };
     let named = mcp(&planned);
     assert_eq!(named.len(), 1, "{named:?}");
-    assert!(named[0].starts_with("pn: Claude Code's MCP servers linear are local to"));
+    assert!(named[0].starts_with("pn: Claude Code's MCP server linear is local to"));
     assert_eq!(
         std::fs::read_to_string(home.join("settings.toml")).unwrap(),
         before

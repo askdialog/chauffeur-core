@@ -22,10 +22,14 @@ pub(super) fn warnings(state: &Path, clones: &BTreeMap<String, Vec<PathBuf>>) ->
             let Some(names) = servers.get(&real(clone)) else {
                 continue;
             };
-            let names: Vec<&str> = names.iter().map(String::as_str).collect();
+            // Names the user typed: a line break in one would read as a line of the output.
+            let listed: Vec<String> = names.iter().map(|n| n.escape_debug().to_string()).collect();
+            let servers = match listed.as_slice() {
+                [one] => format!("MCP server {one} is"),
+                many => format!("MCP servers {} are", many.join(", ")),
+            };
             warnings.push(format!(
-                "{repo}: Claude Code's MCP servers {} are local to {}, which its workspaces' agents do not get: add each for every folder with `claude mcp add --scope user <name> …` (`claude mcp get <name>` in {1} shows its settings).",
-                names.join(", "),
+                "{repo}: Claude Code's {servers} local to {}, which its workspaces' agents do not get: add each for every folder with `claude mcp add --scope user <name> …` (`claude mcp get <name>` in {0} shows its settings).",
                 clone.display(),
             ));
         }
@@ -78,7 +82,8 @@ mod tests {
         let root = dir.path().canonicalize().unwrap();
         let shop = root.join("shop");
         std::fs::create_dir_all(&shop).unwrap();
-        // Claude Code names the folder as the session saw it: through a link here.
+        std::fs::create_dir_all(root.join("web")).unwrap();
+        // One side or the other may name the folder through a link: shop's key, web's clone.
         let link = root.join("link");
         std::os::unix::fs::symlink(&root, &link).unwrap();
         let state = root.join(".claude.json");
@@ -88,9 +93,11 @@ mod tests {
                 link.join("shop").to_string_lossy(): {
                     "mcpServers": {
                         "linear": { "command": "npx", "env": { "TOKEN": "s3cret" } },
-                        "sentry": { "url": "https://sentry.example" }
+                        "sentry": { "url": "https://sentry.example" },
+                        "fake\nline": {}
                     }
                 },
+                root.join("web").to_string_lossy(): { "mcpServers": { "figma": {} } },
                 root.join("docs").to_string_lossy(): { "mcpServers": {} },
                 root.join("other").to_string_lossy(): { "mcpServers": { "far": {} } }
             }
@@ -99,13 +106,18 @@ mod tests {
         let clones = BTreeMap::from([
             ("shop".to_string(), vec![shop.clone()]),
             ("docs".to_string(), vec![root.join("docs")]),
+            ("web".to_string(), vec![link.join("web")]),
         ]);
         let named = warnings(&state, &clones);
-        assert_eq!(named.len(), 1, "{named:?}");
+        assert_eq!(named.len(), 2, "{named:?}");
+        assert!(
+            named[1].starts_with("web: Claude Code's MCP server figma is local to"),
+            "{named:?}"
+        );
         let warning = &named[0];
         assert!(
             warning.starts_with(&format!(
-                "shop: Claude Code's MCP servers linear, sentry are local to {}",
+                "shop: Claude Code's MCP servers fake\\nline, linear, sentry are local to {}",
                 shop.display()
             )),
             "{warning}"
