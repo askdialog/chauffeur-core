@@ -3450,7 +3450,8 @@ impl WorkspaceManager {
         Ok(())
     }
 
-    /// Deletes archive snapshots past their retention.
+    /// Deletes archive snapshots past their retention, and the refs an import from Claude Code
+    /// saved a checkout's changes in (`--move-changes`), kept as long.
     pub async fn purge_expired_snapshots(&self) -> Result<usize> {
         let d = self.d();
         let cutoff =
@@ -3465,7 +3466,7 @@ impl WorkspaceManager {
             }
             d.store.clear_snapshot_ref(&worktree.id)?;
         }
-        // The refs an import from Claude Code saved a checkout's changes in, as long.
+        // The refs an import from Claude Code saved a checkout's changes in: the same retention.
         let moved = crate::claudecode::moved::purge(&d, &git, &cutoff.to_rfc3339()).await?;
         Ok(expired.len() + moved)
     }

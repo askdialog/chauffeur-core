@@ -507,7 +507,7 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
             let only = if r.commits_only {
                 ", gone or half deleted: its commits only"
             } else if plan.move_changes {
-                ", then cleaned (its changes saved in a git ref kept as an archive's snapshot is) and put back on its default branch"
+                ", then cleaned (its changes saved in a git ref kept as an archive's snapshot is) and put back on its default branch, unless git hides some of its changes (the import says which it leaves)"
             } else {
                 ""
             };
@@ -670,7 +670,7 @@ fn claude_code_release_warning(plan: &ClaudeCodeImportResult) -> String {
         out.push_str(&format!("  {} {}   in {}\n", r.repo, r.branch, r.folder));
     }
     out.push_str(if plan.move_changes {
-        "Their uncommitted changes are copied into the workspace (not those of a checkout gone or half deleted), then saved in a git ref kept as an archive's snapshot is (30 days by default); the checkouts are cleaned and put back on their default branch."
+        "Their uncommitted changes are copied into the workspace (not those of a checkout gone or half deleted), then saved in a git ref kept as an archive's snapshot is (30 days by default); the checkouts are cleaned and put back on their default branch, but for one whose changes git does not fully show (files marked --assume-unchanged or --skip-worktree, a merge or rebase under way), left as it is and named."
     } else {
         "Those checkouts keep their files and uncommitted changes, on a detached HEAD on the same commit; the changes are copied into the workspace (not those of a checkout gone or half deleted)."
     });
@@ -763,7 +763,7 @@ mod tests {
         planned.move_changes = true;
         let plan = render_claude_code(&planned);
         assert!(
-            plan.contains("shop feat/a   checked out in /code/shop, then cleaned (its changes saved in a git ref kept as an archive's snapshot is) and put back on its default branch"),
+            plan.contains("shop feat/a   checked out in /code/shop, then cleaned (its changes saved in a git ref kept as an archive's snapshot is) and put back on its default branch, unless git hides some of its changes (the import says which it leaves)"),
             "{plan}"
         );
         assert!(claude_code_release_warning(&planned).contains("the checkouts are cleaned"));

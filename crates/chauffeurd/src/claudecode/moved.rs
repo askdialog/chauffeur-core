@@ -55,7 +55,11 @@ pub(super) async fn move_out(
     };
     let reference = free_reference(git, folder, row, &released.at.repo).await;
     git.snapshot(folder, &reference).await?;
-    remember(d, &released.clone, &reference)?;
+    // Unrecorded, it would never be purged: it goes, and nothing is cleaned.
+    if let Err(error) = remember(d, &released.clone, &reference) {
+        let _ = git.delete_ref(folder, &reference).await;
+        return Err(error.into());
+    }
     // Saved: whatever stops the cleaning now is said, the ref named.
     let no_recursion = ["-c", "submodule.recurse=false"];
     let linked = git
@@ -184,7 +188,14 @@ async fn free_reference(git: &Git, folder: &Path, row: &WorkspaceRow, repo: &str
     reference
 }
 
+/// Held while the list of saved refs is read and written back: a ref recorded while the purge
+/// deletes others is kept.
+static LEDGER: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn remember(d: &Daemon, clone: &Path, reference: &str) -> Result<()> {
+    let _ledger = LEDGER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut saved = read(d)?;
     saved.push(Saved {
         clone: clone.to_path_buf(),
@@ -205,15 +216,33 @@ fn write(d: &Daemon, saved: &[Saved]) -> Result<()> {
     d.store.kv_set(SAVED, &serde_json::to_string(saved)?)
 }
 
-/// Deletes the refs saved before `cutoff`; how many.
+/// Deletes the refs saved before `cutoff`, and forgets them; one that cannot be deleted is tried
+/// again at the next purge, unless its clone is gone. How many went.
 pub async fn purge(d: &Daemon, git: &Git, cutoff: &str) -> Result<usize> {
-    let (old, kept): (Vec<Saved>, Vec<Saved>) =
-        read(d)?.into_iter().partition(|s| s.at.as_str() < cutoff);
-    for saved in &old {
-        if let Err(error) = git.delete_ref(&saved.clone, &saved.reference).await {
-            tracing::warn!(%error, reference = saved.reference, "could not delete a saved import's ref");
+    let expired: Vec<Saved> = {
+        let _ledger = LEDGER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        read(d)?
+            .into_iter()
+            .filter(|s| s.at.as_str() < cutoff)
+            .collect()
+    };
+    let mut gone = Vec::new();
+    for saved in expired {
+        match git.delete_ref(&saved.clone, &saved.reference).await {
+            Ok(()) => gone.push(saved.reference),
+            Err(_) if !saved.clone.exists() => gone.push(saved.reference),
+            Err(error) => {
+                tracing::warn!(%error, reference = saved.reference, "could not delete a saved import's ref: tried again at the next purge");
+            }
         }
     }
-    write(d, &kept)?;
-    Ok(old.len())
+    let _ledger = LEDGER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut saved = read(d)?;
+    saved.retain(|s| !gone.contains(&s.reference));
+    write(d, &saved)?;
+    Ok(gone.len())
 }

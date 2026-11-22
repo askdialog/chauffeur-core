@@ -2862,13 +2862,26 @@ async fn move_changes_leaves_one_copy_of_the_work_in_chauffeur() {
         .settings
         .update(|doc| doc["snapshot_retention_days"] = toml_edit::value(-1))
         .unwrap();
-    daemon.workspaces.purge_expired_snapshots().await.unwrap();
-    for reference in [&a.saved_in, &b.saved_in] {
-        let kept = Command::new("git")
+    let exists = |reference: &str| {
+        Command::new("git")
             .args(["show-ref", "--verify", "--quiet", reference])
             .current_dir(&shop)
             .status()
-            .unwrap();
-        assert!(!kept.success(), "{reference}");
+            .unwrap()
+            .success()
+    };
+    // One that cannot be deleted then (its folder read only) is tried again at the next purge.
+    let a_folder = shop
+        .join(".git")
+        .join(Path::new(&a.saved_in).parent().unwrap());
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&a_folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+    daemon.workspaces.purge_expired_snapshots().await.unwrap();
+    std::fs::set_permissions(&a_folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(exists(&a.saved_in));
+    assert!(!exists(&b.saved_in));
+    daemon.workspaces.purge_expired_snapshots().await.unwrap();
+    for reference in [&a.saved_in, &a2.saved_in, &b.saved_in] {
+        assert!(!exists(reference), "{reference}");
     }
 }
