@@ -995,7 +995,7 @@ const WorkspaceRow = memo(function WorkspaceRow({
   const archivable = workspace.state === "ready" || workspace.state === "cleanup_failed";
   const indicator = children && childrenFolded ? foldedIndicator(children) : null;
   return (
-    <div className="group/row relative">
+    <div className={cx("group/row relative", children && "grid grid-cols-[minmax(0,1fr)_auto_2rem]")}>
       {/* A div while renaming: in a button, the field's spaces would press it. */}
       <RowTag
         renaming={renaming}
@@ -1020,7 +1020,8 @@ const WorkspaceRow = memo(function WorkspaceRow({
         aria-pressed={pickedCount > 0 ? picked : undefined}
         data-picked={picked ? "" : undefined}
         className={cx(
-          "relative flex w-full flex-col rounded-md py-1 text-left",
+          "relative w-full rounded-md py-1 text-left",
+          children ? "col-span-full col-start-1 row-start-1 grid grid-cols-subgrid" : "flex flex-col",
           picked ? "bg-accent/10 ring-1 ring-inset ring-accent/35" : selected ? "bg-hover" : "group-hover/row:bg-hover/60",
           // Extensions load their own px-2 utility later; it would overwrite a child's pl-6.
           depth > 0 ? "pl-6" : "pl-2",
@@ -1028,7 +1029,7 @@ const WorkspaceRow = memo(function WorkspaceRow({
           !renaming && "group-hover/row:pr-8 group-focus-within/row:pr-8",
         )}
       >
-        <div className={cx("flex w-full items-center gap-2", children && "pr-7")}>
+        <div className={cx("flex w-full min-w-0 items-center gap-2", children && "pr-2")}>
           {depth > 0 ? (
             <CornerDownRight size={11} className="-ml-3.5 shrink-0 text-faint" />
           ) : null}
@@ -1058,7 +1059,7 @@ const WorkspaceRow = memo(function WorkspaceRow({
             <span className="hidden shrink-0 text-[10.5px] text-faint group-hover/row:inline">{kbd(`⌘${shortcut}`)}</span>
           )}
         </div>
-        <div className="ml-4 flex min-w-0 items-center gap-1.5 text-[11px] text-faint">
+        <div className="col-span-full ml-4 flex min-w-0 items-center gap-1.5 text-[11px] text-faint">
           {routine ? (
             <Badge
               tone={routine.state === "active" ? "success" : routine.state === "paused" ? "attention" : "neutral"}
@@ -1120,7 +1121,7 @@ const WorkspaceRow = memo(function WorkspaceRow({
           aria-label={childrenFolded ? "Show sub-workspaces" : "Hide sub-workspaces"}
           aria-expanded={!childrenFolded}
           data-testid="row-children-toggle"
-          className="absolute right-8 top-1 flex h-5 items-center gap-0.5 rounded px-0.5 text-[10.5px] tabular-nums text-faint hover:bg-hover hover:text-fg"
+          className="relative col-start-2 row-start-1 mt-1 flex h-5 items-center gap-0.5 self-start rounded px-0.5 text-[10.5px] tabular-nums text-faint hover:bg-hover hover:text-fg"
         >
           {indicator?.needsInput && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-attention" aria-label="A sub-workspace needs input" />}
           {indicator?.working && (
