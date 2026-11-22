@@ -143,6 +143,13 @@ group("decide", () => {
     }
   });
 
+  test("a call the agent said nothing of is put to the user, whatever the mode", () => {
+    const unknown = describe({ toolCallId: "write_file" });
+    for (const mode of ["auto", "bypass_permissions", "accept_edits"] as const) expect(decide(unknown, { ...context, mode }).type).toBe("ask");
+    expect(decide(unknown, { ...context, readOnly: true }).type).toBe("ask");
+    expect(decide(unknown, { ...context, designDir: "/w/.chauffeur/design" }).type).toBe("ask");
+  });
+
   test("worktrees and add-repo are refused whatever the mode", () => {
     for (const mode of ["auto", "bypass_permissions", "default"] as const) {
       expect(decide(shell("git worktree add ../x"), { ...context, mode }).type).toBe("deny");

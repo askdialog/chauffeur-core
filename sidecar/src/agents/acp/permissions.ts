@@ -51,6 +51,9 @@ const CHAUFFEUR_TOOL_PREFIX = "mcp__chauffeur__";
 
 export function decide(tool: AcpToolCall, context: PermissionContext): Decision {
   if (tool.name.startsWith(CHAUFFEUR_TOOL_PREFIX) && !context.designDir) return ALLOW;
+  // A call the agent said nothing of (Vibe names one by its tool alone when it has not announced
+  // it): no guard can read it, so the user decides.
+  if (tool.kind === null && tool.title === null) return ASK;
   const command = tool.kind === "execute" ? (tool.command ?? "") : undefined;
   if (command !== undefined) {
     if (runsGitWorktreeAdd(command)) return deny(WORKTREE_ADD_DENIAL);

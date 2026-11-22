@@ -3839,7 +3839,7 @@ async fn a_workspace_whose_restore_failed_takes_no_chat_and_no_message() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_claude_chat_is_given_each_source_clone_with_its_worktree_and_branches_those_of_repos_added_later_too()
+async fn every_chat_is_given_each_source_clone_with_its_worktree_and_branches_those_of_repos_added_later_too()
  {
     let f = fixture(47560);
     let d = &f.daemon;
@@ -3855,14 +3855,15 @@ async fn a_claude_chat_is_given_each_source_clone_with_its_worktree_and_branches
         .await
         .unwrap()
         .workspace;
-    let started = || -> Vec<serde_json::Value> {
+    // Each session started: its agent and the clones it was given.
+    let started = || -> Vec<(serde_json::Value, serde_json::Value)> {
         std::fs::read_to_string(&log)
             .unwrap()
             .lines()
             .filter(|l| l.contains("\"session.start\""))
             .map(|l| {
-                serde_json::from_str::<serde_json::Value>(l).unwrap()["params"]["source_clones"]
-                    .clone()
+                let params = &serde_json::from_str::<serde_json::Value>(l).unwrap()["params"];
+                (params["agent"].clone(), params["source_clones"].clone())
             })
             .collect()
     };
@@ -3879,17 +3880,31 @@ async fn a_claude_chat_is_given_each_source_clone_with_its_worktree_and_branches
         &f.root.join("clones/repo-a"),
         &["switch", "-q", "-c", "user-work"],
     );
-    chat_with(d, &ws.id, "hello").await;
-    assert_eq!(
-        started().last().unwrap(),
-        &serde_json::json!([source("repo-a", "user-work")])
-    );
+    // Claude's, Codex's and Vibe's chats alike: each agent's guard reads them.
+    for agent in [AgentKind::Claude, AgentKind::Codex, AgentKind::Vibe] {
+        d.chats
+            .create(CreateChatParams {
+                workspace: ws.id.clone(),
+                agent: Some(agent),
+                prompt: Some("hello".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            started().last().unwrap(),
+            &(
+                serde_json::to_value(agent).unwrap(),
+                serde_json::json!([source("repo-a", "user-work")])
+            )
+        );
+    }
     // A repo added later: a chat started since is given its clone too.
     d.workspaces.add_repo(&ws.slug, "repo-b").await.unwrap();
     chat_with(d, &ws.id, "hello again").await;
     assert_eq!(
-        started().last().unwrap(),
-        &serde_json::json!([source("repo-a", "user-work"), source("repo-b", "main")])
+        started().last().unwrap().1,
+        serde_json::json!([source("repo-a", "user-work"), source("repo-b", "main")])
     );
 }
 
