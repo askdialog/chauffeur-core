@@ -9514,7 +9514,7 @@ fn catalog_sidecar(root: &Path, claude_5h: u32, codex_installed: bool) -> PathBu
     .join(",");
     let codex = [
         model("gpt-6.1-sol", levels, true),
-        model("gpt-6-astra", levels, false),
+        model("gpt-6.2-astra", levels, false),
         model("gpt-6-luna", levels, false),
     ]
     .join(",");
@@ -9638,12 +9638,12 @@ async fn a_delegated_chat_runs_on_its_parents_agent_and_model_and_a_review_on_th
         delegate(review(Some(DelegateTier::Strongest)))
             .await
             .unwrap(),
-        (AgentKind::Codex, Some("gpt-6-astra".into()), None)
+        (AgentKind::Codex, Some("gpt-6.2-astra".into()), None)
     );
     // A model of the other agent takes the task there; the agent named wins over a review.
     assert_eq!(
-        delegate(named("gpt-6-astra")).await.unwrap(),
-        (AgentKind::Codex, Some("gpt-6-astra".into()), None)
+        delegate(named("gpt-6.2-astra")).await.unwrap(),
+        (AgentKind::Codex, Some("gpt-6.2-astra".into()), None)
     );
     assert_eq!(
         delegate(ToolDelegateParams {

@@ -79,7 +79,7 @@ pub fn tier_model(agent: AgentKind, tier: DelegateTier) -> Option<&'static str> 
         (AgentKind::Claude, DelegateTier::Fast) => Some("haiku"),
         (AgentKind::Claude, DelegateTier::Strongest) => Some("opus"),
         (AgentKind::Codex, DelegateTier::Fast) => Some("gpt-6-luna"),
-        (AgentKind::Codex, DelegateTier::Strongest) => Some("gpt-6-astra"),
+        (AgentKind::Codex, DelegateTier::Strongest) => Some("gpt-6.2-astra"),
         (AgentKind::Vibe, DelegateTier::Fast) => Some("mistral-medium-latest"),
         (AgentKind::Vibe, DelegateTier::Strongest) => Some("mistral-large-4-0"),
     }
