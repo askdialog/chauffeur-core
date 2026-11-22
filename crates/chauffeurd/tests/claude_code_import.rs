@@ -1813,7 +1813,7 @@ async fn adopting(org: &str) {
 /// branch committing a setup in a worktree of the user's, the clone on main), `stale` (yarn's,
 /// `origin/main` committing a setup the clone's checkout has not pulled); and `hist` (poetry's),
 /// whose session lands in its history exploration. Which lockfile gives which setup is
-/// `setup.rs`'s.
+/// `setup.rs`'s. Pn's clone also has an MCP server local to it, named in a warning.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     let _switch = SWITCH.lock().await;
@@ -1847,6 +1847,15 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
         clone
     };
     let pn = repo("pn", "pnpm-lock.yaml", None, Some("feat/pn"));
+    // An MCP server of Claude Code's local to pn's clone.
+    std::fs::write(
+        claude.join(".claude.json"),
+        serde_json::json!({ "projects": { pn.to_string_lossy(): {
+            "mcpServers": { "linear": { "env": { "TOKEN": "s3cret" } } }
+        } } })
+        .to_string(),
+    )
+    .unwrap();
     let committed = repo("committed", "bun.lock", Some("make deps"), Some("feat/c"));
     repo("mine", "Gemfile.lock", None, Some("feat/mine"));
     repo("hist", "poetry.lock", None, None);
@@ -1943,6 +1952,17 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     let before = std::fs::read_to_string(home.join("settings.toml")).unwrap();
     let planned = import(&f, true).await;
     assert_eq!(guessed(&planned), expected, "{planned:?}");
+    let mcp = |plan: &ClaudeCodeImportResult| {
+        plan.warnings
+            .iter()
+            .filter(|w| w.contains("MCP"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let named = mcp(&planned);
+    assert_eq!(named.len(), 1, "{named:?}");
+    assert!(named[0].starts_with("pn: Claude Code's MCP servers linear are local to"));
+    assert!(!named[0].contains("s3cret"));
     assert_eq!(
         std::fs::read_to_string(home.join("settings.toml")).unwrap(),
         before
@@ -1953,6 +1973,7 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     let plan = import(&f, false).await;
     unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
     assert_eq!(guessed(&plan), expected, "{plan:?}");
+    assert_eq!(mcp(&plan), named);
     for w in &plan.workspaces {
         assert_eq!(w.outcome, ClaudeCodeOutcome::Imported, "{plan:?}");
     }

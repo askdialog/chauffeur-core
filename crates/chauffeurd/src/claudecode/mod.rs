@@ -9,6 +9,7 @@
 mod branches;
 mod copy;
 mod history;
+mod mcp;
 mod place;
 mod sessions;
 mod setup;
@@ -314,6 +315,17 @@ pub async fn import(
     }
     let trees = workspace_trees(d, &sources, &plan.histories, &repos).await?;
     let setups = setup::guess_all(d, &repos.git, &trees).await;
+    // Their MCP servers local to the user's clones, which the workspaces do not get.
+    let users: BTreeMap<String, Vec<PathBuf>> = trees
+        .keys()
+        .map(|repo| {
+            (
+                repo.clone(),
+                repos.clones.get(repo).cloned().unwrap_or_default(),
+            )
+        })
+        .collect();
+    warnings.extend(mcp::warnings(d, &claude, &users));
     warnings.extend(repos.warnings);
     if params.dry_run {
         for history in &mut plan.histories {
