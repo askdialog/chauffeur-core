@@ -44,7 +44,22 @@ pub struct ClaudeCodeImportResult {
     pub histories: Vec<ClaudeCodeHistoryPlan>,
     /// Live branches checked out in a clone or one of the user's worktrees, released there.
     pub releases: Vec<ClaudeCodeRelease>,
+    /// The repos of its workspaces that have no setup script: one guessed from their lockfiles.
+    #[serde(default)]
+    pub setups: Vec<ClaudeCodeSetup>,
     pub warnings: Vec<String>,
+}
+
+/// A setup script guessed for a repo that has none (committed, or in the user's settings).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
+#[ts(export)]
+pub struct ClaudeCodeSetup {
+    pub repo: String,
+    /// The command its root lockfiles give (`npm install`…); none when its only lockfiles are in
+    /// subfolders.
+    pub command: Option<String>,
+    /// The lockfiles it was read from, at the root; with no command, those in subfolders.
+    pub lockfiles: Vec<String>,
 }
 
 /// A workspace's outcome from a daemon that plans only.

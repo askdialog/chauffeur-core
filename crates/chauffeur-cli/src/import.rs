@@ -490,6 +490,9 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
             h.sessions.len()
         ));
     }
+    if !plan.setups.is_empty() {
+        out.push_str(&claude_code_setups(plan));
+    }
     if !plan.releases.is_empty() {
         out.push_str(
             "\n\nBranches to release (HEAD detached on the same commit there, its changes copied):",
@@ -511,6 +514,32 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
         for warning in &plan.warnings {
             out.push_str(&format!("\n  {warning}"));
         }
+    }
+    out
+}
+
+/// The setup scripts guessed for the repos without one, and where they go.
+fn claude_code_setups(plan: &ClaudeCodeImportResult) -> String {
+    let written = if plan.dry_run {
+        "to write to"
+    } else {
+        "written to"
+    };
+    let mut out = format!(
+        "\n\nSetup scripts, guessed from the lockfiles of the repos that have none ({written} your settings' [repos.<name>.scripts] setup, never the repo):"
+    );
+    for s in &plan.setups {
+        let line = match &s.command {
+            Some(command) => format!("{command}   (from {})", s.lockfiles.join(", ")),
+            None => format!(
+                "none proposed: lockfiles only in subfolders ({})",
+                s.lockfiles.join(", ")
+            ),
+        };
+        out.push_str(&format!("\n  {}   {line}", s.repo));
+    }
+    if plan.setups.iter().any(|s| s.command.is_some()) {
+        out.push_str("\n  A guess: check it, then commit it in the repo's .chauffeur/settings.toml ([scripts] setup) to share it.");
     }
     out
 }
@@ -620,7 +649,7 @@ fn claude_code_release_warning(plan: &ClaudeCodeImportResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chauffeur_protocol::claudecode::ClaudeCodeWorkspacePlan;
+    use chauffeur_protocol::claudecode::{ClaudeCodeSetup, ClaudeCodeWorkspacePlan};
 
     fn claude_code_plan(dry_run: bool, outcome: ClaudeCodeOutcome) -> ClaudeCodeImportResult {
         let release = |branch: &str, folder: &str, commits_only| ClaudeCodeRelease {
@@ -653,8 +682,46 @@ mod tests {
                 release("feat/a", "/code/shop", false),
                 release("feat/gone", "/tmp/gone", true),
             ],
+            setups: Vec::new(),
             warnings: Vec::new(),
         }
+    }
+
+    #[test]
+    fn guessed_setups_are_shown_as_guesses_to_commit() {
+        let mut plan = claude_code_plan(true, ClaudeCodeOutcome::Import);
+        plan.setups = vec![
+            ClaudeCodeSetup {
+                repo: "shop".into(),
+                command: Some("pnpm install".into()),
+                lockfiles: vec!["pnpm-lock.yaml".into()],
+            },
+            ClaudeCodeSetup {
+                repo: "docs".into(),
+                command: None,
+                lockfiles: vec!["app/package-lock.json".into()],
+            },
+        ];
+        let out = render_claude_code(&plan);
+        assert!(
+            out.contains("shop   pnpm install   (from pnpm-lock.yaml)"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "docs   none proposed: lockfiles only in subfolders (app/package-lock.json)"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "A guess: check it, then commit it in the repo's .chauffeur/settings.toml"
+            ),
+            "{out}"
+        );
+        // Nothing guessed: no guess to check.
+        plan.setups.remove(0);
+        assert!(!render_claude_code(&plan).contains("A guess"));
     }
 
     #[test]

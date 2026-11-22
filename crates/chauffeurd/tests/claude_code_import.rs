@@ -1863,3 +1863,259 @@ async fn adopting(org: &str) {
         );
     }
 }
+
+/// Repos the import makes a workspace in, Chauffeur having no clone of them, each with a live
+/// branch: `pn` (pnpm's lockfile, and inline settings of the user's), `committed` (bun's, and a
+/// setup committed), `mine` (bundle's, and a setup in the user's settings), `br` (npm's, its
+/// branch committing a setup in a worktree of the user's, the clone on main), `stale` (yarn's,
+/// `origin/main` committing a setup the clone's checkout has not pulled); and `hist` (poetry's),
+/// whose session lands in its history exploration. Which lockfile gives which setup is
+/// `setup.rs`'s. Pn's clone also has an MCP server local to it, named in a warning.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
+    let _switch = SWITCH.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let claude = root.join("claude");
+    let projects = claude.join("projects").join("-code");
+    std::fs::create_dir_all(&projects).unwrap();
+    // A repo with `lockfile` and, when given, a committed setup; on `branch`, else main alone.
+    let repo = |name: &str, lockfile: &str, committed: Option<&str>, branch: Option<&str>| {
+        let clone = clone_repo(&root, name, &[]);
+        commit(&clone, lockfile, "lock\n");
+        if let Some(setup) = committed {
+            std::fs::create_dir_all(clone.join(".chauffeur")).unwrap();
+            commit(
+                &clone,
+                ".chauffeur/settings.toml",
+                &format!("[scripts]\nsetup = \"{setup}\"\n"),
+            );
+        }
+        git(&clone, &["push", "-q", "origin", "main"]);
+        let session = match branch {
+            Some(branch) => {
+                git(&clone, &["switch", "-q", "-c", branch]);
+                commit(&clone, "work.txt", "work\n");
+                line(&clone, branch, &ago(1), &edit(&clone.join("README.md")))
+            }
+            None => line(&clone, "main", &ago(1), r#""message":{"content":[]}"#),
+        };
+        std::fs::write(projects.join(format!("s-{name}.jsonl")), session + "\n").unwrap();
+        clone
+    };
+    let pn = repo("pn", "pnpm-lock.yaml", None, Some("feat/pn"));
+    // An MCP server of Claude Code's local to pn's clone.
+    std::fs::write(
+        claude.join(".claude.json"),
+        serde_json::json!({ "projects": { pn.to_string_lossy(): {
+            "mcpServers": { "linear": {} }
+        } } })
+        .to_string(),
+    )
+    .unwrap();
+    let committed = repo("committed", "bun.lock", Some("make deps"), Some("feat/c"));
+    repo("mine", "Gemfile.lock", None, Some("feat/mine"));
+    repo("hist", "poetry.lock", None, None);
+    let session = |name: &str, folder: &Path, branch: &str| {
+        let text = line(folder, branch, &ago(1), &edit(&folder.join("README.md")));
+        std::fs::write(projects.join(format!("s-{name}.jsonl")), text + "\n").unwrap();
+    };
+    let br = clone_repo(&root, "br", &[]);
+    commit(&br, "package-lock.json", "lock\n");
+    git(&br, &["push", "-q", "origin", "main"]);
+    let br_worktree = root.join("wt-br");
+    git(
+        &br,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/br",
+            br_worktree.to_str().unwrap(),
+        ],
+    );
+    std::fs::create_dir_all(br_worktree.join(".chauffeur")).unwrap();
+    commit(
+        &br_worktree,
+        ".chauffeur/settings.toml",
+        "[scripts]\nsetup = \"make br\"\n",
+    );
+    session("br", &br_worktree, "feat/br");
+    let stale = clone_repo(&root, "stale", &["yarn.lock"]);
+    let team = root.join("team-stale");
+    git(
+        &root,
+        &[
+            "clone",
+            "-q",
+            root.join("origin/stale.git").to_str().unwrap(),
+            team.to_str().unwrap(),
+        ],
+    );
+    std::fs::create_dir_all(team.join(".chauffeur")).unwrap();
+    commit(
+        &team,
+        ".chauffeur/settings.toml",
+        "[scripts]\nsetup = \"make stale\"\n",
+    );
+    git(&team, &["push", "-q", "origin", "main"]);
+    git(&stale, &["fetch", "-q"]);
+    git(&stale, &["switch", "-q", "-c", "feat/stale"]);
+    commit(&stale, "work.txt", "work\n");
+    session("stale", &stale, "feat/stale");
+    // dev: its base set to develop in the user's settings, which alone has a lockfile, and a
+    // clone of Chauffeur's own the sessions never ran in.
+    let dev = clone_repo(&root, "dev", &[]);
+    git(&dev, &["switch", "-q", "-c", "develop"]);
+    commit(&dev, "uv.lock", "lock\n");
+    git(&dev, &["push", "-q", "origin", "develop"]);
+    git(&dev, &["switch", "-q", "-c", "feat/dev", "main"]);
+    commit(&dev, "work.txt", "work\n");
+    session("dev", &dev, "feat/dev");
+    let own_dev = root.join("repos/dev");
+    let dev_origin = root.join("origin/dev.git");
+    git(
+        &root,
+        &[
+            "clone",
+            "-q",
+            dev_origin.to_str().unwrap(),
+            own_dev.to_str().unwrap(),
+        ],
+    );
+    let dev_url = "https://github.com/fixture/dev.git";
+    git(&own_dev, &["remote", "set-url", "origin", dev_url]);
+    git(
+        &own_dev,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", dev_origin.display()),
+            dev_url,
+        ],
+    );
+
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("settings.toml"),
+        "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46990\nlinear_enabled = false\n\n[repos]\npn = { env = { FOO = \"1\" } }\n\n[repos.mine.scripts]\nsetup = \"make mine\"\n\n[repos.dev]\ndefault_branch = \"develop\"\n",
+    )
+    .unwrap();
+    let daemon = Daemon::open(Paths::new(
+        home.clone(),
+        root.join("workspaces"),
+        root.join("repos"),
+    ))
+    .unwrap();
+    let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    vars.insert(
+        "CLAUDE_CONFIG_DIR".into(),
+        claude.to_string_lossy().into_owned(),
+    );
+    daemon.shell_env.set_vars(vars);
+    daemon.chats.sidecar.use_binary(history_sidecar());
+    let f = Fixture {
+        _dir: dir,
+        root: root.clone(),
+        claude,
+        daemon,
+    };
+    let guessed = |plan: &ClaudeCodeImportResult| {
+        let mut setups: Vec<_> = plan
+            .setups
+            .iter()
+            .map(|s| (s.repo.clone(), s.command.clone().unwrap_or_default()))
+            .collect();
+        setups.sort();
+        setups
+    };
+    let expected = [
+        ("dev".to_string(), "uv sync".to_string()),
+        ("hist".to_string(), "poetry install".to_string()),
+        ("pn".into(), "pnpm install".into()),
+    ];
+
+    // The dry run shows them and writes nothing.
+    let before = std::fs::read_to_string(home.join("settings.toml")).unwrap();
+    let planned = import(&f, true).await;
+    assert_eq!(guessed(&planned), expected, "{planned:?}");
+    let mcp = |plan: &ClaudeCodeImportResult| {
+        plan.warnings
+            .iter()
+            .filter(|w| w.contains("MCP"))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let named = mcp(&planned);
+    assert_eq!(named.len(), 1, "{named:?}");
+    assert!(named[0].starts_with("pn: Claude Code's MCP server linear is local to"));
+    assert_eq!(
+        std::fs::read_to_string(home.join("settings.toml")).unwrap(),
+        before
+    );
+
+    // SAFETY: the tests reading the switch hold `SWITCH`.
+    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    let plan = import(&f, false).await;
+    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
+    assert_eq!(guessed(&plan), expected, "{plan:?}");
+    assert_eq!(mcp(&plan), named);
+    for w in &plan.workspaces {
+        assert_eq!(w.outcome, ClaudeCodeOutcome::Imported, "{plan:?}");
+    }
+    // Written to the user's settings, theirs kept, a committed one left alone; nothing in the
+    // repos.
+    let settings = f.daemon.settings.get();
+    let setup = |repo: &str| {
+        let scripts = settings.repos.get(repo).and_then(|r| r.scripts.as_ref())?;
+        chauffeurd::settings::RepoSettings::load(&root, &root, Some(scripts))
+            .unwrap()
+            .setup
+    };
+    assert_eq!(setup("pn").as_deref(), Some("pnpm install"));
+    assert_eq!(setup("hist").as_deref(), Some("poetry install"));
+    assert_eq!(setup("dev").as_deref(), Some("uv sync"));
+    assert_eq!(setup("mine").as_deref(), Some("make mine"));
+    for repo in ["committed", "br", "stale"] {
+        assert_eq!(setup(repo), None, "{repo}");
+    }
+    // The user's inline settings of pn are kept beside its setup.
+    let env = settings.repos.get("pn").map(|r| r.env.0.clone());
+    assert_eq!(
+        env.and_then(|e| e.get("FOO").cloned()).as_deref(),
+        Some("1")
+    );
+    assert!(!pn.join(".chauffeur").exists());
+    assert_eq!(
+        git(&committed, &["status", "--porcelain", "--", ".chauffeur"]),
+        ""
+    );
+    // Written before the worktrees: pn's workspace ran it.
+    let slug = plan
+        .workspaces
+        .iter()
+        .find(|w| w.branch.as_deref() == Some("feat/pn"))
+        .and_then(|w| w.workspace.clone())
+        .unwrap();
+    let id = f.daemon.workspaces.get(&slug).unwrap().id;
+    let commands: Vec<String> = f
+        .daemon
+        .procs
+        .list(&id)
+        .into_iter()
+        .map(|p| p.command)
+        .collect();
+    assert_eq!(commands, ["pnpm install"]);
+
+    // A second run makes no workspace: it guesses nothing. A session found later on pn's branch
+    // goes into its workspace, its MCP server named again.
+    std::fs::write(
+        projects.join("s-pn-2.jsonl"),
+        line(&pn, "feat/pn", &ago(1), &edit(&pn.join("README.md"))) + "\n",
+    )
+    .unwrap();
+    let again = import(&f, true).await;
+    assert!(again.setups.is_empty(), "{again:?}");
+    assert_eq!(mcp(&again), named);
+}

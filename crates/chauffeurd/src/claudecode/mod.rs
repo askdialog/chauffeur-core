@@ -9,16 +9,18 @@
 mod branches;
 mod copy;
 mod history;
+mod mcp;
 mod place;
 mod sessions;
+mod setup;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chauffeur_protocol::claudecode::{
-    ClaudeCodeBranch, ClaudeCodeImportParams, ClaudeCodeImportResult, ClaudeCodeOutcome,
-    ClaudeCodeRelease, ClaudeCodeSessionPlan, ClaudeCodeWorkspaceKind,
+    ClaudeCodeBranch, ClaudeCodeHistoryPlan, ClaudeCodeImportParams, ClaudeCodeImportResult,
+    ClaudeCodeOutcome, ClaudeCodeRelease, ClaudeCodeSessionPlan, ClaudeCodeWorkspaceKind,
 };
 
 use crate::conductor::{reference, remote_of};
@@ -56,6 +58,7 @@ pub async fn import(
             )
         })?)
     };
+    let locations = Locations::of(&d.shell_env.vars());
     let claude = match params
         .claude_dir
         .as_deref()
@@ -71,7 +74,8 @@ pub async fn import(
             }
             dir
         }
-        None => Locations::of(&d.shell_env.vars())
+        None => locations
+            .as_ref()
             .map(|at| at.config().to_path_buf())
             .ok_or_else(|| {
                 Error::BadRequest(
@@ -311,6 +315,22 @@ pub async fn import(
             );
         }
     }
+    let trees = workspace_trees(d, &sources, &plan.histories, &repos).await?;
+    let setups = setup::guess_all(d, &repos.git, &trees).await;
+    // Every repo whose sessions the run imports, into a new workspace or an earlier one's.
+    let user_clones: BTreeMap<String, Vec<PathBuf>> = touched
+        .iter()
+        .map(|repo| {
+            (
+                repo.clone(),
+                repos.clones.get(repo).cloned().unwrap_or_default(),
+            )
+        })
+        .collect();
+    let state = locations
+        .as_ref()
+        .map_or_else(|| claude.join(".claude.json"), |at| at.state_for(&claude));
+    warnings.extend(mcp::warnings(&state, &user_clones));
     warnings.extend(repos.warnings);
     if params.dry_run {
         for history in &mut plan.histories {
@@ -323,6 +343,8 @@ pub async fn import(
             }
         }
     } else {
+        // Before any worktree: the workspaces made below run them.
+        setup::write(d, &setups)?;
         let mut report = copy::Report::new(&mut plans, &mut warnings);
         let found = branches::Found {
             sources: &sources,
@@ -343,8 +365,58 @@ pub async fn import(
         workspaces: plan.workspaces,
         histories: plan.histories,
         releases,
+        setups,
         warnings,
     })
+}
+
+/// The trees the run checks out in each repo it makes a workspace in: first its base, in the clone
+/// the workspaces come from (a branch's, or a history's whose exploration is not ready); then each
+/// branch's, in the user's clone holding it.
+async fn workspace_trees(
+    d: &Daemon,
+    sources: &HashMap<branches::RepoBranch, branches::Source>,
+    histories: &[ClaudeCodeHistoryPlan],
+    repos: &Repos<'_>,
+) -> Result<BTreeMap<String, Vec<setup::Tree>>> {
+    let mut clones = BTreeMap::new();
+    let mut branches: BTreeMap<String, Vec<setup::Tree>> = BTreeMap::new();
+    for (key, source) in sources {
+        if let Some(clone) = source.chauffeur.as_ref().or(source.clone.as_ref()) {
+            clones
+                .entry(key.repo.clone())
+                .or_insert_with(|| clone.clone());
+        }
+        if let Some(clone) = &source.clone {
+            branches
+                .entry(key.repo.clone())
+                .or_default()
+                .push(setup::Tree {
+                    clone: clone.clone(),
+                    reference: format!("refs/heads/{}", key.branch),
+                });
+        }
+    }
+    for history in histories {
+        if history::exploration(d, &history.repo)?.is_some() {
+            continue;
+        }
+        let clone = d
+            .repos
+            .existing_clone(&history.repo)
+            .or_else(|| repos.clones.get(&history.repo)?.first().cloned());
+        if let Some(clone) = clone {
+            clones.entry(history.repo.clone()).or_insert(clone);
+        }
+    }
+    let mut trees = BTreeMap::new();
+    for (repo, clone) in clones {
+        let (_, reference) = repos.base(&clone, Some(&repo)).await;
+        let mut checked = vec![setup::Tree { clone, reference }];
+        checked.extend(branches.remove(&repo).unwrap_or_default());
+        trees.insert(repo, checked);
+    }
+    Ok(trees)
 }
 
 /// A checkout of a branch to release, with the clone it belongs to.
@@ -846,7 +918,7 @@ impl<'a> Repos<'a> {
     }
 
     async fn read_refs(&self, clone: &Path) -> Refs {
-        let (base, target) = self.base(clone).await;
+        let (base, target) = self.base(clone, None).await;
         let heads = [
             "for-each-ref",
             "--format=%(refname:lstrip=2) %(objectname)",
@@ -899,8 +971,9 @@ impl<'a> Repos<'a> {
 
     /// The clone's default branch and the ref holding it: as the user set it for the repo, else
     /// as the base remote (a fork's parent, else `origin`) names it when it still has that branch,
-    /// else `main` or `master`, whichever it has; the remote's copy when there is one.
-    async fn base(&self, clone: &Path) -> (String, String) {
+    /// else `main` or `master`, whichever it has; the remote's copy when there is one. `repo`
+    /// names the clone's repo when the sessions did not meet it (Chauffeur's own).
+    async fn base(&self, clone: &Path, repo: Option<&str>) -> (String, String) {
         let remote = self.git.base_remote(clone).await;
         let has = |reference: String| async move {
             self.git
@@ -908,13 +981,15 @@ impl<'a> Repos<'a> {
                 .await
                 .then_some(reference)
         };
-        let set = self.names.get(clone).and_then(|name| {
-            let settings = self.d.settings.get();
-            settings
-                .repos
-                .get(crate::repos::repo_folder(name))
-                .and_then(|r| r.default_branch.clone())
-        });
+        let set = repo
+            .or(self.names.get(clone).map(String::as_str))
+            .and_then(|name| {
+                let settings = self.d.settings.get();
+                settings
+                    .repos
+                    .get(crate::repos::repo_folder(name))
+                    .and_then(|r| r.default_branch.clone())
+            });
         let named = self
             .git
             .run(

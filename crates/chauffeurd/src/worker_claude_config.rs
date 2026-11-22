@@ -69,6 +69,24 @@ impl Locations {
         &self.config
     }
 
+    /// The state file of Claude Code run with `claude` as its folder: an older `.config.json`
+    /// inside it when it holds one, as Claude Code reads it first; else this machine's for its
+    /// own folder, `~/.claude.json` for `~/.claude`, and inside any other (as `CLAUDE_CONFIG_DIR`
+    /// puts it).
+    pub(crate) fn state_for(&self, claude: &Path) -> PathBuf {
+        let same = |a: &Path, b: &Path| a == b || crate::conductor::same_folder(a, b);
+        let older = claude.join(".config.json");
+        if fs::metadata(&older).is_ok_and(|m| m.is_file() && m.len() > 0) {
+            older
+        } else if same(claude, &self.config) {
+            self.state.clone()
+        } else if same(claude, &self.home.join(".claude")) {
+            self.home.join(".claude.json")
+        } else {
+            claude.join(".claude.json")
+        }
+    }
+
     pub(crate) fn of(vars: &BTreeMap<String, String>) -> Option<Locations> {
         let set = |name: &str| vars.get(name).filter(|v| !v.is_empty()).map(PathBuf::from);
         let home = set("HOME").or_else(|| std::env::var_os("HOME").map(PathBuf::from))?;
@@ -859,5 +877,37 @@ mod tests {
         let set = Locations::of(&vars(&[("HOME", "/h"), ("CLAUDE_CONFIG_DIR", "/c")])).unwrap();
         assert_eq!(set.config, Path::new("/c"));
         assert_eq!(set.state, Path::new("/c/.claude.json"));
+        // A folder read: this machine's own state for its folder; the default folder's beside
+        // it, any other's inside it.
+        assert_eq!(set.state_for(Path::new("/c")), Path::new("/c/.claude.json"));
+        assert_eq!(
+            set.state_for(Path::new("/h/.claude")),
+            Path::new("/h/.claude.json")
+        );
+        assert_eq!(
+            plain.state_for(Path::new("/h/.claude")),
+            Path::new("/h/.claude.json")
+        );
+        assert_eq!(
+            plain.state_for(Path::new("/x")),
+            Path::new("/x/.claude.json")
+        );
+        // `CLAUDE_CONFIG_DIR` naming `~/.claude`: its own file, inside it.
+        let home_set = Locations::of(&vars(&[
+            ("HOME", "/h"),
+            ("CLAUDE_CONFIG_DIR", "/h/.claude"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            home_set.state_for(Path::new("/h/.claude")),
+            Path::new("/h/.claude/.claude.json")
+        );
+        // An older `.config.json` holding something comes first; an empty one does not.
+        let dir = tempfile::tempdir().unwrap();
+        let older = dir.path().join(".config.json");
+        std::fs::write(&older, "").unwrap();
+        assert_eq!(plain.state_for(dir.path()), dir.path().join(".claude.json"));
+        std::fs::write(&older, "{}").unwrap();
+        assert_eq!(plain.state_for(dir.path()), older);
     }
 }
