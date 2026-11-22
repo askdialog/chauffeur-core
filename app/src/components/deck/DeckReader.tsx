@@ -5,7 +5,7 @@
 // files, keeps a version and tells the agent at its next message.
 
 import type { ChatInfo, DeckExportFormat, DeckResult, DeckSlide, DeliverableVersion, Mention, PinElement } from "@chauffeur/protocol";
-import { Copy, Download, Eye, EyeOff, History, Maximize2, MessageSquare, Minimize2, MonitorPlay, Palette, Play, RefreshCw, Trash2, Type, X } from "lucide-react";
+import { Copy, Download, Ellipsis, Eye, EyeOff, History, Maximize2, MessageSquare, Minimize2, MonitorPlay, Palette, Play, RefreshCw, Trash2, Type, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { threadsOf } from "@/lib/comments";
 import { fitScale, moved, parseReaderMessage, slidePath, step } from "@/lib/deck";
@@ -13,6 +13,7 @@ import { deliverableDownloadUrl, type Deliverable } from "@/lib/deliverables";
 import { openExternal } from "@/lib/native";
 import { errorMessage } from "@/lib/rpc";
 import { client, sendNow, toast, useApp } from "@/state/app";
+import { ContextMenu } from "../ContextMenu";
 import { CommentComposer, ThreadView } from "../design/CommentsPanel";
 import { type ScreenCommenting, ScreenComments } from "../design/ScreenComments";
 import { usePins } from "../design/usePins";
@@ -38,9 +39,9 @@ function useSize<T extends HTMLElement>(): [(element: T | null) => void, { width
 }
 
 /** A slide at its own size, scaled to `scale`; its frame keeps the slide's opaque origin. */
-function SlideFrame({ slide, width, height, scale, title, frameRef, onLoad, interactive }: {
+function SlideFrame({ slide, width, height, scale, title, frameRef, onLoad, interactive, thumbnail }: {
   slide: DeckSlide; width: number; height: number; scale: number; title: string;
-  frameRef?: (frame: HTMLIFrameElement | null) => void; onLoad?: () => void; interactive: boolean;
+  frameRef?: (frame: HTMLIFrameElement | null) => void; onLoad?: () => void; interactive: boolean; thumbnail?: boolean;
 }) {
   if (!slide.url) return <div className="flex items-center justify-center bg-raised text-[11px] text-muted" style={{ width: width * scale, height: height * scale }}>{slide.file} is missing</div>;
   return (
@@ -56,7 +57,7 @@ function SlideFrame({ slide, width, height, scale, title, frameRef, onLoad, inte
         className={cx("absolute left-0 top-0 origin-top-left border-0", !interactive && "pointer-events-none")}
         style={{ width, height, transform: `scale(${scale})` }}
         tabIndex={interactive ? 0 : -1}
-        loading="lazy"
+        loading={thumbnail ? "lazy" : "eager"}
       />
     </div>
   );
@@ -193,9 +194,11 @@ export function DeckReader({ workspaceId, chat, document, revision, expanded, on
   };
 
   const [box, size] = useSize<HTMLDivElement>();
+  const [thumbnailHeader, thumbnailSize] = useSize<HTMLDivElement>();
   const width = deck?.width ?? 1920;
   const height = deck?.height ?? 1080;
   const scale = fitScale(size.width - 32, size.height - 32, width, height);
+  const thumbnailScale = thumbnailSize.width / width;
   const commenting: ScreenCommenting = {
     commentMode: mode === "comment" && !readOnly,
     onToggleCommentMode: () => setMode((m) => (m === "comment" ? "view" : "comment")),
@@ -249,6 +252,9 @@ export function DeckReader({ workspaceId, chat, document, revision, expanded, on
   }, [slides, at, presenting, go]);
 
   const [dragging, setDragging] = useState<number | null>(null);
+  const [slideMenu, setSlideMenu] = useState<{ file: string; anchor: HTMLButtonElement } | null>(null);
+  const menuIndex = slideMenu ? slides.findIndex((slide) => slide.file === slideMenu.file) : -1;
+  const menuSlide = slides[menuIndex];
   const versionOptions = [
     { value: "current", label: "Current version" },
     ...versions.map((v) => ({ value: String(v.n), label: `Version ${v.n}`, description: `${v.by === "agent" ? "By the agent" : v.by === "hand" ? "By hand" : "Restored"} · ${new Date(v.at).toLocaleString()}` })),
@@ -326,35 +332,43 @@ export function DeckReader({ workspaceId, chat, document, revision, expanded, on
                     void change("reorder the slides", { op: "reorder", files });
                   }}
                   onDragEnd={() => setDragging(null)}
-                  className={cx("group relative cursor-pointer rounded-md p-1", i === at ? "bg-hover ring-1 ring-accent" : "hover:bg-hover", slide.skip && "opacity-50")}
+                  className={cx("cursor-pointer rounded-md p-1", i === at ? "bg-hover ring-1 ring-accent" : "hover:bg-hover", slide.skip && "opacity-50")}
                   onClick={() => setAt(i)}
                   data-testid="deck-thumbnail"
                 >
-                  <div className="mb-1 flex items-center gap-1 text-[10.5px] text-muted">
+                  <div ref={i === 0 ? thumbnailHeader : undefined} className="mb-1 flex min-h-5 items-center gap-1 text-[10.5px] text-muted">
                     <span className="font-semibold">{i + 1}</span>
                     <span className="min-w-0 flex-1 truncate">{slide.title}</span>
                     {slide.skip && <EyeOff size={10} />}
+                    {!readOnly && (
+                      <IconButton className="h-5 w-5 shrink-0" title={`Actions for slide ${i + 1}`} aria-haspopup="menu"
+                        aria-expanded={slideMenu?.file === slide.file}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSlideMenu(slideMenu?.file === slide.file ? null : { file: slide.file, anchor: event.currentTarget });
+                        }}><Ellipsis size={14} /></IconButton>
+                    )}
                   </div>
-                  <SlideFrame slide={slide} width={width} height={height} scale={128 / width} title={`Slide ${i + 1}`} interactive={false} />
-                  {!readOnly && (
-                    <div className="absolute right-1 top-5 hidden gap-0.5 rounded bg-bg/90 p-0.5 shadow group-hover:flex" onClick={(event) => event.stopPropagation()}>
-                      <IconButton className="h-5 w-5" title="Duplicate" onClick={() => void change("duplicate the slide", { op: "duplicate", file: slide.file })}><Copy size={11} /></IconButton>
-                      <IconButton className="h-5 w-5" title={slide.skip ? "Show in Present and downloads" : "Skip in Present and downloads"} onClick={() => void change("skip the slide", { op: "skip", file: slide.file, skip: !slide.skip })}>{slide.skip ? <Eye size={11} /> : <EyeOff size={11} />}</IconButton>
-                      <IconButton className="h-5 w-5" title="Delete" onClick={() => {
-                        if (!window.confirm(`Delete slide ${i + 1}? It stays in the deck's versions.`)) return;
-                        setAt(Math.max(0, Math.min(at, slides.length - 2)));
-                        void change("delete the slide", { op: "delete", file: slide.file });
-                      }}><Trash2 size={11} /></IconButton>
-                    </div>
-                  )}
+                  {thumbnailScale > 0 && <SlideFrame key={reload} slide={slide} width={width} height={height} scale={thumbnailScale} title={`Slide ${i + 1}`} interactive={false} thumbnail />}
                 </li>
               ))}
             </ol>
+            {!readOnly && slideMenu && menuSlide && (
+              <ContextMenu x={0} y={0} anchor={slideMenu.anchor} label={`Actions for slide ${menuIndex + 1}`} onClose={() => setSlideMenu(null)} items={[
+                { label: "Duplicate", icon: <Copy size={14} />, onSelect: () => void change("duplicate the slide", { op: "duplicate", file: menuSlide.file }) },
+                { label: menuSlide.skip ? "Include when presenting" : "Skip when presenting", hint: "Also applies to downloads", icon: menuSlide.skip ? <Eye size={14} /> : <EyeOff size={14} />, onSelect: () => void change("skip the slide", { op: "skip", file: menuSlide.file, skip: !menuSlide.skip }) },
+                { label: "Delete", icon: <Trash2 size={14} />, danger: true, onSelect: () => {
+                  if (!window.confirm(`Delete slide ${menuIndex + 1}? It stays in the deck's versions.`)) return;
+                  setAt(Math.max(0, Math.min(at, slides.length - 2)));
+                  void change("delete the slide", { op: "delete", file: menuSlide.file });
+                } },
+              ]} />
+            )}
             <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               <div ref={box} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-raised" data-testid="deck-stage">
                 {current && scale > 0 && (
                   <div className="relative shadow-lg">
-                    <SlideFrame slide={current} width={width} height={height} scale={scale} title={`Slide ${at + 1}`} interactive={mode !== "comment"}
+                    <SlideFrame key={reload} slide={current} width={width} height={height} scale={scale} title={`Slide ${at + 1}`} interactive={mode !== "comment"}
                       frameRef={(frame) => { main.current = frame; if (path) onFrame(path, frame, false); }}
                       onLoad={() => { postMode(); if (path) onFrame(path, main.current, true); }} />
                     {path && !readOnly && <ScreenComments file={path} width={width * scale} height={height * scale} frame={() => main.current} commenting={commenting} />}
