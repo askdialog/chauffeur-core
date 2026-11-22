@@ -254,12 +254,15 @@ pub async fn import(
         )
         .collect();
     let mut changes = Vec::new();
+    // The user's clone each repo's changes are read from: the first holding some.
+    let mut changed: HashMap<String, PathBuf> = HashMap::new();
     let mut bases = HashMap::new();
     for repo in &touched {
         for clone in repos.clones.get(repo).cloned().unwrap_or_default() {
             let base = repos.refs(&clone).await.base.clone();
             if repos.default_has_changes(&clone, &base).await && !changes.contains(repo) {
                 changes.push(repo.clone());
+                changed.insert(repo.clone(), clone.clone());
             }
             bases.entry(repo.clone()).or_insert(base);
         }
@@ -344,21 +347,24 @@ pub async fn import(
             );
         }
     }
-    // A parent's repo, on a new branch: the clone chosen for it, else the first of the user's.
-    let mut parents: HashMap<String, branches::ParentClone> = HashMap::new();
-    for workspace in plan
-        .workspaces
-        .iter()
-        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Parent)
-    {
+    // The repo of a workspace on a new branch (a parent's, a changes one's): the clone chosen for
+    // it, else the user's its session ran in, or holding the changes, else the first met.
+    let mut parents: HashMap<String, branches::RepoClone> = HashMap::new();
+    for workspace in plan.workspaces.iter().filter(|w| {
+        matches!(
+            w.kind,
+            ClaudeCodeWorkspaceKind::Parent | ClaudeCodeWorkspaceKind::Changes
+        )
+    }) {
         let Some(repo) = workspace.repos.first() else {
             continue;
         };
         let ran_in = workspace.sessions.first().and_then(|id| homes.get(id));
         let first = repos.clones.get(repo).and_then(|c| c.first());
-        let (clone, adopt) = chosen_clone(d, &mut chosen, repo, ran_in.or(first));
+        let user = ran_in.or(changed.get(repo)).or(first);
+        let (clone, adopt) = chosen_clone(d, &mut chosen, repo, user);
         if let Some(clone) = clone {
-            parents.insert(repo.clone(), branches::ParentClone { clone, adopt });
+            parents.insert(repo.clone(), branches::RepoClone { clone, adopt });
         }
     }
     let trees = workspace_trees(d, &sources, &parents, &plan.histories, &repos).await?;
@@ -386,6 +392,10 @@ pub async fn import(
             if let Some(branch) = workspace.branch.clone() {
                 workspace.workspace =
                     branches::existing(d, workspace, &branch)?.map(|row| row.slug);
+            } else if workspace.kind == ClaudeCodeWorkspaceKind::Changes
+                && let Some(repo) = workspace.repos.first()
+            {
+                workspace.workspace = branches::changes_workspace(d, repo)?.map(|row| row.slug);
             }
         }
     } else {
@@ -395,6 +405,7 @@ pub async fn import(
         let found = branches::Found {
             sources: &sources,
             parents: &parents,
+            changed: &changed,
             sessions: &found,
             running: &running_folders,
         };
@@ -423,7 +434,7 @@ pub async fn import(
 async fn workspace_trees(
     d: &Daemon,
     sources: &HashMap<branches::RepoBranch, branches::Source>,
-    parents: &HashMap<String, branches::ParentClone>,
+    parents: &HashMap<String, branches::RepoClone>,
     histories: &[ClaudeCodeHistoryPlan],
     repos: &Repos<'_>,
 ) -> Result<BTreeMap<String, Vec<setup::Tree>>> {

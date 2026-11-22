@@ -2391,6 +2391,38 @@ async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() 
         .unwrap();
     assert_eq!(held_plan.outcome, ClaudeCodeOutcome::Imported, "{later:?}");
     assert_eq!(held_plan.parent.as_deref(), Some("orchestrate-the-release"));
+    // The default-branch changes: web's in the parent, docs' in a workspace of their own, each
+    // clone keeping its copy; a later run carries them no more.
+    let read = |path: PathBuf| std::fs::read_to_string(path).unwrap();
+    assert_eq!(
+        read(Path::new(&parent.path).join("web/README.md")),
+        "web, uncommitted on main\n"
+    );
+    let docs = d.workspaces.get("docs-changes").unwrap();
+    assert_eq!(
+        read(Path::new(&docs.path).join("docs/README.md")),
+        "docs, uncommitted on main\n"
+    );
+    assert_ne!(d.store.worktrees_of(&docs.id).unwrap()[0].branch, "main");
+    for clone in ["web", "docs"] {
+        assert_eq!(
+            read(f.root.join("clones").join(clone).join("README.md")),
+            format!("{clone}, uncommitted on main\n")
+        );
+    }
+    let carried: Vec<_> = later
+        .workspaces
+        .iter()
+        .filter(|w| !w.changes_from.is_empty())
+        .map(|w| (w.outcome, w.workspace.clone()))
+        .collect();
+    assert!(
+        carried
+            .iter()
+            .all(|(outcome, _)| *outcome == ClaudeCodeOutcome::AlreadyImported),
+        "{carried:?}"
+    );
+    assert!(d.workspaces.get("docs-changes-2").is_err());
     let parent_row = d.workspaces.row(&parent.id).unwrap();
     assert_eq!(parent_row.parent_id, None);
     let mut children: Vec<(String, String)> = d
