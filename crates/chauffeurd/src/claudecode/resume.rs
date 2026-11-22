@@ -14,8 +14,8 @@ use crate::Daemon;
 use crate::Result;
 use crate::conductor::same_folder;
 use crate::repos::repo_folder;
-use crate::store::WorktreeRow;
-use chauffeur_protocol::model::{ChatInfo, WorktreeOrigin};
+use crate::store::{WorkspaceRow, WorktreeRow};
+use chauffeur_protocol::model::{ChatInfo, WorkspaceState, WorktreeOrigin};
 
 /// `<prefix><chat id>` → where the Claude Code session a chat was imported from ran ([`Origin`]).
 const ORIGIN: &str = "claudecode_origin:";
@@ -34,6 +34,9 @@ pub(crate) struct Checkout {
     /// Chauffeur's name of its repo (`name` or `owner/name`).
     pub(crate) repo: String,
     pub(crate) folder: PathBuf,
+    /// The branch the session worked on there; none when detached.
+    #[serde(default)]
+    pub(crate) branch: Option<String>,
 }
 
 /// The `kv` record (key, value) of where the session imported as `chat` ran.
@@ -65,19 +68,50 @@ fn live(worktree: &WorktreeRow) -> bool {
     !worktree.removed && worktree.origin == WorktreeOrigin::Workspace
 }
 
-/// The workspace's worktree of `checkout`'s repo: its folder's name, made from a clone of that
-/// repo (another owner's repo of the same name is not).
+/// The worktree standing for `checkout`, of its repo (its folder's name, made from a clone of
+/// that repo: another owner's repo of the same name is not): the one on the branch the session
+/// worked on there, among the workspace's (`own`) and its children's; else the workspace's own.
 fn worktree_of<'a>(
     d: &Daemon,
-    worktrees: &'a [WorktreeRow],
+    own: &'a [WorktreeRow],
+    children: &'a [WorktreeRow],
     checkout: &Checkout,
 ) -> Option<&'a WorktreeRow> {
-    worktrees.iter().find(|w| {
+    let of_repo = |w: &&WorktreeRow| {
         live(w)
             && w.repo.eq_ignore_ascii_case(repo_folder(&checkout.repo))
             && d.repos
                 .clone_matches(Path::new(&w.clone_path), &checkout.repo)
-    })
+    };
+    own.iter()
+        .chain(children)
+        .filter(of_repo)
+        .find(|w| checkout.branch.as_deref() == Some(w.branch.as_str()))
+        .or_else(|| own.iter().find(of_repo))
+}
+
+/// The children of `workspace` still there: an orchestration's branches, after an import.
+fn children(d: &Daemon, workspace: &str) -> Result<Vec<WorkspaceRow>> {
+    Ok(d.store
+        .list_workspaces()?
+        .into_iter()
+        .filter(|w| w.parent_id.as_deref() == Some(workspace))
+        .filter(|w| {
+            !matches!(
+                w.state,
+                WorkspaceState::Archiving | WorkspaceState::Archived
+            )
+        })
+        .collect())
+}
+
+/// The worktrees of `workspace`'s children.
+fn children_worktrees(d: &Daemon, workspace: &str) -> Result<Vec<WorktreeRow>> {
+    let mut worktrees = Vec::new();
+    for child in children(d, workspace)? {
+        worktrees.extend(d.store.worktrees_of(&child.id)?);
+    }
+    Ok(worktrees)
 }
 
 /// What the agent of an imported chat is told before what it reads next, once: the folder its
@@ -113,6 +147,23 @@ pub(crate) fn note(d: &Daemon, chat: &ChatInfo) -> Result<Option<String>> {
     } else {
         format!(" {}.", lives.join("; "))
     };
+    // An orchestration's: its branches are its children now.
+    let mut described = Vec::new();
+    for child in children(d, &workspace.id)? {
+        let on = d.store.worktrees_of(&child.id)?.into_iter().find(live);
+        described.push(match on {
+            Some(worktree) => format!("{} (on {}, in {})", child.slug, worktree.branch, child.path),
+            None => format!("{} (in {})", child.slug, child.path),
+        });
+    }
+    let children_line = if described.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " The branches it worked on are now child workspaces of this one: {}. Follow each with `chauffeur status <child>`, `chauffeur wait <child>` and `chauffeur send <child> -` (the message on standard input).",
+            described.join(", ")
+        )
+    };
     let (read, change) = if users.len() == 1 {
         ("is", "it")
     } else {
@@ -125,7 +176,7 @@ pub(crate) fn note(d: &Daemon, chat: &ChatInfo) -> Result<Option<String>> {
         "; make every change in the workspace"
     };
     Ok(Some(format!(
-        "(Chauffeur: this conversation was imported from Claude Code, where it ran in {}. It goes on in a Chauffeur workspace, your working folder now: {}.{lives} {} {read} the user's own: read {change} if you need to, but never change {change}{instead}.)\n\n",
+        "(Chauffeur: this conversation was imported from Claude Code, where it ran in {}. It goes on in a Chauffeur workspace, your working folder now: {}.{lives}{children_line} {} {read} the user's own: read {change} if you need to, but never change {change}{instead}.)\n\n",
         origin.folder.display(),
         workspace.path,
         users.join(", "),
@@ -147,10 +198,11 @@ pub(crate) fn guarded(d: &Daemon, chat: &ChatInfo, clones: &[SourceClone]) -> Ve
         let Some(origin) = origin(d, &chat.id)? else {
             return Ok(Vec::new());
         };
-        let worktrees = d.store.worktrees_of(&chat.workspace_id)?;
+        let own = d.store.worktrees_of(&chat.workspace_id)?;
+        let children = children_worktrees(d, &chat.workspace_id)?;
         let mut guarded: Vec<SourceClone> = Vec::new();
         for checkout in &origin.checkouts {
-            let Some(worktree) = worktree_of(d, &worktrees, checkout) else {
+            let Some(worktree) = worktree_of(d, &own, &children, checkout) else {
                 continue;
             };
             let known =

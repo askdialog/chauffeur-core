@@ -22,6 +22,7 @@ use std::sync::Arc;
 use chauffeur_protocol::claudecode::{
     ClaudeCodeBranch, ClaudeCodeHistoryPlan, ClaudeCodeImportParams, ClaudeCodeImportResult,
     ClaudeCodeOutcome, ClaudeCodeRelease, ClaudeCodeSessionPlan, ClaudeCodeWorkspaceKind,
+    ClaudeCodeWorkspacePlan,
 };
 
 use crate::conductor::{reference, remote_of};
@@ -122,6 +123,9 @@ pub async fn import(
         ));
     }
     let mut plans = Vec::new();
+    let mut earlier_parents = Vec::new();
+    // Each placed session's clone, the one it ran in: its parent's, when it is one.
+    let mut homes: HashMap<String, PathBuf> = HashMap::new();
     let mut placed = Vec::new();
     let mut found = HashMap::new();
     let mut running_folders = Vec::new();
@@ -169,10 +173,13 @@ pub async fn import(
         if running.contains(&session.id) {
             running_folders.push(real(&folder));
         }
+        // An orchestration an earlier import made the parent of: its children still missing come.
+        let parent = branches::recorded_parent(d, &session.id)?;
         if let Some(chat) = copy::imported(d, &session.id)? {
             plan.outcome = ClaudeCodeOutcome::AlreadyImported;
             plan.lands_in = copy::workspace_of(d, &chat)?;
             plans.push(plan);
+            earlier_parents.extend(parent.map(|(row, record)| (None, row, record)));
             continue;
         }
         if running.contains(&session.id) {
@@ -204,11 +211,21 @@ pub async fn import(
         let stood = resume::Checkout {
             repo: repo.clone(),
             folder: home.top.clone(),
+            branch: home.branch.clone(),
         };
         for checkout in std::iter::once(stood).chain(checkouts) {
             if !session.checkouts.contains(&checkout) {
                 session.checkouts.push(checkout);
             }
+        }
+        homes.insert(session.id.clone(), home.clone.clone());
+        // Its parent made, its chat not: it goes there, placed no more.
+        if let Some((row, record)) = parent {
+            plan.lands_in = Some(row.slug.clone());
+            earlier_parents.push((Some(session.id.clone()), row, record));
+            plans.push(plan);
+            found.insert(session.id.clone(), session);
+            continue;
         }
         placed.push(place::Session {
             id: session.id.clone(),
@@ -247,22 +264,35 @@ pub async fn import(
             bases.entry(repo.clone()).or_insert(base);
         }
     }
-    let mut plan = place::place(&placed, &changes, &bases);
+    // A branch an earlier import made a workspace of stays there: no new parent takes it.
+    let mut made = BTreeSet::new();
+    for session in &placed {
+        for (repo, branch) in &session.live {
+            if branches::existing_in(d, std::slice::from_ref(repo), branch)?.is_some() {
+                made.insert(branch.clone());
+            }
+        }
+    }
+    let mut plan = place::place(&placed, &changes, &bases, &made);
     for session in &mut plans {
         if let Some(lands_in) = plan.lands_in.get(&session.id) {
             session.lands_in = Some(lands_in.clone());
         }
     }
-    // The branches this version makes workspaces of: each one's own, in the repos an earlier
-    // import's workspace on it lacks (all, without one). Each repo's clone is chosen now, once for the whole run: Chauffeur's, else the
-    // user's holding the branch, which becomes Chauffeur's (`branches::adopt`).
+    for (session, row, record) in earlier_parents {
+        with_earlier_parent(d, &mut plan, session, &row, &record)?;
+    }
+    // The branches this version makes workspaces of (a plain one's, a parent's child), in the
+    // repos an earlier import's workspace on it lacks (all, without one). Each repo's clone is
+    // chosen now, once for the whole run: Chauffeur's, else the user's holding the branch, which
+    // becomes Chauffeur's (`branches::adopt`).
     let mut releases = Vec::new();
     let mut sources = HashMap::new();
     let mut chosen: HashMap<String, PathBuf> = HashMap::new();
     for workspace in plan
         .workspaces
         .iter()
-        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Branch && w.parent.is_none())
+        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Branch)
     {
         let Some(branch) = &workspace.branch else {
             continue;
@@ -271,19 +301,7 @@ pub async fn import(
         let existing = branches::existing(d, workspace, branch)?;
         for repo in &branches::missing_repos(d, workspace, branch, existing.as_ref())? {
             let clone = repos.source(repo, branch).await;
-            // Chauffeur's own clone, else the user's chosen for an earlier branch of the repo,
-            // else this one: one clone per repo for the whole run.
-            let own = d.repos.existing_clone(repo);
-            let adopt = own.is_none();
-            let chauffeur = own.or_else(|| {
-                let clone = clone.as_ref()?;
-                Some(
-                    chosen
-                        .entry(repo.clone())
-                        .or_insert_with(|| clone.clone())
-                        .clone(),
-                )
-            });
+            let (chauffeur, adopt) = chosen_clone(d, &mut chosen, repo, clone.as_ref());
             // Its checkouts in the user's clone holding it: their changes are copied, and they are
             // released only when that clone is Chauffeur's; in another, the branch is fetched
             // there and they keep it.
@@ -326,7 +344,24 @@ pub async fn import(
             );
         }
     }
-    let trees = workspace_trees(d, &sources, &plan.histories, &repos).await?;
+    // A parent's repo, on a new branch: the clone chosen for it, else the first of the user's.
+    let mut parents: HashMap<String, branches::ParentClone> = HashMap::new();
+    for workspace in plan
+        .workspaces
+        .iter()
+        .filter(|w| w.kind == ClaudeCodeWorkspaceKind::Parent)
+    {
+        let Some(repo) = workspace.repos.first() else {
+            continue;
+        };
+        let ran_in = workspace.sessions.first().and_then(|id| homes.get(id));
+        let first = repos.clones.get(repo).and_then(|c| c.first());
+        let (clone, adopt) = chosen_clone(d, &mut chosen, repo, ran_in.or(first));
+        if let Some(clone) = clone {
+            parents.insert(repo.clone(), branches::ParentClone { clone, adopt });
+        }
+    }
+    let trees = workspace_trees(d, &sources, &parents, &plan.histories, &repos).await?;
     let setups = setup::guess_all(d, &repos.git, &trees).await;
     // Every repo whose sessions the run imports, into a new workspace or an earlier one's.
     let user_clones: BTreeMap<String, Vec<PathBuf>> = touched
@@ -359,6 +394,7 @@ pub async fn import(
         let mut report = copy::Report::new(&mut plans, &mut warnings);
         let found = branches::Found {
             sources: &sources,
+            parents: &parents,
             sessions: &found,
             running: &running_folders,
         };
@@ -387,10 +423,14 @@ pub async fn import(
 async fn workspace_trees(
     d: &Daemon,
     sources: &HashMap<branches::RepoBranch, branches::Source>,
+    parents: &HashMap<String, branches::ParentClone>,
     histories: &[ClaudeCodeHistoryPlan],
     repos: &Repos<'_>,
 ) -> Result<BTreeMap<String, Vec<setup::Tree>>> {
     let mut clones = BTreeMap::new();
+    for (repo, parent) in parents {
+        clones.insert(repo.clone(), parent.clone.clone());
+    }
     let mut branches: BTreeMap<String, Vec<setup::Tree>> = BTreeMap::new();
     for (key, source) in sources {
         if let Some(clone) = source.chauffeur.as_ref().or(source.clone.as_ref()) {
@@ -428,6 +468,79 @@ async fn workspace_trees(
         trees.insert(repo, checked);
     }
     Ok(trees)
+}
+
+/// The parent an earlier import made of an orchestration (`row`), back in `plan` first: its
+/// session, when given (its chat could not be made then), and its children still missing (a
+/// branch planned already goes under it).
+fn with_earlier_parent(
+    d: &Daemon,
+    plan: &mut place::Plan,
+    session: Option<String>,
+    row: &crate::store::WorkspaceRow,
+    record: &branches::ParentRecord,
+) -> Result<()> {
+    let mut children = Vec::new();
+    for child in &record.children {
+        if let Some(planned) = plan
+            .workspaces
+            .iter_mut()
+            .find(|w| w.branch.as_deref() == Some(child.branch.as_str()))
+        {
+            planned.parent.get_or_insert_with(|| row.slug.clone());
+            continue;
+        }
+        if branches::existing_in(d, &child.repos, &child.branch)?.is_none() {
+            children.push(ClaudeCodeWorkspacePlan {
+                name: child.branch.clone(),
+                kind: ClaudeCodeWorkspaceKind::Branch,
+                branch: Some(child.branch.clone()),
+                repos: child.repos.clone(),
+                parent: Some(row.slug.clone()),
+                sessions: Vec::new(),
+                changes_from: Vec::new(),
+                outcome: ClaudeCodeOutcome::Import,
+                reason: None,
+                workspace: None,
+            });
+        }
+    }
+    let parent = ClaudeCodeWorkspacePlan {
+        name: row.slug.clone(),
+        kind: ClaudeCodeWorkspaceKind::Parent,
+        branch: None,
+        repos: vec![record.repo.clone()],
+        parent: None,
+        sessions: session.into_iter().collect(),
+        changes_from: Vec::new(),
+        outcome: ClaudeCodeOutcome::Import,
+        reason: None,
+        workspace: Some(row.slug.clone()),
+    };
+    plan.workspaces.insert(0, parent);
+    plan.workspaces.extend(children);
+    Ok(())
+}
+
+/// Chauffeur's clone of `repo` for the whole run: its own, else the user's chosen for it earlier
+/// in the run, else `user` (the user's holding what is imported); with whether it is the user's,
+/// to adopt.
+fn chosen_clone(
+    d: &Daemon,
+    chosen: &mut HashMap<String, PathBuf>,
+    repo: &str,
+    user: Option<&PathBuf>,
+) -> (Option<PathBuf>, bool) {
+    if let Some(own) = d.repos.existing_clone(repo) {
+        return (Some(own), false);
+    }
+    let clone = user.map(|user| {
+        chosen
+            .entry(repo.to_owned())
+            .or_insert_with(|| user.clone())
+            .clone()
+    });
+    (clone, true)
 }
 
 /// A checkout of a branch to release, with the clone it belongs to.
@@ -668,6 +781,7 @@ impl<'a> Repos<'a> {
                 checkouts.push(resume::Checkout {
                     repo: repo.clone(),
                     folder: stood.top.clone(),
+                    branch: write.branch.clone(),
                 });
             }
             let dir = path.parent().unwrap_or(&path).to_path_buf();
@@ -695,6 +809,7 @@ impl<'a> Repos<'a> {
                 checkouts.push(resume::Checkout {
                     repo: repo.clone(),
                     folder: checkout.top.clone(),
+                    branch: branch.clone(),
                 });
                 if let Some(branch) = branch {
                     found.push((repo, checkout.clone, branch));
@@ -713,6 +828,7 @@ impl<'a> Repos<'a> {
                 checkouts.push(resume::Checkout {
                     repo: repo.clone(),
                     folder: checkout.top.clone(),
+                    branch: Some(created.branch.clone()),
                 });
                 found.push((repo, checkout.clone, created.branch.clone()));
             }
