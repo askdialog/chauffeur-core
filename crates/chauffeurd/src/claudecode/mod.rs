@@ -11,6 +11,7 @@ mod copy;
 mod history;
 mod mcp;
 mod place;
+pub(crate) mod resume;
 mod sessions;
 mod setup;
 
@@ -137,7 +138,7 @@ pub async fn import(
         })
         .collect();
     let mut seen = BTreeSet::new();
-    for session in read {
+    for mut session in read {
         let Some(folder) = session.folder.clone() else {
             continue;
         };
@@ -198,7 +199,17 @@ pub async fn import(
             plans.push(plan);
             continue;
         };
-        plan.branches = repos.branches(&session).await;
+        let (branches, checkouts) = repos.branches(&session).await;
+        plan.branches = branches;
+        let stood = resume::Checkout {
+            repo: repo.clone(),
+            folder: home.top.clone(),
+        };
+        for checkout in std::iter::once(stood).chain(checkouts) {
+            if !session.checkouts.contains(&checkout) {
+                session.checkouts.push(checkout);
+            }
+        }
         placed.push(place::Session {
             id: session.id.clone(),
             title: session.title.clone(),
@@ -637,15 +648,28 @@ impl<'a> Repos<'a> {
     }
 
     /// The branches a session wrote on (its file tools' paths, each in the checkout holding it, on
-    /// the branch checked out there then) or created, by repo, each with whether it is live.
-    async fn branches(&mut self, session: &sessions::Session) -> Vec<ClaudeCodeBranch> {
+    /// the branch checked out there then) or created, by repo, each with whether it is live; and
+    /// the checkouts it wrote in.
+    async fn branches(
+        &mut self,
+        session: &sessions::Session,
+    ) -> (Vec<ClaudeCodeBranch>, Vec<resume::Checkout>) {
         let mut found: Vec<(String, PathBuf, String)> = Vec::new();
+        let mut checkouts = Vec::new();
         let mut gone = BTreeSet::new();
         for write in &session.writes {
             let (path, cwd) = (real(&write.path), real(&write.cwd));
             // The checkout the session stood in (from its nearest folder still there: a worktree
             // removed since resolves to its clone, the same repo), on the branch recorded then.
             let stood = self.checkout(&cwd).await;
+            if let Some(stood) = &stood
+                && let Some(repo) = &stood.repo
+            {
+                checkouts.push(resume::Checkout {
+                    repo: repo.clone(),
+                    folder: stood.top.clone(),
+                });
+            }
             let dir = path.parent().unwrap_or(&path).to_path_buf();
             let (checkout, branch) = if dir.is_dir() {
                 let Some(checkout) = self.checkout(&path).await else {
@@ -667,8 +691,14 @@ impl<'a> Repos<'a> {
                     }
                 }
             };
-            if let (Some(repo), Some(branch)) = (checkout.repo.clone(), branch) {
-                found.push((repo, checkout.clone, branch));
+            if let Some(repo) = checkout.repo.clone() {
+                checkouts.push(resume::Checkout {
+                    repo: repo.clone(),
+                    folder: checkout.top.clone(),
+                });
+                if let Some(branch) = branch {
+                    found.push((repo, checkout.clone, branch));
+                }
             }
         }
         for created in &session.created {
@@ -680,6 +710,10 @@ impl<'a> Repos<'a> {
             if let Some(checkout) = self.checkout(&dir).await
                 && let Some(repo) = checkout.repo.clone()
             {
+                checkouts.push(resume::Checkout {
+                    repo: repo.clone(),
+                    folder: checkout.top.clone(),
+                });
                 found.push((repo, checkout.clone, created.branch.clone()));
             }
         }
@@ -705,7 +739,7 @@ impl<'a> Repos<'a> {
             let live = self.is_live(&clone, &branch).await;
             branches.push(ClaudeCodeBranch { repo, branch, live });
         }
-        branches
+        (branches, checkouts)
     }
 
     /// A file whose folder is missing now: in a worktree of a clone met so far, that worktree's

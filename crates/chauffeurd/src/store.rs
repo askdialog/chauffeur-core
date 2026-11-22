@@ -1870,6 +1870,7 @@ impl Store {
         chat: &ChatInfo,
         events: &[(String, ChatEvent)],
         record: &str,
+        origin: &(String, String),
     ) -> Result<Option<Vec<EventEnvelope>>> {
         self.with(|c| {
             let tx = c.unchecked_transaction()?;
@@ -1898,6 +1899,10 @@ impl Store {
             tx.execute(
                 "INSERT INTO kv (key, value) VALUES (?1, ?2)",
                 params![record, chat.id],
+            )?;
+            tx.execute(
+                "INSERT OR REPLACE INTO kv (key, value) VALUES (?1, ?2)",
+                params![origin.0, origin.1],
             )?;
             tx.commit()?;
             Ok(Some(inserted))
@@ -3041,6 +3046,11 @@ fn suggestion_state_str(state: SuggestionState) -> &'static str {
 mod tests {
     use super::*;
 
+    /// The record of where an imported chat's session ran, for tests that do not read it.
+    fn no_origin() -> (String, String) {
+        ("claudecode_origin:test".into(), "{}".into())
+    }
+
     fn suggestion(id: &str, chat: &str) -> Suggestion {
         Suggestion {
             id: id.into(),
@@ -3127,7 +3137,7 @@ mod tests {
             },
         )];
         let inserted = store
-            .insert_imported_chat(&chat, &said, "claudecode_import:s")
+            .insert_imported_chat(&chat, &said, "claudecode_import:s", &no_origin())
             .unwrap()
             .unwrap();
         assert_eq!(inserted.len(), 1);
@@ -3141,7 +3151,7 @@ mod tests {
         chat.id = "again".into();
         assert!(
             store
-                .insert_imported_chat(&chat, &said, "claudecode_import:s")
+                .insert_imported_chat(&chat, &said, "claudecode_import:s", &no_origin())
                 .unwrap()
                 .is_none()
         );
@@ -3151,7 +3161,7 @@ mod tests {
         chat.workspace_id = "gone".into();
         assert!(
             store
-                .insert_imported_chat(&chat, &said, "claudecode_import:t")
+                .insert_imported_chat(&chat, &said, "claudecode_import:t", &no_origin())
                 .unwrap()
                 .is_none()
         );

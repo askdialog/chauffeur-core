@@ -2119,3 +2119,193 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     assert!(again.setups.is_empty(), "{again:?}");
     assert_eq!(mcp(&again), named);
 }
+
+/// A session that ran in a worktree of `shop`'s, `wt/other`, wrote in another, `wt/fix`, from a
+/// third, `wt/third`, and in a clone of another owner's `shop`, imported into feat/fix's
+/// workspace: the first message sent to its chat tells its agent where shop lives now and which
+/// folders are the user's, once, a restart included; its guard keeps it off the worktrees it ran
+/// in, standing for the workspace's, not off the other repo's clone. A fork made before is told
+/// and kept off them too.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_imported_chat_is_told_where_its_repo_lives_and_kept_off_the_folders_it_ran_in() {
+    let _switch = SWITCH.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let shop = clone_repo(&root, "shop", &[]);
+    let fix = root.join("wt/fix");
+    git(
+        &shop,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/fix",
+            fix.to_str().unwrap(),
+        ],
+    );
+    commit(&fix, "a.txt", "a\n");
+    // The session ran in another worktree of the user's, on a branch of no work of its own.
+    let other = root.join("wt/other");
+    git(
+        &shop,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/other",
+            other.to_str().unwrap(),
+        ],
+    );
+    let third = root.join("wt/third");
+    git(
+        &shop,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/third",
+            third.to_str().unwrap(),
+        ],
+    );
+    // Another owner's shop, its clone on its default branch, nothing live there.
+    let theirs = clone_repo(&root.join("theirs"), "shop", &[]);
+    let theirs_url = "https://github.com/someone/shop.git";
+    git(&theirs, &["remote", "set-url", "origin", theirs_url]);
+    let claude = root.join("claude");
+    let projects = claude.join("projects").join("-code");
+    std::fs::create_dir_all(&projects).unwrap();
+    std::fs::write(
+        projects.join("s-fix.jsonl"),
+        [
+            line(&other, "feat/other", &ago(1), &edit(&fix.join("a.txt"))),
+            line(&third, "feat/third", &ago(1), &edit(&fix.join("a.txt"))),
+            line(
+                &other,
+                "feat/other",
+                &ago(1),
+                &edit(&theirs.join("README.md")),
+            ),
+        ]
+        .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("settings.toml"),
+        "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46990\nlinear_enabled = false\n",
+    )
+    .unwrap();
+    let paths = || Paths::new(home.clone(), root.join("workspaces"), root.join("repos"));
+    let open = || {
+        let daemon = Daemon::open(paths()).unwrap();
+        let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+        vars.insert(
+            "CLAUDE_CONFIG_DIR".into(),
+            claude.to_string_lossy().into_owned(),
+        );
+        daemon.shell_env.set_vars(vars);
+        daemon.chats.sidecar.use_binary(history_sidecar());
+        daemon
+    };
+    let f = Fixture {
+        _dir: dir,
+        root: root.clone(),
+        claude: claude.clone(),
+        daemon: open(),
+    };
+    // SAFETY: the tests reading the switch hold `SWITCH`.
+    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    let plan = import(&f, false).await;
+    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
+    let slug = plan.workspaces[0].workspace.clone().expect("imported");
+    let ws = PathBuf::from(f.daemon.workspaces.get(&slug).unwrap().path);
+    let chat = f
+        .daemon
+        .store
+        .kv_get("claudecode_import:s-fix")
+        .unwrap()
+        .expect("a chat");
+    let fork = f.daemon.chats.fork(&chat, None, None).await.unwrap().id;
+    let log = claude.join("sidecar.log");
+    let sent = || -> Vec<serde_json::Value> {
+        std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .filter(|r| r["method"] == "session.start" || r["method"] == "session.send")
+            .collect()
+    };
+
+    f.daemon.chats.send(&chat, "change a.txt").await.unwrap();
+    let first = sent();
+    assert_eq!(first.len(), 1, "{first:?}");
+    let start = &first[0]["params"];
+    let prompt = start["prompt"].as_str().unwrap();
+    // The folder it ran in, its folder now, where shop lives, the folders it ran in.
+    for path in [&other, &ws, &ws.join("shop"), &fix] {
+        assert!(
+            prompt.contains(&path.display().to_string()),
+            "{path:?}\n{prompt}"
+        );
+    }
+    assert!(prompt.ends_with("change a.txt"), "{prompt}");
+    // Its guard: the workspace's clone, then the worktree the session ran in and the one it
+    // wrote in, each for shop's.
+    let guarded: Vec<(String, String)> = start["source_clones"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["clone"].as_str().unwrap().to_owned(),
+                c["worktree"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    let shop_worktree = ws.join("shop").display().to_string();
+    assert_eq!(
+        guarded,
+        [
+            (shop.display().to_string(), shop_worktree.clone()),
+            (other.display().to_string(), shop_worktree.clone()),
+            (fix.display().to_string(), shop_worktree.clone()),
+            (third.display().to_string(), shop_worktree),
+        ]
+    );
+    // The fork: told, and kept off the same folders.
+    f.daemon.chats.send(&fork, "change a.txt").await.unwrap();
+    let forked = sent().pop().unwrap();
+    let forked = &forked["params"];
+    assert!(
+        forked["prompt"]
+            .as_str()
+            .unwrap()
+            .contains(&fix.display().to_string())
+    );
+    assert_eq!(forked["source_clones"], start["source_clones"]);
+
+    // Told once: not again, nor after a restart.
+    f.daemon.chats.send(&chat, "and b.txt").await.unwrap();
+    let restarted = open();
+    restarted.chats.send(&chat, "and c.txt").await.unwrap();
+    let later: Vec<String> = sent()[2..]
+        .iter()
+        .map(|r| {
+            let p = &r["params"];
+            p["prompt"]
+                .as_str()
+                .or(p["text"].as_str())
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(later.len(), 2, "{later:?}");
+    for text in &later {
+        assert!(!text.contains(&fix.display().to_string()), "{text}");
+    }
+}

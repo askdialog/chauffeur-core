@@ -188,6 +188,10 @@ async fn open_copy(
         .into_iter()
         .map(|e| (e.at.unwrap_or_else(|| session.last_active.clone()), e.event))
         .collect();
+    let origin = super::resume::Origin {
+        folder: session.folder.clone().unwrap_or_default(),
+        checkouts: session.checkouts.clone(),
+    };
     let imported = d
         .chats
         .import_chat(
@@ -199,6 +203,7 @@ async fn open_copy(
                 events: &events,
                 record,
                 closed,
+                origin: &origin,
             },
         )
         .await?;
