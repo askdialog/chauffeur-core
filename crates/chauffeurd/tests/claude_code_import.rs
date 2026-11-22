@@ -1023,87 +1023,8 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
             .is_some_and(|r| r.contains("could not be copied")),
         "{unreadable:?}"
     );
-    // A session on a live branch goes to its workspace; an orchestration's to its parent, on a new
-    // branch, with a child per branch (no message of its own), the one released carrying its
-    // uncommitted change.
+    // A session on a live branch goes to its workspace.
     assert_eq!(outcome(&plan, "simple-web").0, ClaudeCodeOutcome::Imported);
-    let (done, parent) = outcome(&plan, "orchestrator");
-    assert_eq!(done, ClaudeCodeOutcome::Imported, "{plan:?}");
-    let parent = d.workspaces.get(parent.as_deref().unwrap()).unwrap();
-    assert_eq!(parent.slug, "orchestrate-the-release");
-    let parent_row = d.workspaces.row(&parent.id).unwrap();
-    assert_eq!(parent_row.parent_id, None);
-    let mut children: Vec<(String, String)> = d
-        .store
-        .list_workspaces()
-        .unwrap()
-        .into_iter()
-        .filter(|w| w.parent_id.as_deref() == Some(&parent.id))
-        .map(|w| {
-            let worktrees = d.store.worktrees_of(&w.id).unwrap();
-            (w.slug, worktrees[0].branch.clone())
-        })
-        .collect();
-    children.sort();
-    assert_eq!(
-        children,
-        [
-            ("feat-child".to_string(), "feat/child".to_string()),
-            ("feat-held".into(), "feat/held".into()),
-        ]
-    );
-    let parent_branch = &d.store.worktrees_of(&parent.id).unwrap()[0].branch;
-    assert!(
-        parent_branch.ends_with("orchestrate-the-release"),
-        "{parent_branch}"
-    );
-    let held = d.workspaces.get("feat-held").unwrap();
-    assert_eq!(
-        std::fs::read_to_string(Path::new(&held.path).join("web/README.md")).unwrap(),
-        "held, uncommitted\n"
-    );
-    for child in [&held, &d.workspaces.get("feat-child").unwrap()] {
-        let chats = d.store.chats_of(&child.id).unwrap();
-        assert!(
-            chats.iter().all(|c| c.agent_session_id.is_none()),
-            "{chats:?}"
-        );
-    }
-    // The parent's chat is told its branches are its children now, and kept off the worktree it
-    // wrote feat/held in, standing for that child's.
-    let chat = d
-        .store
-        .kv_get("claudecode_import:orchestrator")
-        .unwrap()
-        .unwrap();
-    d.chats.send(&chat, "go on").await.unwrap();
-    let start = std::fs::read_to_string(f.claude.join("sidecar.log"))
-        .unwrap()
-        .lines()
-        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
-        .rfind(|r| r["method"] == "session.start")
-        .unwrap();
-    let prompt = start["params"]["prompt"].as_str().unwrap();
-    for said in [
-        format!(
-            "feat-child (on feat/child, in {})",
-            d.workspaces.get("feat-child").unwrap().path
-        ),
-        format!("feat-held (on feat/held, in {})", held.path),
-        "`chauffeur status`".to_string(),
-    ] {
-        assert!(prompt.contains(&said), "{said}\n{prompt}");
-    }
-    let held_folder = f.root.join("wt/held").display().to_string();
-    let guarded = start["params"]["source_clones"].as_array().unwrap();
-    let entry = guarded
-        .iter()
-        .find(|c| c["clone"] == held_folder.as_str())
-        .unwrap_or_else(|| panic!("{guarded:?}"));
-    assert_eq!(
-        entry["worktree"],
-        Path::new(&held.path).join("web").display().to_string()
-    );
 
     let ws = d.workspaces.get("web-history").unwrap();
     assert!(ws.explore);
@@ -2387,4 +2308,121 @@ async fn an_imported_chat_is_told_where_its_repo_lives_and_kept_off_the_folders_
     for text in &later {
         assert!(!text.contains(&fix.display().to_string()), "{text}");
     }
+}
+
+/// The fixture's `orchestrator` (feat/child, feat/held) becomes a parent on web, on a new branch
+/// named from its title, holding its chat, with a child per branch made without a prompt, the
+/// released one carrying its uncommitted change; the parent's chat is told of its children, its
+/// guard mapping the worktree it wrote feat/held in to that child's. A parent that cannot be
+/// made takes its children with it, nothing released.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() {
+    let _switch = SWITCH.lock().await;
+    // SAFETY: the tests reading the switch hold `SWITCH`; no other thread reads it meanwhile.
+    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    // First, web's worktrees cannot be made (a hook of the clone's that fails).
+    let f = importing();
+    let d = &f.daemon;
+    let hook = f.root.join("clones/web/.git/hooks/post-checkout");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let failed = import(&f, false).await;
+    let child = failed
+        .workspaces
+        .iter()
+        .find(|w| w.branch.as_deref() == Some("feat/held"))
+        .unwrap();
+    assert_eq!(child.outcome, ClaudeCodeOutcome::Failed);
+    assert!(
+        child.reason.as_deref().is_some_and(
+            |r| r.contains("its parent workspace orchestrate-the-release could not be made")
+        ),
+        "{child:?}"
+    );
+    assert!(
+        is_branch(&f.root.join("wt/held"), "feat/held"),
+        "nothing released"
+    );
+    std::fs::remove_file(&hook).unwrap();
+
+    let plan = import(&f, false).await;
+    let (done, parent) = outcome(&plan, "orchestrator");
+    assert_eq!(done, ClaudeCodeOutcome::Imported, "{plan:?}");
+    let parent = d.workspaces.get(parent.as_deref().unwrap()).unwrap();
+    assert_eq!(parent.slug, "orchestrate-the-release");
+    let parent_row = d.workspaces.row(&parent.id).unwrap();
+    assert_eq!(parent_row.parent_id, None);
+    let mut children: Vec<(String, String)> = d
+        .store
+        .list_workspaces()
+        .unwrap()
+        .into_iter()
+        .filter(|w| w.parent_id.as_deref() == Some(&parent.id))
+        .map(|w| {
+            let worktrees = d.store.worktrees_of(&w.id).unwrap();
+            (w.slug, worktrees[0].branch.clone())
+        })
+        .collect();
+    children.sort();
+    assert_eq!(
+        children,
+        [
+            ("feat-child".to_string(), "feat/child".to_string()),
+            ("feat-held".into(), "feat/held".into()),
+        ]
+    );
+    let parent_branch = &d.store.worktrees_of(&parent.id).unwrap()[0].branch;
+    assert!(
+        parent_branch.ends_with("orchestrate-the-release"),
+        "{parent_branch}"
+    );
+    let held = d.workspaces.get("feat-held").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(Path::new(&held.path).join("web/README.md")).unwrap(),
+        "held, uncommitted\n"
+    );
+    for child in [&held, &d.workspaces.get("feat-child").unwrap()] {
+        let chats = d.store.chats_of(&child.id).unwrap();
+        assert!(
+            chats.iter().all(|c| c.agent_session_id.is_none()),
+            "{chats:?}"
+        );
+    }
+    // The parent's chat is told its branches are its children now, and kept off the worktree it
+    // wrote feat/held in, standing for that child's.
+    let chat = d
+        .store
+        .kv_get("claudecode_import:orchestrator")
+        .unwrap()
+        .unwrap();
+    d.chats.send(&chat, "go on").await.unwrap();
+    let start = std::fs::read_to_string(f.claude.join("sidecar.log"))
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .rfind(|r| r["method"] == "session.start")
+        .unwrap();
+    let prompt = start["params"]["prompt"].as_str().unwrap();
+    for said in [
+        format!(
+            "feat-child (on feat/child, in {})",
+            d.workspaces.get("feat-child").unwrap().path
+        ),
+        format!("feat-held (on feat/held, in {})", held.path),
+        "`chauffeur status <child>`".to_string(),
+    ] {
+        assert!(prompt.contains(&said), "{said}\n{prompt}");
+    }
+    let held_folder = f.root.join("wt/held").display().to_string();
+    let guarded = start["params"]["source_clones"].as_array().unwrap();
+    let entry = guarded
+        .iter()
+        .find(|c| c["clone"] == held_folder.as_str())
+        .unwrap_or_else(|| panic!("{guarded:?}"));
+    assert_eq!(
+        entry["worktree"],
+        Path::new(&held.path).join("web").display().to_string()
+    );
+    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }

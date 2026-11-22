@@ -147,23 +147,20 @@ pub(crate) fn note(d: &Daemon, chat: &ChatInfo) -> Result<Option<String>> {
         format!(" {}.", lives.join("; "))
     };
     // An orchestration's: its branches are its children now.
-    let mut branches = Vec::new();
+    let mut described = Vec::new();
     for child in children(d, &workspace.id)? {
-        let on = d
-            .store
-            .worktrees_of(&child.id)?
-            .into_iter()
-            .find(live)
-            .map(|w| w.branch)
-            .unwrap_or_default();
-        branches.push(format!("{} (on {on}, in {})", child.slug, child.path));
+        let on = d.store.worktrees_of(&child.id)?.into_iter().find(live);
+        described.push(match on {
+            Some(worktree) => format!("{} (on {}, in {})", child.slug, worktree.branch, child.path),
+            None => format!("{} (in {})", child.slug, child.path),
+        });
     }
-    let children = if branches.is_empty() {
+    let children_line = if described.is_empty() {
         String::new()
     } else {
         format!(
-            " The branches it worked on are now child workspaces of this one: {}. Follow them with `chauffeur status`, `chauffeur wait <child>` and `chauffeur send <child> <message>`.",
-            branches.join(", ")
+            " The branches it worked on are now child workspaces of this one: {}. Follow each with `chauffeur status <child>`, `chauffeur wait <child>` and `chauffeur send <child> -` (the message on standard input).",
+            described.join(", ")
         )
     };
     let (read, change) = if users.len() == 1 {
@@ -178,7 +175,7 @@ pub(crate) fn note(d: &Daemon, chat: &ChatInfo) -> Result<Option<String>> {
         "; make every change in the workspace"
     };
     Ok(Some(format!(
-        "(Chauffeur: this conversation was imported from Claude Code, where it ran in {}. It goes on in a Chauffeur workspace, your working folder now: {}.{lives}{children} {} {read} the user's own: read {change} if you need to, but never change {change}{instead}.)\n\n",
+        "(Chauffeur: this conversation was imported from Claude Code, where it ran in {}. It goes on in a Chauffeur workspace, your working folder now: {}.{lives}{children_line} {} {read} the user's own: read {change} if you need to, but never change {change}{instead}.)\n\n",
         origin.folder.display(),
         workspace.path,
         users.join(", "),

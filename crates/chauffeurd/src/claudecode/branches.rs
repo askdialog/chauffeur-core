@@ -135,16 +135,7 @@ pub(super) async fn import(
                 made
             }
             (ClaudeCodeWorkspaceKind::Branch, Some(branch)) => {
-                let parent = match &workspace.parent {
-                    None => Ok(None),
-                    Some(name) => match parents.get(name) {
-                        Some(Some(id)) => Ok(Some(id.clone())),
-                        _ => Err(Error::Conflict(format!(
-                            "its parent workspace {name} could not be made"
-                        ))),
-                    },
-                };
-                match parent {
+                match parent_id(&parents, workspace.parent.as_deref()) {
                     Ok(parent) => {
                         make(d, &git, workspace, &branch, parent, found, report.warnings).await
                     }
@@ -179,6 +170,22 @@ pub(super) async fn import(
     Ok(())
 }
 
+/// The workspace a child goes under: its parent's, made earlier in the run; none for a plain one.
+fn parent_id(
+    parents: &HashMap<String, Option<String>>,
+    parent: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(name) = parent else {
+        return Ok(None);
+    };
+    match parents.get(name) {
+        Some(Some(id)) => Ok(Some(id.clone())),
+        _ => Err(Error::Conflict(format!(
+            "its parent workspace {name} could not be made: see why above, then run the import again"
+        ))),
+    }
+}
+
 /// An orchestration's parent: a workspace on its folder's repo, on a new branch named after it,
 /// from the clone chosen for that repo (the user's becomes Chauffeur's).
 async fn make_parent(
@@ -186,7 +193,9 @@ async fn make_parent(
     workspace: &ClaudeCodeWorkspacePlan,
     found: &Found<'_>,
 ) -> Result<WorkspaceRow> {
-    let repo = workspace.repos.first().cloned().unwrap_or_default();
+    let Some(repo) = workspace.repos.first().cloned() else {
+        return Err(Error::Internal(anyhow::anyhow!("a parent with no repo")));
+    };
     let Some(parent) = found.parents.get(&repo) else {
         return Err(Error::BadRequest(format!(
             "none of the clones of {repo} the sessions ran in is left: open a session in one, then run the import again"

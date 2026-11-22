@@ -273,19 +273,7 @@ pub async fn import(
         let existing = branches::existing(d, workspace, branch)?;
         for repo in &branches::missing_repos(d, workspace, branch, existing.as_ref())? {
             let clone = repos.source(repo, branch).await;
-            // Chauffeur's own clone, else the user's chosen for an earlier branch of the repo,
-            // else this one: one clone per repo for the whole run.
-            let own = d.repos.existing_clone(repo);
-            let adopt = own.is_none();
-            let chauffeur = own.or_else(|| {
-                let clone = clone.as_ref()?;
-                Some(
-                    chosen
-                        .entry(repo.clone())
-                        .or_insert_with(|| clone.clone())
-                        .clone(),
-                )
-            });
+            let (chauffeur, adopt) = chosen_clone(d, &mut chosen, repo, clone.as_ref());
             // Its checkouts in the user's clone holding it: their changes are copied, and they are
             // released only when that clone is Chauffeur's; in another, the branch is fetched
             // there and they keep it.
@@ -338,12 +326,8 @@ pub async fn import(
         let Some(repo) = workspace.repos.first() else {
             continue;
         };
-        let own = d.repos.existing_clone(repo);
-        let adopt = own.is_none();
-        let clone = own.or_else(|| {
-            let first = repos.clones.get(repo)?.first()?.clone();
-            Some(chosen.entry(repo.clone()).or_insert(first).clone())
-        });
+        let first = repos.clones.get(repo).and_then(|c| c.first());
+        let (clone, adopt) = chosen_clone(d, &mut chosen, repo, first);
         if let Some(clone) = clone {
             parents.insert(repo.clone(), branches::ParentClone { clone, adopt });
         }
@@ -455,6 +439,27 @@ async fn workspace_trees(
         trees.insert(repo, checked);
     }
     Ok(trees)
+}
+
+/// Chauffeur's clone of `repo` for the whole run: its own, else the user's chosen for it earlier
+/// in the run, else `user` (the user's holding what is imported); with whether it is the user's,
+/// to adopt.
+fn chosen_clone(
+    d: &Daemon,
+    chosen: &mut HashMap<String, PathBuf>,
+    repo: &str,
+    user: Option<&PathBuf>,
+) -> (Option<PathBuf>, bool) {
+    if let Some(own) = d.repos.existing_clone(repo) {
+        return (Some(own), false);
+    }
+    let clone = user.map(|user| {
+        chosen
+            .entry(repo.to_owned())
+            .or_insert_with(|| user.clone())
+            .clone()
+    });
+    (clone, true)
 }
 
 /// A checkout of a branch to release, with the clone it belongs to.
