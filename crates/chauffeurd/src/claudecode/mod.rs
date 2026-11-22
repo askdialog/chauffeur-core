@@ -10,6 +10,7 @@ mod branches;
 mod copy;
 mod history;
 mod mcp;
+pub(crate) mod moved;
 mod place;
 pub(crate) mod resume;
 mod sessions;
@@ -431,14 +432,24 @@ pub async fn import(
             changed: &changed,
             sessions: &found,
             running: &running_folders,
+            move_changes: params.move_changes,
         };
         branches::import(d, &claude, &mut plan.workspaces, &found, &mut report).await?;
+        for (folder, done) in std::mem::take(&mut report.moved) {
+            if let Some(release) = releases
+                .iter_mut()
+                .find(|r| crate::conductor::same_folder(Path::new(&r.folder), &folder))
+            {
+                release.moved = Some(done);
+            }
+        }
         history::import(d, &claude, &mut plan.histories, found.sessions, &mut report).await?;
     }
     let mut said = BTreeSet::new();
     warnings.retain(|w| said.insert(w.clone()));
     Ok(ClaudeCodeImportResult {
         dry_run: params.dry_run,
+        move_changes: params.move_changes,
         since_days,
         since_date,
         claude_dir: claude.to_string_lossy().into_owned(),
@@ -1246,6 +1257,7 @@ impl<'a> Repos<'a> {
                         branch: branch.to_string(),
                         folder: e.path.to_string_lossy().into_owned(),
                         commits_only,
+                        moved: None,
                     },
                     clone: clone.clone(),
                     gone: e.prunable,

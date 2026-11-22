@@ -24,6 +24,11 @@ pub(super) struct Report<'a> {
     index: BTreeMap<String, usize>,
     plans: &'a mut [ClaudeCodeSessionPlan],
     pub(super) warnings: &'a mut Vec<String>,
+    /// The released checkouts moved out (`move_changes`), each with where its changes went.
+    pub(super) moved: Vec<(
+        std::path::PathBuf,
+        chauffeur_protocol::claudecode::ClaudeCodeMoved,
+    )>,
 }
 
 impl<'a> Report<'a> {
@@ -40,6 +45,7 @@ impl<'a> Report<'a> {
             index,
             plans,
             warnings,
+            moved: Vec::new(),
         }
     }
 

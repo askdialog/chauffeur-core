@@ -766,6 +766,7 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
         branch: branch.into(),
         folder: f.root.join(folder).to_string_lossy().into_owned(),
         commits_only,
+        moved: None,
     };
     assert_eq!(
         plan.releases,
@@ -2611,4 +2612,276 @@ async fn default_branch_changes_are_copied_once_into_a_workspace_the_clone_keepi
         .unwrap_or_else(|| panic!("{planned:?}"));
     assert!(parent.changes_from.is_empty(), "{parent:?}");
     unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
+}
+
+/// With `move_changes`: shop's clone on feat/a (a change, a new file) and a worktree of the user's
+/// on feat/b (a change) are released, their changes copied into the workspaces, then saved in a
+/// ref each and cleaned: the clone back on main, the worktree detached at it (the clone holds
+/// main). A ref brings the changes back; the daily purge deletes it once past the retention.
+/// docs, of which Chauffeur has a clone of its own, keeps its branch and its changes: fetched,
+/// never released, it is no one's to clean.
+#[tokio::test(flavor = "multi_thread")]
+async fn move_changes_leaves_one_copy_of_the_work_in_chauffeur() {
+    let _switch = SWITCH.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let shop = clone_repo(&root, "shop", &[]);
+    let wt_b = root.join("wt/b");
+    git(
+        &shop,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/b",
+            wt_b.to_str().unwrap(),
+        ],
+    );
+    commit(&wt_b, "b.txt", "b\n");
+    std::fs::write(wt_b.join("README.md"), "shop, b's change\n").unwrap();
+    git(&shop, &["switch", "-q", "-c", "feat/a"]);
+    commit(&shop, "a.txt", "a\n");
+    std::fs::write(shop.join("README.md"), "shop, a's change\n").unwrap();
+    std::fs::write(shop.join("new.txt"), "new\n").unwrap();
+    // feat/a checked out a second time, with a file of its own: a ref of its own too.
+    let wt_a2 = root.join("wt/a2");
+    git(
+        &shop,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-f",
+            wt_a2.to_str().unwrap(),
+            "feat/a",
+        ],
+    );
+    std::fs::write(wt_a2.join("two.txt"), "two\n").unwrap();
+    // feat/c with a file git is told to leave alone, changed: left as it is.
+    let wt_c = root.join("wt/c");
+    git(
+        &shop,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feat/c",
+            wt_c.to_str().unwrap(),
+            "main",
+        ],
+    );
+    commit(&wt_c, "conf.txt", "source\n");
+    git(&wt_c, &["update-index", "--assume-unchanged", "conf.txt"]);
+    std::fs::write(wt_c.join("conf.txt"), "local secret\n").unwrap();
+    std::fs::write(wt_c.join("README.md"), "shop, c's change\n").unwrap();
+    let docs = clone_repo(&root, "docs", &[]);
+    git(&docs, &["switch", "-q", "-c", "feat/d"]);
+    commit(&docs, "d.txt", "d\n");
+    std::fs::write(docs.join("README.md"), "docs, d's change\n").unwrap();
+    let own_docs = root.join("repos/docs");
+    let docs_origin = root.join("origin/docs.git");
+    git(
+        &root,
+        &[
+            "clone",
+            "-q",
+            docs_origin.to_str().unwrap(),
+            own_docs.to_str().unwrap(),
+        ],
+    );
+    let docs_url = "https://github.com/fixture/docs.git";
+    git(&own_docs, &["remote", "set-url", "origin", docs_url]);
+    git(
+        &own_docs,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", docs_origin.display()),
+            docs_url,
+        ],
+    );
+    let claude = root.join("claude");
+    let projects = claude.join("projects").join("-code");
+    std::fs::create_dir_all(&projects).unwrap();
+    // The worktree's session the most recent: made first, it does not take main from the clone.
+    for (id, folder, branch, days) in [
+        ("s-a", &shop, "feat/a", 3),
+        ("s-b", &wt_b, "feat/b", 1),
+        ("s-d", &docs, "feat/d", 2),
+        ("s-c", &wt_c, "feat/c", 2),
+    ] {
+        std::fs::write(
+            projects.join(format!("{id}.jsonl")),
+            line(folder, branch, &ago(days), &edit(&folder.join("README.md"))) + "\n",
+        )
+        .unwrap();
+    }
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("settings.toml"),
+        "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46990\nlinear_enabled = false\n",
+    )
+    .unwrap();
+    let daemon = Daemon::open(Paths::new(
+        home,
+        root.join("workspaces"),
+        root.join("repos"),
+    ))
+    .unwrap();
+    let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    vars.insert(
+        "CLAUDE_CONFIG_DIR".into(),
+        claude.to_string_lossy().into_owned(),
+    );
+    daemon.shell_env.set_vars(vars);
+    daemon.chats.sidecar.use_binary(history_sidecar());
+    let run = |dry_run: bool| {
+        chauffeurd::claudecode::import(
+            &daemon,
+            ClaudeCodeImportParams {
+                dry_run,
+                move_changes: true,
+                claude_dir: Some(claude.to_string_lossy().into_owned()),
+                ..Default::default()
+            },
+        )
+    };
+
+    // The dry run says which checkouts it would clean, and cleans none.
+    let planned = run(true).await.unwrap();
+    assert!(planned.move_changes);
+    assert_eq!(planned.releases.len(), 4, "{planned:?}");
+    assert!(planned.releases.iter().all(|r| r.moved.is_none()));
+    assert!(is_branch(&shop, "feat/a"));
+
+    // SAFETY: the tests reading the switch hold `SWITCH`.
+    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    let plan = run(false).await.unwrap();
+    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
+    let moved = |folder: &Path| {
+        plan.releases
+            .iter()
+            .find(|r| Path::new(&r.folder) == folder)
+            .and_then(|r| r.moved.clone())
+            .unwrap_or_else(|| panic!("{plan:?}"))
+    };
+    // The clone, back on main, clean; the worktree detached at main, clean.
+    let (a, b) = (moved(&shop), moved(&wt_b));
+    assert_eq!(a.back_on, "main");
+    assert!(is_branch(&shop, "main"));
+    assert!(!is_branch(&wt_b, "feat/b") && !is_branch(&wt_b, "main"));
+    assert_eq!(
+        git(&wt_b, &["rev-parse", "HEAD"]),
+        git(&shop, &["rev-parse", "main"])
+    );
+    for folder in [&shop, &wt_b] {
+        assert_eq!(git(folder, &["status", "--porcelain"]), "", "{folder:?}");
+    }
+    assert!(is_branch(&docs, "feat/d"));
+    // The second checkout of feat/a: saved apart.
+    let a2 = moved(&wt_a2);
+    assert_ne!(a2.saved_in, a.saved_in);
+    assert_eq!(
+        git(&shop, &["show", &format!("{}:two.txt", a2.saved_in)]),
+        "two"
+    );
+    // The one git hides changes of: left as it is, said.
+    assert!(
+        plan.releases
+            .iter()
+            .any(|r| Path::new(&r.folder) == wt_c && r.moved.is_none())
+    );
+    assert_eq!(
+        std::fs::read_to_string(wt_c.join("conf.txt")).unwrap(),
+        "local secret\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(wt_c.join("README.md")).unwrap(),
+        "shop, c's change\n"
+    );
+    assert!(
+        plan.warnings.iter().any(|w| w.contains(&format!(
+            "{} is left as it is (some of its files are marked --assume-unchanged",
+            wt_c.display()
+        ))),
+        "{:?}",
+        plan.warnings
+    );
+    assert_eq!(
+        std::fs::read_to_string(docs.join("README.md")).unwrap(),
+        "docs, d's change\n"
+    );
+    // The work is in the workspaces, and in the refs.
+    for (branch, text) in [
+        ("feat/a", "shop, a's change\n"),
+        ("feat/b", "shop, b's change\n"),
+    ] {
+        let slug = plan
+            .workspaces
+            .iter()
+            .find(|w| w.branch.as_deref() == Some(branch))
+            .and_then(|w| w.workspace.clone())
+            .unwrap();
+        let ws = PathBuf::from(daemon.workspaces.get(&slug).unwrap().path);
+        assert_eq!(
+            std::fs::read_to_string(ws.join("shop/README.md")).unwrap(),
+            text
+        );
+    }
+    assert_eq!(
+        git(&shop, &["show", &format!("{}:README.md", a.saved_in)]),
+        "shop, a's change"
+    );
+    assert_eq!(
+        git(&shop, &["show", &format!("{}:new.txt", a.saved_in)]),
+        "new"
+    );
+    assert_eq!(
+        git(&shop, &["show", &format!("{}:README.md", b.saved_in)]),
+        "shop, b's change"
+    );
+    // The command the output gives brings them back as they were, on the branch's commit.
+    git(
+        &shop,
+        &["switch", "-q", "--detach", &format!("{}^", a.saved_in)],
+    );
+    git(&shop, &["read-tree", "-u", "--reset", &a.saved_in]);
+    git(&shop, &["reset", "-q"]);
+    assert_eq!(
+        git(&shop, &["status", "--porcelain"]),
+        "M README.md\n?? new.txt"
+    );
+    assert_eq!(
+        std::fs::read_to_string(shop.join("README.md")).unwrap(),
+        "shop, a's change\n"
+    );
+    // Past the retention, the daily purge deletes the refs.
+    daemon
+        .settings
+        .update(|doc| doc["snapshot_retention_days"] = toml_edit::value(-1))
+        .unwrap();
+    let exists = |reference: &str| {
+        Command::new("git")
+            .args(["show-ref", "--verify", "--quiet", reference])
+            .current_dir(&shop)
+            .status()
+            .unwrap()
+            .success()
+    };
+    // One that cannot be deleted then (its folder read only) is tried again at the next purge.
+    let a_folder = shop
+        .join(".git")
+        .join(Path::new(&a.saved_in).parent().unwrap());
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&a_folder, std::fs::Permissions::from_mode(0o500)).unwrap();
+    daemon.workspaces.purge_expired_snapshots().await.unwrap();
+    std::fs::set_permissions(&a_folder, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(exists(&a.saved_in));
+    assert!(!exists(&b.saved_in));
+    daemon.workspaces.purge_expired_snapshots().await.unwrap();
+    for reference in [&a.saved_in, &a2.saved_in, &b.saved_in] {
+        assert!(!exists(reference), "{reference}");
+    }
 }

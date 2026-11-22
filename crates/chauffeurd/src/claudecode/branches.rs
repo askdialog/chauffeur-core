@@ -118,6 +118,8 @@ pub(super) struct Found<'a> {
     pub(super) sessions: &'a HashMap<String, Session>,
     /// The folders Claude Code still runs in: no branch is released from under it.
     pub(super) running: &'a [PathBuf],
+    /// A released checkout's changes, once copied, are saved in a ref and it is cleaned.
+    pub(super) move_changes: bool,
 }
 
 /// The clone a workspace on a new branch is made from: Chauffeur's, else the user's it adopts.
@@ -183,9 +185,7 @@ pub(super) async fn import(
             }
             (ClaudeCodeWorkspaceKind::Branch, Some(branch)) => {
                 match parent_id(&parents, workspace.parent.as_deref()) {
-                    Ok(parent) => {
-                        make(d, &git, workspace, &branch, parent, found, report.warnings).await
-                    }
+                    Ok(parent) => make(d, &git, workspace, &branch, parent, found, report).await,
                     Err(error) => Err(error),
                 }
             }
@@ -467,10 +467,10 @@ async fn carry_changes(
 
 /// A checkout the branch was released from (or whose changes were read, the branch kept there),
 /// to put back if the workspace cannot be made.
-struct Released {
-    at: RepoBranch,
-    folder: PathBuf,
-    clone: PathBuf,
+pub(super) struct Released {
+    pub(super) at: RepoBranch,
+    pub(super) folder: PathBuf,
+    pub(super) clone: PathBuf,
     /// The branch's commit when it was released.
     head: String,
     /// Its folder is gone: its HEAD is in the clone's `.git` only.
@@ -510,7 +510,7 @@ async fn make(
     branch: &str,
     parent: Option<String>,
     found: &Found<'_>,
-    warnings: &mut Vec<String>,
+    report: &mut Report<'_>,
 ) -> Result<WorkspaceRow> {
     let existing = existing(d, workspace, branch)?;
     let missing = missing_repos(d, workspace, branch, existing.as_ref())?;
@@ -563,7 +563,7 @@ async fn make(
         .chain(std::iter::once(branch_record(branch)));
     for record in records {
         if let Err(error) = d.store.kv_set(&record, &row.id) {
-            warnings.push(format!(
+            report.warnings.push(format!(
                 "{} was made, but could not be recorded ({error}): a later import will not add to it.",
                 row.slug
             ));
@@ -576,11 +576,50 @@ async fn make(
         };
         let into = root.join(repo_folder(&checkout.at.repo));
         if let Err(error) = conductor::reapply(git, changes, &checkout.folder, &into).await {
-            warnings.push(format!(
+            report.warnings.push(format!(
                 "Some uncommitted changes of {} could not be copied into {} ({error:#}): they are still there.",
                 checkout.folder.display(),
                 row.slug
             ));
+            continue;
+        }
+        // Copied: with `move_changes`, the checkout keeps them no more (a released one only).
+        if !found.move_changes || checkout.kept {
+            continue;
+        }
+        let base = d
+            .store
+            .worktrees_of(&row.id)?
+            .into_iter()
+            .find(|w| w.repo == repo_folder(&checkout.at.repo))
+            .map(|w| w.base_branch)
+            .filter(|base| !base.is_empty());
+        let Some(base) = base else {
+            report.warnings.push(format!(
+                "{} is left as it is: its default branch is unknown. Clean it by hand once you no longer need its changes there.",
+                checkout.folder.display()
+            ));
+            continue;
+        };
+        let folder = checkout.folder.display();
+        match super::moved::move_out(d, git, checkout, &base, &row).await {
+            Ok(super::moved::Moved::Saved(done, stopped)) => {
+                if let Some(stopped) = stopped {
+                    report.warnings.push(format!(
+                        "The changes of {folder} are in {} and saved in {}, but cleaning it stopped ({stopped}): it is on {}; finish by hand.",
+                        row.slug, done.saved_in, done.back_on
+                    ));
+                }
+                report.moved.push((checkout.folder.clone(), done));
+            }
+            Ok(super::moved::Moved::Left(reason)) => report.warnings.push(format!(
+                "{folder} is left as it is ({reason}): its changes are in {}; clean it by hand once you no longer need them there.",
+                row.slug
+            )),
+            Err(error) => report.warnings.push(format!(
+                "{folder} is left as it is: its changes could not be saved ({error:#}); they are in {}, clean it by hand once you no longer need them there.",
+                row.slug
+            )),
         }
     }
     match failed {
