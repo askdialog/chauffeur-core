@@ -44,7 +44,7 @@ async function started(params: Partial<SessionStartParams> = {}, options: {
     resolveExecutable: () => "/usr/local/bin/codex",
     baseEnv: { PATH: "/usr/bin", HOME: "/home/me" },
     hookCommand: (asked) => {
-      guard = asked;
+      guard = asked.guard;
       return "hook" in options ? options.hook : HOOK;
     },
     initTimeoutMs: 500,

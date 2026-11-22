@@ -112,9 +112,7 @@ export function cloneWriteRefusal(toolName: string, toolInput: unknown, cwd: str
   if (key === undefined || typeof toolInput !== "object" || toolInput === null) return undefined;
   const written: unknown = Reflect.get(toolInput, key);
   if (typeof written !== "string" || !written) return undefined;
-  const path = at(cwd, written);
-  const clone = cloneOf(path, clones);
-  return clone && writeDenial(path, clone);
+  return clonePathRefusal(written, cwd, clones);
 }
 
 /** The denial for a write to `written` (a file an agent names, from `cwd`) in a clone, or undefined. */

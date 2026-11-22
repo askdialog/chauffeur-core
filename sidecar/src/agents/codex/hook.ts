@@ -18,10 +18,16 @@ export const PRE_TOOL_USE = "pre-tool-use";
 /** The read-only guard a session's hook adds, named by its flag: an exploration's, or a design chat's. */
 export type HookGuard = "read-only" | "design";
 
+/** What a session's hook guards, written on its command line: a read-only guard, and the clones. */
+export interface HookSetup {
+  guard?: HookGuard;
+  clones: SourceClone[];
+}
+
 const READ_ONLY_DENIALS: Record<HookGuard, string> = { "read-only": READ_ONLY_DENIAL, design: DESIGN_READ_ONLY_DENIAL };
 
 /** The hook's answer to a PreToolUse payload: a deny decision, or nothing to let the call run. */
-export function preToolUseAnswer(payload: string, guard?: HookGuard, clones: SourceClone[] = []): string | undefined {
+export function preToolUseAnswer(payload: string, { guard, clones }: HookSetup = { clones: [] }): string | undefined {
   let input: { tool_input?: { command?: unknown }; cwd?: unknown };
   try {
     input = JSON.parse(payload) as typeof input;
@@ -63,39 +69,58 @@ function commandText(command: unknown): string | undefined {
   return undefined;
 }
 
-/**
- * `chauffeur-sidecar codex-hook pre-tool-use [read-only|design] [--clones <base64 JSON>]`: reads
- * the payload on stdin, answers on stdout.
- */
+/** `chauffeur-sidecar codex-hook pre-tool-use …`: reads the payload on stdin, answers on stdout. */
 export async function runCodexHook(subcommand: string | undefined, args: string[] = []): Promise<number> {
   if (subcommand !== PRE_TOOL_USE) {
     process.stderr.write(`unknown hook: ${subcommand ?? "(none)"}\n`);
     return 2;
   }
-  const rest = [...args];
-  let flag: HookGuard | undefined;
-  if (rest[0] === "read-only" || rest[0] === "design") flag = rest.shift() as HookGuard;
-  let clones: SourceClone[] = [];
-  if (rest[0] === "--clones" && rest[1] !== undefined) {
-    try {
-      clones = JSON.parse(Buffer.from(rest[1], "base64").toString("utf8")) as SourceClone[];
-    } catch {
-      process.stderr.write("unreadable --clones\n");
-      return 2;
-    }
-    rest.splice(0, 2);
-  }
-  if (rest.length > 0) {
-    process.stderr.write(`unknown hook argument: ${rest[0]}\n`);
+  const setup = hookSetup(args);
+  if (typeof setup === "string") {
+    process.stderr.write(`${setup}\n`);
     return 2;
   }
-  const answer = preToolUseAnswer(await Bun.stdin.text(), flag, clones);
+  const answer = preToolUseAnswer(await Bun.stdin.text(), setup);
   if (answer) process.stdout.write(`${answer}\n`);
   return 0;
 }
 
+/** The hook's arguments, as `hookCommandLine` writes them: `[read-only|design] [--clones <base64 JSON>]`; else why not. */
+export function hookSetup(args: string[]): HookSetup | string {
+  const rest = [...args];
+  const setup: HookSetup = { clones: [] };
+  const first = rest[0];
+  if (first === "read-only" || first === "design") {
+    setup.guard = first;
+    rest.shift();
+  }
+  if (rest[0] === "--clones") {
+    const clones = decodeClones(rest[1]);
+    if (clones === undefined) return "unreadable --clones";
+    setup.clones = clones;
+    rest.splice(0, 2);
+  }
+  return rest.length === 0 ? setup : `unknown hook argument: ${rest[0]}`;
+}
+
+function decodeClones(text: string | undefined): SourceClone[] | undefined {
+  if (text === undefined) return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(Buffer.from(text, "base64").toString("utf8"));
+  } catch {
+    return undefined;
+  }
+  const isClone = (item: unknown): item is SourceClone =>
+    typeof item === "object" &&
+    item !== null &&
+    typeof Reflect.get(item, "clone") === "string" &&
+    typeof Reflect.get(item, "worktree") === "string";
+  return Array.isArray(value) && value.every(isClone) ? value : undefined;
+}
+
 /** The shell command that runs this sidecar's hook, compiled or under `bun run`. */
-export function hookCommandLine(guard?: HookGuard, clones: SourceClone[] = []): string {
+export function hookCommandLine({ guard, clones }: HookSetup = { clones: [] }): string {
   const program = Bun.isStandaloneExecutable ? [process.execPath] : [process.execPath, Bun.main];
   const given = clones.length > 0 ? ["--clones", Buffer.from(JSON.stringify(clones)).toString("base64")] : [];
   return [...program, HOOK_COMMAND, PRE_TOOL_USE, ...(guard ? [guard] : []), ...given].map(quote).join(" ");

@@ -768,9 +768,10 @@ pub struct SessionStartParams {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<String>>", optional)]
     pub local_allow: Vec<String>,
-    /// The clones of the workspace's repos, each with its worktree in the workspace, given to a
-    /// Claude chat: its agent never writes into them, and is told the worktree path to write
-    /// instead (docs/adr/claude-code-import.md).
+    /// The clones of the workspace's repos, each with its worktree in the workspace, given to every
+    /// chat: its agent never writes into them (Claude's and Vibe's through the permissions the
+    /// sidecar answers, Codex's through its hook), and is told the worktree path to write instead
+    /// (docs/adr/claude-code-import.md).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<SourceClone>>", optional)]
     pub source_clones: Vec<SourceClone>,
