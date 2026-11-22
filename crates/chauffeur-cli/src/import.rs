@@ -39,7 +39,7 @@ pub enum Source {
     },
     /// Bring the work of Claude Code's sessions into Chauffeur: a workspace per live branch, a
     /// parent and its children for a session that worked on several, the rest in each repo's
-    /// history exploration. For now only `--dry-run` runs: it prints the plan.
+    /// history exploration. `--dry-run` prints the plan and changes nothing.
     #[command(name = "claude-code")]
     ClaudeCode {
         /// Print what would be imported and released, and change nothing.

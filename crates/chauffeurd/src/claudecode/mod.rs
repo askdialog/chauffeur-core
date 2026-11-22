@@ -2,9 +2,8 @@
 //! It plans which sessions it reads, the branches each wrote on or created, and where each lands
 //! (a workspace on a live branch, a parent with its children, a workspace carrying a clone's
 //! uncommitted default-branch changes, or its repo's history exploration), reading Claude Code's
-//! transcripts and the repos with git. Without a dry run, it imports the history explorations'
-//! sessions (`history`); the rest is planned only, for now. Neither touches Claude Code's files
-//! or the repos.
+//! transcripts and the repos with git. Without a dry run, it makes those workspaces and opens the
+//! sessions there as chats, never touching Claude Code's files.
 
 mod branches;
 mod copy;
@@ -38,18 +37,10 @@ const DEFAULT_DAYS: u32 = 60;
 /// The merged PRs read per repo to tell a squash-merged branch: the most recent.
 const MERGED_PRS: u32 = 1000;
 
-/// The switch the import waits behind until it is complete: without it, only a dry run runs.
-const SWITCH: &str = "CHAUFFEUR_IMPORT_CLAUDE_CODE";
-
 pub async fn import(
     d: &Arc<Daemon>,
     params: ClaudeCodeImportParams,
 ) -> Result<ClaudeCodeImportResult> {
-    if !params.dry_run && std::env::var(SWITCH).as_deref() != Ok("1") {
-        return Err(Error::BadRequest(
-            "The import from Claude Code is not ready yet: `chauffeur import claude-code --dry-run` shows its plan".into(),
-        ));
-    }
     // One import at a time: two would each find a session not yet imported.
     static IMPORTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _importing = if params.dry_run {

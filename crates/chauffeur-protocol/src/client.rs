@@ -400,9 +400,9 @@ methods! {
         #[access(User)]
         #[relay(Local)]
         ConductorImport(crate::conductor::ConductorImportParams) -> crate::conductor::ConductorImportResult,
-        /// Plans the import of Claude Code's sessions (docs/adr/claude-code-import.md): which
-        /// sessions it reads and where each lands. Only `dry_run` for now: without it, refused
-        /// unless `CHAUFFEUR_IMPORT_CLAUDE_CODE=1` is set in the daemon's environment.
+        /// Imports Claude Code's sessions (docs/adr/claude-code-import.md): which sessions it
+        /// reads and where each lands, and with no `dry_run` the workspaces and chats; the client
+        /// asks the user first when branches are to be released.
         #[serde(rename = "claudecode.import")]
         #[access(User)]
         #[relay(Local)]

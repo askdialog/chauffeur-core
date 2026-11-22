@@ -883,24 +883,8 @@ async fn the_window_widens_with_since_a_day_and_all() {
     );
 }
 
-/// Held by the tests that read or set the switch: it is the process's environment.
-static SWITCH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-#[tokio::test(flavor = "multi_thread")]
-async fn without_a_dry_run_the_import_is_refused() {
-    let _switch = SWITCH.lock().await;
-    let f = fixture();
-    let error = chauffeurd::claudecode::import(
-        &f.daemon,
-        ClaudeCodeImportParams {
-            claude_dir: Some(f.claude.to_string_lossy().into_owned()),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(error.to_string().contains("--dry-run"), "{error}");
-}
+/// Held by the tests that import: the import runs one at a time in a process.
+static IMPORTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// The stand-in for the agent sidecar the import talks to (`fixtures/history-sidecar.ts`).
 fn history_sidecar() -> PathBuf {
@@ -970,9 +954,7 @@ fn past_session(f: &Fixture, id: &str, at: &str) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_closed_tabs_once() {
-    let _switch = SWITCH.lock().await;
-    // SAFETY: the tests reading the switch hold `SWITCH`; no other thread reads it meanwhile.
-    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    let _imports = IMPORTS.lock().await;
     let f = importing();
     let d = &f.daemon;
     // "history" carries a prompt.
@@ -1199,7 +1181,6 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
         })
         .collect();
     assert!(left.is_empty(), "{left:?}");
-    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }
 
 /// Two repos whose clones hold live branches in every place a branch can be:
@@ -1410,7 +1391,7 @@ fn is_branch(dir: &Path, name: &str) -> bool {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
-    let _switch = SWITCH.lock().await;
+    let _imports = IMPORTS.lock().await;
     let b = branches_fixture();
     let (f, shop) = (&b.f, &b.shop);
     let d = &f.daemon;
@@ -1436,8 +1417,6 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
         planned.releases
     );
 
-    // SAFETY: the tests reading the switch hold `SWITCH`.
-    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
     let plan = import(f, false).await;
     let made = |branch: &str| {
         let w = plan
@@ -1665,7 +1644,6 @@ async fn live_branches_become_workspaces_released_from_the_users_checkouts() {
         );
     }
     assert!(is_branch(&Path::new(&held.path).join("lab"), "feat/held"));
-    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1682,7 +1660,7 @@ async fn adopting_takes_repos_named_with_their_owner() {
 /// branch; `beta` has Chauffeur's own beside the user's. Every user clone holds its branch with
 /// changes. With `org` empty, the repos are named `fixture/alpha` and `fixture/beta`.
 async fn adopting(org: &str) {
-    let _switch = SWITCH.lock().await;
+    let _imports = IMPORTS.lock().await;
     let named = |name: &str| {
         if org.is_empty() {
             format!("fixture/{name}")
@@ -1801,10 +1779,7 @@ async fn adopting(org: &str) {
             (alpha2, "feat/a2", alpha, "feat/a")
         };
 
-    // SAFETY: the tests reading the switch hold `SWITCH`.
-    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
     let plan = import(&f, false).await;
-    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
     for w in &plan.workspaces {
         assert_eq!(w.outcome, ClaudeCodeOutcome::Imported, "{plan:?}");
     }
@@ -1874,7 +1849,7 @@ async fn adopting(org: &str) {
 /// `setup.rs`'s. Pn's clone also has an MCP server local to it, named in a warning.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
-    let _switch = SWITCH.lock().await;
+    let _imports = IMPORTS.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let claude = root.join("claude");
@@ -2056,10 +2031,7 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
         before
     );
 
-    // SAFETY: the tests reading the switch hold `SWITCH`.
-    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
     let plan = import(&f, false).await;
-    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
     assert_eq!(guessed(&plan), expected, "{plan:?}");
     assert_eq!(mcp(&plan), named);
     for w in &plan.workspaces {
@@ -2129,7 +2101,7 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
 /// and kept off them too.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_imported_chat_is_told_where_its_repo_lives_and_kept_off_the_folders_it_ran_in() {
-    let _switch = SWITCH.lock().await;
+    let _imports = IMPORTS.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let shop = clone_repo(&root, "shop", &[]);
@@ -2219,10 +2191,7 @@ async fn an_imported_chat_is_told_where_its_repo_lives_and_kept_off_the_folders_
         claude: claude.clone(),
         daemon: open(),
     };
-    // SAFETY: the tests reading the switch hold `SWITCH`.
-    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
     let plan = import(&f, false).await;
-    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
     let slug = plan.workspaces[0].workspace.clone().expect("imported");
     let ws = PathBuf::from(f.daemon.workspaces.get(&slug).unwrap().path);
     let chat = f
@@ -2318,9 +2287,7 @@ async fn an_imported_chat_is_told_where_its_repo_lives_and_kept_off_the_folders_
 /// made takes its children with it, nothing released.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() {
-    let _switch = SWITCH.lock().await;
-    // SAFETY: the tests reading the switch hold `SWITCH`; no other thread reads it meanwhile.
-    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    let _imports = IMPORTS.lock().await;
     // First, web's worktrees cannot be made (a hook of the clone's that fails).
     let f = importing();
     let d = &f.daemon;
@@ -2497,7 +2464,6 @@ async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() 
         .filter(|slug| slug.starts_with("orchestrate-the-release"))
         .collect();
     assert_eq!(made, ["orchestrate-the-release"]);
-    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }
 
 /// The uncommitted changes on the fixture's clones' default branches: web's go to the parent of
@@ -2506,9 +2472,7 @@ async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() 
 /// copy; a later run carries them no more.
 #[tokio::test(flavor = "multi_thread")]
 async fn default_branch_changes_are_copied_once_into_a_workspace_the_clone_keeping_them() {
-    let _switch = SWITCH.lock().await;
-    // SAFETY: the tests reading the switch hold `SWITCH`; no other thread reads it meanwhile.
-    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
+    let _imports = IMPORTS.lock().await;
     let f = importing();
     let d = &f.daemon;
     let docs_clone = f.root.join("clones/docs");
@@ -2611,7 +2575,6 @@ async fn default_branch_changes_are_copied_once_into_a_workspace_the_clone_keepi
         .find(|w| w.kind == ClaudeCodeWorkspaceKind::Parent && w.sessions == ["new-orchestration"])
         .unwrap_or_else(|| panic!("{planned:?}"));
     assert!(parent.changes_from.is_empty(), "{parent:?}");
-    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
 }
 
 /// With `move_changes`: shop's clone on feat/a (a change, a new file) and a worktree of the user's
@@ -2622,7 +2585,7 @@ async fn default_branch_changes_are_copied_once_into_a_workspace_the_clone_keepi
 /// never released, it is no one's to clean.
 #[tokio::test(flavor = "multi_thread")]
 async fn move_changes_leaves_one_copy_of_the_work_in_chauffeur() {
-    let _switch = SWITCH.lock().await;
+    let _imports = IMPORTS.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let shop = clone_repo(&root, "shop", &[]);
@@ -2756,10 +2719,7 @@ async fn move_changes_leaves_one_copy_of_the_work_in_chauffeur() {
     assert!(planned.releases.iter().all(|r| r.moved.is_none()));
     assert!(is_branch(&shop, "feat/a"));
 
-    // SAFETY: the tests reading the switch hold `SWITCH`.
-    unsafe { std::env::set_var("CHAUFFEUR_IMPORT_CLAUDE_CODE", "1") };
     let plan = run(false).await.unwrap();
-    unsafe { std::env::remove_var("CHAUFFEUR_IMPORT_CLAUDE_CODE") };
     let moved = |folder: &Path| {
         plan.releases
             .iter()
