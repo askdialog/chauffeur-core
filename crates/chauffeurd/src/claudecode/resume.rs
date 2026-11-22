@@ -74,7 +74,7 @@ fn worktree_of<'a>(
 ) -> Option<&'a WorktreeRow> {
     worktrees.iter().find(|w| {
         live(w)
-            && w.repo == repo_folder(&checkout.repo)
+            && w.repo.eq_ignore_ascii_case(repo_folder(&checkout.repo))
             && d.repos
                 .clone_matches(Path::new(&w.clone_path), &checkout.repo)
     })

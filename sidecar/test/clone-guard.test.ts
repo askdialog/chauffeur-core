@@ -84,6 +84,13 @@ describe("cloneWriteRefusal", () => {
       expect(cloneCommandRefusal(`echo x > ${join(via, "a.txt")}`, CWD, linked)).toBeDefined();
       expect(cloneCommandRefusal(`git commit -am x`, via, linked)).toBeDefined();
       expect(cloneWriteRefusal("Write", { file_path: join(root, "tmp", "other.ts") }, CWD, linked)).toBeUndefined();
+      // A link to a file the clone does not have yet: the write lands in the clone.
+      symlinkSync(join(real, "new.ts"), join(root, "new.ts"));
+      expect(cloneWriteRefusal("Write", { file_path: join(root, "new.ts") }, CWD, linked)).toContain(
+        "Write /ws/feat/web/new.ts instead",
+      );
+      symlinkSync(join(root, "nowhere", "x.ts"), join(root, "loose.ts"));
+      expect(cloneWriteRefusal("Write", { file_path: join(root, "loose.ts") }, CWD, linked)).toBeUndefined();
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

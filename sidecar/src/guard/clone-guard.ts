@@ -18,7 +18,7 @@
 // A guard rail, not a sandbox: a program whose own code writes into the clone, the command line
 // not naming it (a script, a build step run from elsewhere), is not caught.
 
-import { readFileSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { SourceClone } from "../protocol.ts";
@@ -1464,16 +1464,29 @@ function forms(path: string): string[] {
   return real === path ? [path] : [path, real];
 }
 
-/** A path with the folders it goes through resolved, as far as they exist. */
-function realOf(path: string): string {
+/**
+ * A path with the links it goes through followed, as far as they lead: a link to a file not made
+ * yet (`/tmp/a.ts` → `<clone>/a.ts`) is where a write through it lands.
+ */
+function realOf(path: string, depth = 0): string {
   const rest: string[] = [];
   for (let dir = path; ; dir = dirname(dir)) {
     try {
       return join(realpathSync(dir), ...rest);
     } catch {
+      const dangling = depth < 40 && isLink(dir);
+      if (dangling) return realOf(join(resolve(dirname(dir), readlinkSync(dir)), ...rest), depth + 1);
       if (dirname(dir) === dir) return path;
       rest.unshift(basename(dir));
     }
+  }
+}
+
+function isLink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
   }
 }
 
