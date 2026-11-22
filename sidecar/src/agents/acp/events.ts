@@ -36,6 +36,8 @@ export class AcpEventMapper {
   private readonly tools = new Map<string, AcpToolCall>();
   /** What the agent said of each call, its updates merged: a call is described again from them. */
   private readonly said = new Map<string, ToolCallFields>();
+  /** Each running process's folder and variables, by its id: the input written to it later runs there. */
+  private readonly processes = new Map<string, Pick<AcpToolCall, "cwd" | "env">>();
   private message: { id: string; text: string } | undefined;
   private thought: { id: string; text: string } | undefined;
   /** The context the session's last reading measured, and against which window. */
@@ -137,6 +139,7 @@ export class AcpEventMapper {
     const tool = describe(fields);
     this.tools.set(tool.id, tool);
     this.said.set(tool.id, fields);
+    this.followProcess(tool, fields);
     const events: ChatEvent[] = [{ type: "tool_call", tool_use_id: tool.id, name: tool.name, input: tool.input, parent_tool_use_id: null }];
     if (fields.status === "completed" || fields.status === "failed") events.push(this.result(tool, fields));
     return events;
@@ -151,9 +154,22 @@ export class AcpEventMapper {
     const merged: ToolCallFields = { ...this.said.get(fields.toolCallId), ...defined(fields), toolCallId: fields.toolCallId };
     this.said.set(fields.toolCallId, merged);
     Object.assign(known, { ...describe(merged), ended: known.ended });
+    this.followProcess(known, merged);
     if (fields.status !== "completed" && fields.status !== "failed") return [];
     if (known.ended) return [];
     return [this.result(known, fields)];
+  }
+
+  /** A process started is remembered by the id its output gives; input written to it gets its folder and variables. */
+  private followProcess(tool: AcpToolCall, fields: ToolCallFields): void {
+    if (tool.kind !== "execute") return;
+    const raw = record(fields.rawInput);
+    const started = stringField(record(fields.rawOutput), "processId");
+    if (started !== undefined && typeof raw.command === "string") this.processes.set(started, { cwd: tool.cwd, env: tool.env });
+    const writtenTo = stringField(raw, "processId");
+    const process = writtenTo === undefined ? undefined : this.processes.get(writtenTo);
+    if (process?.cwd !== undefined) tool.cwd ??= process.cwd;
+    if (process?.env !== undefined) tool.env ??= process.env;
   }
 
   private result(tool: AcpToolCall, fields: ToolCallFields): ChatEvent {
@@ -194,8 +210,13 @@ export function describe(fields: ToolCallFields): AcpToolCall {
   const kind = fields.kind ?? null;
   const title = fields.title ?? null;
   const raw = record(fields.rawInput);
-  const paths = [...(fields.locations ?? []).map((location) => location.path), ...diffs(fields.content).map((diff) => diff.path)];
-  const path = paths[0] ?? stringField(raw, "path", "file_path", "filePath");
+  const named = stringField(raw, "path", "file_path", "filePath");
+  const paths = [
+    ...(fields.locations ?? []).map((location) => location.path),
+    ...diffs(fields.content).map((diff) => diff.path),
+    ...(kind !== "execute" && named ? [named] : []),
+  ];
+  const path = paths[0];
   const base = { id: fields.toolCallId, kind, title, paths: [...new Set(paths)], ended: false };
   const mcp = title ? /^mcp_([\w-]+)\.([\w-]+)$/.exec(title) : null;
   if (mcp) return { ...base, name: `mcp__${mcp[1]}__${mcp[2]}`, input: raw, command: null };

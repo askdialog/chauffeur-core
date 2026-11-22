@@ -55,10 +55,12 @@ export function decide(tool: AcpToolCall, context: PermissionContext): Decision 
   if (command !== undefined) {
     if (runsGitWorktreeAdd(command)) return deny(WORKTREE_ADD_DENIAL);
     if (runsChauffeurAddRepo(command)) return deny(ADD_REPO_DENIAL);
-    // Where the process runs and the variables it is given (`GIT_WORK_TREE`…) count as the line's own.
+    // Where the process runs and the variables it is given (`GIT_WORK_TREE`…) hold for its whole line,
+    // as exported ones do.
     const from = tool.cwd ? resolve(context.cwd, tool.cwd) : context.cwd;
-    const assigned = Object.entries(tool.env ?? {}).map(([name, value]) => `${name}='${value.replaceAll("'", `'\\''`)}' `);
-    const intoClone = cloneCommandRefusal(assigned.join("") + command, from, context.clones);
+    const assigned = Object.entries(tool.env ?? {}).map(([name, value]) => ` ${name}='${value.replaceAll("'", `'\\''`)}'`);
+    const line = assigned.length > 0 ? `export${assigned.join("")}; ${command}` : command;
+    const intoClone = cloneCommandRefusal(line, from, context.clones);
     if (intoClone) return deny(intoClone);
   }
   const edits = tool.kind === "edit" || tool.kind === "delete" || tool.kind === "move";

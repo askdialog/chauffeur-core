@@ -95,6 +95,8 @@ group("decide", () => {
     expect(decide(process({ command: "git clean -fdx", env: { GIT_WORK_TREE: "/code/web", GIT_DIR: "/code/web/.git" } }), guarded).type).toBe("deny");
     expect(decide(process({ processId: "ab", text: "echo x > /code/web/a\n" }), guarded).type).toBe("deny");
     expect(decide(process({ processId: "ab", bytesBase64: Buffer.from("echo x > /code/web/a\n").toString("base64") }), guarded).type).toBe("deny");
+    // A process's variables hold for every command of its line, as an exported variable does.
+    expect(decide(process({ command: "true; git clean -fdx", env: { GIT_WORK_TREE: "/code/web", GIT_DIR: "/code/web/.git" } }), guarded).type).toBe("deny");
     // In the worktree, or reading the clone: as before.
     expect(decide(process({ command: "touch notes.md", cwd: "/w/web" }), guarded).type).toBe("allow");
     expect(decide(process({ command: "ls", cwd: "/code/web" }), guarded).type).toBe("allow");
@@ -111,6 +113,34 @@ group("decide", () => {
     expect(decide(mapper.tool("u2") as AcpToolCall, guarded).type).toBe("deny");
     // What the update leaves out stays.
     expect(mapper.tool("u2")?.title).toBe("Writing");
+  });
+
+  test("input written to a running process runs in that process's folder, with its variables", () => {
+    const guarded: PermissionContext = { ...context, mode: "bypass_permissions", clones: [{ clone: "/code/web", worktree: "/w/web" }] };
+    const mapper = new AcpEventMapper();
+    const start = (id: string, rawInput: Record<string, unknown>, processId: string) => {
+      mapper.map({ sessionUpdate: "tool_call", toolCallId: id, title: "Starting", kind: "execute", status: "pending", rawInput: rawInput as never });
+      mapper.map({ sessionUpdate: "tool_call_update", toolCallId: id, status: "completed", rawOutput: { processId, status: "running" } });
+    };
+    const write = (id: string, processId: string, text: string) => {
+      mapper.map({ sessionUpdate: "tool_call", toolCallId: id, title: "Writing", kind: "execute", status: "pending", rawInput: { processId, text } });
+      return decide(mapper.tool(id) as AcpToolCall, guarded).type;
+    };
+    start("s1", { command: "bash", cwd: "/code/web" }, "in-clone");
+    start("s2", { command: "bash", env: { GIT_WORK_TREE: "/code/web", GIT_DIR: "/code/web/.git" } }, "with-git-vars");
+    start("s3", { command: "bash", cwd: "/w/web" }, "in-worktree");
+    expect(write("w1", "in-clone", "touch notes.md\n")).toBe("deny");
+    expect(write("w2", "with-git-vars", "git clean -fdx\n")).toBe("deny");
+    expect(write("w3", "in-worktree", "touch notes.md\n")).toBe("allow");
+    expect(write("w4", "in-clone", "ls\n")).toBe("allow");
+  });
+
+  test("an edit whose file is only in its input is checked too", () => {
+    const guarded: PermissionContext = { ...context, mode: "bypass_permissions", clones: [{ clone: "/code/web", worktree: "/w/web" }] };
+    for (const name of ["path", "file_path", "filePath"]) {
+      const tool = describe({ toolCallId: "r", kind: "edit", title: "Editing", rawInput: { [name]: "/code/web/a.ts" } });
+      expect(decide(tool, guarded).type).toBe("deny");
+    }
   });
 
   test("worktrees and add-repo are refused whatever the mode", () => {
