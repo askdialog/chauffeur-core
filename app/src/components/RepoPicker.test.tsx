@@ -110,3 +110,56 @@ domTest("new workspace uses cached defaults, loads only requested pages and keep
     useApp.setState(before, true);
   }
 });
+
+domTest("a click toggles a repo in place: rows keep their order until the filter changes, and hovering never scrolls the list", import.meta.path, async ({ render, click, fill, until }) => {
+  const { CreateWorkspaceDialog } = await import("./CreateWorkspaceDialog");
+  const { client, loadRepos, useApp } = await import("@/state/app");
+  const before = useApp.getState();
+  useApp.setState({ repos: null, reposError: null, reposRevision: 0, reposSync: { refreshedAt: null, githubError: null }, createOpen: true, createRetry: null, models: [], loadout: [] });
+  const used = (name: string, at: string) => ({ ...repo(name), last_used: at });
+  const repos = [repo("chosen", true), used("first", "2026-11-22T10:00:00Z"), used("second", "2026-11-22T09:00:00Z"), used("third", "2026-11-22T08:00:00Z")];
+  const rpc = spyOn(client, "call").mockImplementation(async (method) => {
+    if (method === "repos.cached") return { repos };
+    if (method === "settings.get") return { workspaces: { github_org: "acme", branch_prefix: "test", github_login: "tester" }, linear: { enabled: false, start_tickets: false } };
+    if (method === "github.status") return {
+      git: true, git_install: "xcode", gh: "/fake/gh", own: false, version: "test", download_size: null,
+      account: "tester", organizations: ["acme"], organization: "acme", connecting: null,
+    } satisfies GithubStatus;
+    if (method === "repos.page") return page(repos);
+    throw new Error(`Unexpected RPC: ${method}`);
+  });
+  const order = () => [...document.querySelectorAll("[data-repo]")].map((row) => row.getAttribute("data-repo"));
+  const checked = (key: string) => document.querySelector(`[data-repo="${key}"]`)?.getAttribute("aria-selected");
+  try {
+    await act(async () => { await loadRepos(); });
+    await render(<CreateWorkspaceDialog />);
+    await click('[data-testid="add-repo"]');
+    await until(() => !!document.querySelector('[data-repo="third"]'));
+    expect(order()).toEqual(["chosen", "first", "second", "third"]);
+
+    const scrolled: string[] = [];
+    const scroll = spyOn(window.HTMLElement.prototype, "scrollIntoView").mockImplementation(function (this: HTMLElement) {
+      scrolled.push(this.getAttribute("data-repo") ?? "");
+    });
+    await act(async () => {
+      document.querySelector('[data-repo="third"]')?.dispatchEvent(new window.MouseEvent("mousemove", { bubbles: true }));
+    });
+    expect(scrolled).toEqual([]);
+    scroll.mockRestore();
+
+    await click('[data-repo="second"]');
+    expect(checked("second")).toBe("true");
+    expect(order()).toEqual(["chosen", "first", "second", "third"]);
+    await click('[data-repo="chosen"]');
+    expect(checked("chosen")).toBe("false");
+    expect(order()).toEqual(["chosen", "first", "second", "third"]);
+
+    await fill('[data-testid="repo-filter"]', "x");
+    await fill('[data-testid="repo-filter"]', "");
+    expect(order()).toEqual(["second", "first", "third", "chosen"]);
+  } finally {
+    await render(null);
+    rpc.mockRestore();
+    useApp.setState(before, true);
+  }
+});
