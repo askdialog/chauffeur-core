@@ -411,7 +411,7 @@ async fn workspace_trees(
     }
     let mut trees = BTreeMap::new();
     for (repo, clone) in clones {
-        let (_, reference) = repos.base(&clone).await;
+        let (_, reference) = repos.base(&clone, Some(&repo)).await;
         let mut checked = vec![setup::Tree { clone, reference }];
         checked.extend(branches.remove(&repo).unwrap_or_default());
         trees.insert(repo, checked);
@@ -918,7 +918,7 @@ impl<'a> Repos<'a> {
     }
 
     async fn read_refs(&self, clone: &Path) -> Refs {
-        let (base, target) = self.base(clone).await;
+        let (base, target) = self.base(clone, None).await;
         let heads = [
             "for-each-ref",
             "--format=%(refname:lstrip=2) %(objectname)",
@@ -971,8 +971,9 @@ impl<'a> Repos<'a> {
 
     /// The clone's default branch and the ref holding it: as the user set it for the repo, else
     /// as the base remote (a fork's parent, else `origin`) names it when it still has that branch,
-    /// else `main` or `master`, whichever it has; the remote's copy when there is one.
-    async fn base(&self, clone: &Path) -> (String, String) {
+    /// else `main` or `master`, whichever it has; the remote's copy when there is one. `repo`
+    /// names the clone's repo when the sessions did not meet it (Chauffeur's own).
+    async fn base(&self, clone: &Path, repo: Option<&str>) -> (String, String) {
         let remote = self.git.base_remote(clone).await;
         let has = |reference: String| async move {
             self.git
@@ -980,13 +981,15 @@ impl<'a> Repos<'a> {
                 .await
                 .then_some(reference)
         };
-        let set = self.names.get(clone).and_then(|name| {
-            let settings = self.d.settings.get();
-            settings
-                .repos
-                .get(crate::repos::repo_folder(name))
-                .and_then(|r| r.default_branch.clone())
-        });
+        let set = repo
+            .or(self.names.get(clone).map(String::as_str))
+            .and_then(|name| {
+                let settings = self.d.settings.get();
+                settings
+                    .repos
+                    .get(crate::repos::repo_folder(name))
+                    .and_then(|r| r.default_branch.clone())
+            });
         let named = self
             .git
             .run(

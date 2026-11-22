@@ -1964,12 +1964,42 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     git(&stale, &["switch", "-q", "-c", "feat/stale"]);
     commit(&stale, "work.txt", "work\n");
     session("stale", &stale, "feat/stale");
+    // dev: its base set to develop in the user's settings, which alone has a lockfile, and a
+    // clone of Chauffeur's own the sessions never ran in.
+    let dev = clone_repo(&root, "dev", &[]);
+    git(&dev, &["switch", "-q", "-c", "develop"]);
+    commit(&dev, "uv.lock", "lock\n");
+    git(&dev, &["push", "-q", "origin", "develop"]);
+    git(&dev, &["switch", "-q", "-c", "feat/dev", "main"]);
+    commit(&dev, "work.txt", "work\n");
+    session("dev", &dev, "feat/dev");
+    let own_dev = root.join("repos/dev");
+    let dev_origin = root.join("origin/dev.git");
+    git(
+        &root,
+        &[
+            "clone",
+            "-q",
+            dev_origin.to_str().unwrap(),
+            own_dev.to_str().unwrap(),
+        ],
+    );
+    let dev_url = "https://github.com/fixture/dev.git";
+    git(&own_dev, &["remote", "set-url", "origin", dev_url]);
+    git(
+        &own_dev,
+        &[
+            "config",
+            &format!("url.{}.insteadOf", dev_origin.display()),
+            dev_url,
+        ],
+    );
 
     let home = root.join("home");
     std::fs::create_dir_all(&home).unwrap();
     std::fs::write(
         home.join("settings.toml"),
-        "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46990\nlinear_enabled = false\n\n[repos]\npn = { env = { FOO = \"1\" } }\n\n[repos.mine.scripts]\nsetup = \"make mine\"\n",
+        "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46990\nlinear_enabled = false\n\n[repos]\npn = { env = { FOO = \"1\" } }\n\n[repos.mine.scripts]\nsetup = \"make mine\"\n\n[repos.dev]\ndefault_branch = \"develop\"\n",
     )
     .unwrap();
     let daemon = Daemon::open(Paths::new(
@@ -2001,6 +2031,7 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
         setups
     };
     let expected = [
+        ("dev".to_string(), "uv sync".to_string()),
         ("hist".to_string(), "poetry install".to_string()),
         ("pn".into(), "pnpm install".into()),
     ];
@@ -2044,6 +2075,7 @@ async fn a_repo_without_setup_gets_one_guessed_from_its_root_lockfiles() {
     };
     assert_eq!(setup("pn").as_deref(), Some("pnpm install"));
     assert_eq!(setup("hist").as_deref(), Some("poetry install"));
+    assert_eq!(setup("dev").as_deref(), Some("uv sync"));
     assert_eq!(setup("mine").as_deref(), Some("make mine"));
     for repo in ["committed", "br", "stale"] {
         assert_eq!(setup(repo), None, "{repo}");
