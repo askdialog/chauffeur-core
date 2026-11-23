@@ -134,24 +134,36 @@ pub async fn import(
             [project_key(path), project_key(&real(path))]
         })
         .collect();
-    let mut seen = BTreeSet::new();
+    // The project folder each session is read from, and its title there.
+    let mut seen: HashMap<String, (String, String)> = HashMap::new();
     for mut session in read {
         let Some(folder) = session.folder.clone() else {
             continue;
         };
         // Chauffeur's own chats are Claude Code sessions too, run through the Agent SDK (as other
-        // apps' are): only sessions of Claude Code itself, in a terminal or an editor, come; the
-        // most recent of a session kept in several folders.
+        // apps' are): only sessions of Claude Code itself, in a terminal or an editor, come.
         if real(&folder).starts_with(real(&d.paths.workspaces_dir))
             || workspaces.contains(&session.project)
             || session
                 .entrypoint
                 .as_deref()
                 .is_some_and(|e| e.starts_with("sdk"))
-            || !seen.insert(session.id.clone())
         {
             continue;
         }
+        // A session kept in several folders (resumed from a renamed one): its copy read first, the
+        // most recent.
+        if let Some((used, title)) = seen.get(&session.id) {
+            warnings.push(format!(
+                "“{title}” ({}) is kept in several folders of Claude Code's projects: read from {used}, its copy in {} left out.",
+                session.id, session.project
+            ));
+            continue;
+        }
+        seen.insert(
+            session.id.clone(),
+            (session.project.clone(), session.title.clone()),
+        );
         let mut plan = ClaudeCodeSessionPlan {
             id: session.id.clone(),
             title: session.title.clone(),

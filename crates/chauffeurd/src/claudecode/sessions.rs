@@ -63,7 +63,8 @@ pub struct Created {
 }
 
 /// The sessions of every folder of `projects` whose last message is at `cutoff` or later (all
-/// with none). A transcript changed before the cutoff is not read.
+/// with none), the most recent first. A transcript changed before the cutoff is not read. A session
+/// kept in several folders comes once per folder, by folder name when its copies end together.
 pub fn read_all(projects: &Path, cutoff: Option<&str>) -> Vec<Session> {
     let cutoff_time = cutoff
         .and_then(|c| chrono::DateTime::parse_from_rfc3339(c).ok())
@@ -118,6 +119,7 @@ pub fn read_all(projects: &Path, cutoff: Option<&str>) -> Vec<Session> {
         b.last_active
             .cmp(&a.last_active)
             .then_with(|| a.id.cmp(&b.id))
+            .then_with(|| a.project.cmp(&b.project))
     });
     sessions
 }
@@ -612,6 +614,32 @@ mod tests {
         };
         assert_eq!(ids(Some("2026-11-01T00:00:00.000Z")), ["new", "mid"]);
         assert_eq!(ids(None), ["new", "mid", "old"]);
+    }
+
+    #[test]
+    fn a_session_kept_in_several_folders_comes_once_per_folder_by_name_when_its_copies_end_together()
+     {
+        let dir = tempfile::tempdir().unwrap();
+        let copy = |folder: &str, stamp: &str| {
+            let folder = dir.path().join(folder);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(
+                folder.join("s.jsonl"),
+                format!(r#"{{"type":"user","cwd":"/code/web","timestamp":"{stamp}","message":{{"content":"x"}}}}"#),
+            )
+            .unwrap();
+        };
+        for folder in ["-e", "-c", "-a", "-d", "-b"] {
+            copy(folder, "2026-11-05T00:00:00.000Z");
+        }
+        copy("-z", "2026-11-06T00:00:00.000Z");
+        for _ in 0..5 {
+            let folders: Vec<_> = read_all(dir.path(), None)
+                .into_iter()
+                .map(|s| s.project)
+                .collect();
+            assert_eq!(folders, ["-z", "-a", "-b", "-c", "-d", "-e"]);
+        }
     }
 
     #[test]
