@@ -224,7 +224,10 @@ export class ClaudeSession implements AgentSession {
         abortController: this.abortController,
         stderr: (data) => this.host.log.debug(`claude: ${data.trimEnd()}`),
         jevPluginDir: this.deps.jevPluginDir ?? (() => jevPluginDir()),
-        repoTools: design ? undefined : claudeRepoTools(this.host, this.requests, { delegate: this.params.delegate }),
+        // An exploration's agent has no CLI: `session_ensure` is its `chauffeur session ensure`.
+        repoTools: design
+          ? undefined
+          : claudeRepoTools(this.host, this.requests, { delegate: this.params.delegate, sessionEnsure: this.params.read_only }),
       });
       options.spawnClaudeCodeProcess = this.process.spawn;
       this.agentEnv = options.env ?? {};

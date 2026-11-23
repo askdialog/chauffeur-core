@@ -1,7 +1,7 @@
 // Claude's side of Chauffeur's tools: an in-process MCP server, `chauffeur`, whose tools are always
 // loaded (never behind tool search) and run in the sidecar: the repo tools (story 48), `update_plan`
 // (the agent's plan, counted into the chat's progress) and, but in a delegated chat, `delegate`
-// (story 49). The chat allows them itself (options.ts, requests.ts):
+// (story 49), and in an exploration `session_ensure` (session-tool.ts). The chat allows them itself (options.ts, requests.ts):
 // `add_repo` asks the user on its own, whatever the permission mode.
 
 import { createSdkMcpServer, type McpSdkServerConfigWithInstance, tool } from "@anthropic-ai/claude-agent-sdk";
@@ -9,6 +9,7 @@ import { z } from "zod";
 import { SIDECAR_VERSION } from "../../version.ts";
 import { DELEGATE, DELEGATE_AGENTS, DELEGATE_DESCRIPTION, DELEGATE_INPUT, DELEGATE_TIERS, delegate, type DelegateHost } from "../delegate-tool.ts";
 import type { PendingRequests } from "../pending.ts";
+import { SESSION_ENSURE, SESSION_ENSURE_DESCRIPTION, SESSION_ENSURE_NAME, sessionEnsure, type SessionToolHost } from "../session-tool.ts";
 import { PLAN_STATUSES, recordPlan, UPDATE_PLAN, UPDATE_PLAN_DESCRIPTION, UPDATE_PLAN_STEPS } from "../plan-tool.ts";
 import {
   ADD_REPO,
@@ -30,9 +31,9 @@ import {
 export const REPO_TOOLS_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function claudeRepoTools(
-  host: RepoToolsHost & DelegateHost,
+  host: RepoToolsHost & DelegateHost & SessionToolHost,
   requests: PendingRequests,
-  options: { delegate?: boolean } = {},
+  options: { delegate?: boolean; sessionEnsure?: boolean } = {},
 ): McpSdkServerConfigWithInstance {
   const delegateTool = tool(
     DELEGATE,
@@ -48,6 +49,13 @@ export function claudeRepoTools(
     },
     async (args, extra) => callResult(await delegate(host, args, { signal: signalOf(extra), toolUseId: toolUseIdOf(extra) })),
     { annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } },
+  );
+  const sessionTool = tool(
+    SESSION_ENSURE,
+    SESSION_ENSURE_DESCRIPTION,
+    { name: z.string().describe(SESSION_ENSURE_NAME) },
+    async (args, extra) => callResult(await sessionEnsure(host, args, { signal: signalOf(extra) })),
+    { annotations: { readOnlyHint: true, openWorldHint: false } },
   );
   return createSdkMcpServer({
     name: CHAUFFEUR_TOOLS,
@@ -70,6 +78,7 @@ export function claudeRepoTools(
         { annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false } },
       ),
       ...(options.delegate ? [delegateTool] : []),
+      ...(options.sessionEnsure ? [sessionTool] : []),
       tool(
         UPDATE_PLAN,
         UPDATE_PLAN_DESCRIPTION,

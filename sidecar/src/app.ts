@@ -47,6 +47,7 @@ export function createSidecar(options: { agents: Agent[]; write: (line: string) 
       },
       listRepos: (chatId) => request("tool.list_repos", { chat_id: chatId }),
       addRepo: (chatId, repo) => request("tool.add_repo", { chat_id: chatId, repo }),
+      sessionEnsure: (chatId, name) => request("tool.session_ensure", { chat_id: chatId, name }),
       delegate: (params) => request("tool.delegate", params),
       delegateWait: (chatId, child) => request("tool.delegate_wait", { chat_id: chatId, child }),
       delegateStop: async (chatId, child) => {

@@ -22902,6 +22902,96 @@ login = "true"
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_explorations_agent_ensures_its_workspaces_sessions_through_its_tool_asked_in_its_chat()
+{
+    use chauffeur_protocol::model::ChatKind;
+    use chauffeurd::Error;
+    let f = fixture_with(
+        49940,
+        r#"
+[repos.repo-a.sessions.svc]
+label = "Service (staging)"
+check = "false"
+login = "true"
+
+[sessions.everywhere]
+label = "Always"
+check = "true"
+login = "true"
+"#,
+    );
+    let d = &f.daemon;
+    let log = f.root.join("sidecar.log");
+    d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            repos: vec!["repo-a".into()],
+            explore: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let chat = d
+        .chats
+        .create(CreateChatParams {
+            workspace: ws.id.clone(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let holds = d
+        .chats
+        .tool_session_ensure(&chat.id, "everywhere")
+        .await
+        .unwrap();
+    assert_eq!(holds.state, LoginSessionState::Holds);
+    assert!(session_requests(d, &chat.id).is_empty(), "nothing asked");
+
+    // Expired: the user is asked in the agent's own chat; declined, the agent is told to stop.
+    let waiting = {
+        let d = d.clone();
+        let chat = chat.id.clone();
+        tokio::spawn(async move { d.chats.tool_session_ensure(&chat, "svc").await })
+    };
+    let request = until_requested(d, &chat.id, 1).await;
+    d.chats
+        .respond(&chat.id, &request, RequestResponse::Deny { message: None })
+        .await
+        .unwrap();
+    let declined = tokio::time::timeout(Duration::from_secs(10), waiting)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap_err();
+    assert!(declined.to_string().contains("declined"), "{declined}");
+
+    // Only the sessions its workspace declares, and never from a design chat.
+    let unknown = d
+        .chats
+        .tool_session_ensure(&chat.id, "elsewhere")
+        .await
+        .unwrap_err();
+    assert!(
+        unknown.to_string().contains("session elsewhere"),
+        "{unknown}"
+    );
+    let design = d
+        .chats
+        .create(CreateChatParams {
+            workspace: ws.id.clone(),
+            kind: Some(ChatKind::Design),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let refused = d.chats.tool_session_ensure(&design.id, "everywhere").await;
+    assert!(matches!(refused, Err(Error::Conflict(_))), "{refused:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn session_notifications_are_off_until_turned_on_and_leave_the_sound_alone() {
     use chauffeur_protocol::client::{NotificationsUpdate, SettingsUpdate};
     let f = fixture(49950);

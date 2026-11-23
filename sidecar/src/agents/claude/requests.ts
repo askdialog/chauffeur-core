@@ -6,6 +6,7 @@ import type { JsonValue, Question, RequestAgent } from "../../protocol.ts";
 import type { Outcome, PendingRequests } from "../pending.ts";
 import { DELEGATE_TOOL } from "../delegate-tool.ts";
 import { ADD_REPO_TOOL, LIST_REPOS_TOOL, UPDATE_PLAN_TOOL } from "../repo-tools.ts";
+import { SESSION_ENSURE_TOOL } from "../session-tool.ts";
 import { type AlwaysAllow, AlwaysAllowed, alwaysAllow, ruleCovers, ruleText } from "./always.ts";
 
 export const ASK_USER_QUESTION = "AskUserQuestion";
@@ -30,8 +31,10 @@ export function claudeCanUseTool(
     if (refusal !== undefined) return { behavior: "deny", message: refusal };
     asking?.(options.toolUseID);
     // Chauffeur's tools: `add_repo` puts the repo to the user itself (repo-tools.ts), and a
-    // delegated chat asks for what its own agent does (delegate-tool.ts).
-    if (toolName === LIST_REPOS_TOOL || toolName === ADD_REPO_TOOL || toolName === DELEGATE_TOOL || toolName === UPDATE_PLAN_TOOL) {
+    // delegated chat asks for what its own agent does (delegate-tool.ts), and `session_ensure`
+    // asks the user to log in through the daemon (session-tool.ts).
+    const chauffeurTool = [LIST_REPOS_TOOL, ADD_REPO_TOOL, DELEGATE_TOOL, UPDATE_PLAN_TOOL, SESSION_ENSURE_TOOL];
+    if (chauffeurTool.includes(toolName)) {
       return { behavior: "allow", updatedInput: input };
     }
     // A background subagent's request outlives an interrupt, which ends the turn only (Claude

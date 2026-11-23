@@ -18,6 +18,7 @@ import type {
   ToolDelegateResult,
   ToolDelegateStarted,
   ToolListReposResult,
+  LoginSessionInfo,
 } from "../../src/protocol.ts";
 import { AsyncQueue } from "../../src/util/async-queue.ts";
 
@@ -73,6 +74,25 @@ export class FakeHost implements SessionHost {
     if (this.addRepoError) throw this.addRepoError;
     this.added.push(repo);
     return { path: `/workspaces/w/${repo}`, branch: "tester/w", setup: true };
+  }
+
+  /** The sessions asked for, and what the daemon answers (a declined login: an error). */
+  readonly ensured: string[] = [];
+  ensureError: Error | undefined;
+
+  async sessionEnsure(name: string): Promise<LoginSessionInfo> {
+    this.ensured.push(name);
+    if (this.ensureError) throw this.ensureError;
+    return {
+      name,
+      label: "AWS SSO (staging)",
+      repo: "web",
+      state: "holds",
+      expires_at: "2030-01-01T00:00:00+00:00",
+      checked_at: "2026-11-23T10:00:00Z",
+      logging_in: false,
+      remote_login: false,
+    };
   }
 
   /** The tasks given to subagents, and the subagents interrupted. */

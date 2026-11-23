@@ -36,7 +36,8 @@ pub struct WorkspaceConfig<'a> {
     pub parent_slug: Option<&'a str>,
     /// Absolute path of the `chauffeur` CLI, used in hook commands.
     pub cli: &'a Path,
-    /// An exploration: read-only, and without the CLI (its agents have nothing to ask the daemon).
+    /// An exploration: read-only, and without the CLI (its agents reach the daemon only through
+    /// the sidecar's tools: `add_repo`, `delegate`, `session_ensure`).
     pub explore: bool,
 }
 
@@ -143,6 +144,8 @@ This workspace is an exploration, read-only: each repo folder is a detached chec
 When the question needs a repo this exploration lacks, propose it with the `add_repo` tool (`list_repos` lists the organization's), saying why: the user answers Add or Not now. Never clone a repo yourself; without these tools, ask the user to add the repo from Chauffeur.
 
 To have the other agent (Codex from Claude, Claude from Codex) look into something here, use the `delegate` tool: it starts a delegated chat the user sees, read-only as this one, and returns its answer.
+
+This exploration has no `chauffeur` command. When the work needs a login that the instructions below have you check with `chauffeur session ensure <name>` (an AWS SSO session, an internal CLI's), call the `session_ensure` tool with that name instead: it returns at once while the session holds, otherwise asks the user to log in, in this chat, and waits. When it fails, it says why (declined, not answered within 15 minutes, or an error): stop what needed the session and report that reason. Without this tool, ask the user to log in from Chauffeur's Processes panel.
 "#,
         );
         return out;
@@ -1156,6 +1159,24 @@ mod tests {
                 "{file}"
             );
         }
+    }
+
+    #[test]
+    fn an_explorations_agents_ensure_a_login_with_the_tool_and_a_workspaces_with_the_cli() {
+        let root = tempfile::tempdir().unwrap();
+        let mut exploration = config(root.path(), &[]);
+        exploration.explore = true;
+        write(&exploration).unwrap();
+        for file in ["CLAUDE.md", "AGENTS.md"] {
+            let text = std::fs::read_to_string(root.path().join(file)).unwrap();
+            assert!(text.contains("call the `session_ensure` tool"), "{file}");
+            assert!(text.contains("has no `chauffeur` command"), "{file}");
+        }
+
+        let workspace = tempfile::tempdir().unwrap();
+        write(&config(workspace.path(), &[])).unwrap();
+        let text = std::fs::read_to_string(workspace.path().join("CLAUDE.md")).unwrap();
+        assert!(!text.contains("session_ensure"));
     }
 
     #[test]

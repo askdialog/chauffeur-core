@@ -367,6 +367,7 @@ import type { ToolDelegateParams } from "./ToolDelegateParams";
 import type { ToolDelegateResult } from "./ToolDelegateResult";
 import type { ToolDelegateStarted } from "./ToolDelegateStarted";
 import type { ToolListReposResult } from "./ToolListReposResult";
+import type { ToolSessionEnsureParams } from "./ToolSessionEnsureParams";
 import type { TransferInfo } from "./TransferInfo";
 import type { TransferSizeEstimate } from "./TransferSizeEstimate";
 import type { UnsubscribeParams } from "./UnsubscribeParams";
@@ -810,6 +811,7 @@ export type DaemonHookMethods = {
   "hook.worktree_observed": [WorktreeObservedParams, Empty];
   "tool.list_repos": [ToolChatParams, ToolListReposResult];
   "tool.add_repo": [ToolAddRepoParams, ToolAddRepoResult];
+  "tool.session_ensure": [ToolSessionEnsureParams, LoginSessionInfo];
   "tool.delegate": [ToolDelegateParams, ToolDelegateStarted];
   "tool.delegate_wait": [ToolDelegateChildParams, ToolDelegateResult];
   "tool.delegate_stop": [ToolDelegateChildParams, Empty];

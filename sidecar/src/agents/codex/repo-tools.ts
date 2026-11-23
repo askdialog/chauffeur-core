@@ -1,11 +1,12 @@
-// Codex's side of Chauffeur's tools: the repo tools (story 48) and, but in a delegated chat,
-// `delegate` (story 49), dynamic tools in the `chauffeur` namespace given at `thread/start`
+// Codex's side of Chauffeur's tools: the repo tools (story 48), but in a delegated chat
+// `delegate` (story 49), and in an exploration `session_ensure` (session-tool.ts), dynamic tools in the `chauffeur` namespace given at `thread/start`
 // (Codex's experimental API) and kept by the thread when resumed. Codex calls them with
 // `item/tool/call`, answered once the tool is done (for `add_repo`, once the user answered; for
 // `delegate`, once the delegated chat did).
 
 import { DELEGATE, DELEGATE_DESCRIPTION, DELEGATE_SCHEMA, delegate, type DelegateHost } from "../delegate-tool.ts";
 import type { PendingRequests } from "../pending.ts";
+import { SESSION_ENSURE, SESSION_ENSURE_DESCRIPTION, SESSION_ENSURE_SCHEMA, sessionEnsure, type SessionToolHost } from "../session-tool.ts";
 import {
   type AddRepoOptions,
   ADD_REPO,
@@ -23,8 +24,8 @@ import {
 } from "../repo-tools.ts";
 import type { DynamicToolCallParams, DynamicToolCallResponse, DynamicToolSpec } from "./protocol.ts";
 
-/** The tools a thread starts with: `delegate` but in a delegated chat. */
-export function codexChauffeurTools(options: { delegate?: boolean } = {}): DynamicToolSpec[] {
+/** The tools a thread starts with: `delegate` but in a delegated chat, `session_ensure` in an exploration. */
+export function codexChauffeurTools(options: { delegate?: boolean; sessionEnsure?: boolean } = {}): DynamicToolSpec[] {
   return [
     {
       type: "namespace",
@@ -35,6 +36,9 @@ export function codexChauffeurTools(options: { delegate?: boolean } = {}): Dynam
         { type: "function", name: ADD_REPO, description: ADD_REPO_DESCRIPTION, inputSchema: ADD_REPO_SCHEMA },
         ...(options.delegate
           ? [{ type: "function" as const, name: DELEGATE, description: DELEGATE_DESCRIPTION, inputSchema: DELEGATE_SCHEMA }]
+          : []),
+        ...(options.sessionEnsure
+          ? [{ type: "function" as const, name: SESSION_ENSURE, description: SESSION_ENSURE_DESCRIPTION, inputSchema: SESSION_ENSURE_SCHEMA }]
           : []),
       ],
     },
@@ -47,7 +51,7 @@ export function codexChauffeurTools(options: { delegate?: boolean } = {}): Dynam
  */
 export async function codexToolCall(
   params: DynamicToolCallParams,
-  host: RepoToolsHost & DelegateHost,
+  host: RepoToolsHost & DelegateHost & SessionToolHost,
   requests: PendingRequests,
   options: AddRepoOptions & { detach?: AbortSignal } = {},
 ): Promise<DynamicToolCallResponse> {
@@ -55,6 +59,7 @@ export async function codexToolCall(
   if (params.namespace !== CHAUFFEUR_TOOLS) answer = { text: `Chauffeur has no tool ${params.tool}.`, error: true };
   else if (params.tool === LIST_REPOS) answer = await listRepos(host);
   else if (params.tool === ADD_REPO) answer = await addRepo(host, requests, params.arguments, options);
+  else if (params.tool === SESSION_ENSURE) answer = await sessionEnsure(host, params.arguments, { signal: options.signal });
   else if (params.tool === DELEGATE) {
     answer = await delegate(host, params.arguments, { signal: options.signal, detach: options.detach, toolUseId: params.callId });
   } else answer = { text: `Chauffeur has no tool ${params.tool}.`, error: true };

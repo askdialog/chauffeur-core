@@ -515,8 +515,10 @@ export class CodexSession implements AgentSession {
       ...(this.params.fast ? { serviceTier: FAST_SERVICE_TIER } : {}),
       ...(instructions ? { developerInstructions: instructions } : {}),
     };
-    // A design chat adds no repo and delegates nothing: no Chauffeur tools.
-    this.threadSettings = { ...common, dynamicTools: design ? [] : codexChauffeurTools({ delegate: this.params.delegate }) };
+    // A design chat adds no repo and delegates nothing: no Chauffeur tools. An exploration's agent
+    // has no CLI: `session_ensure` is its `chauffeur session ensure`.
+    const tools = { delegate: this.params.delegate, sessionEnsure: this.params.read_only };
+    this.threadSettings = { ...common, dynamicTools: design ? [] : codexChauffeurTools(tools) };
     const response = this.params.resume_session_id
       ? await server.request("thread/resume", { threadId: this.params.resume_session_id, excludeTurns: true, ...common } satisfies ThreadResumeParams)
       : await server.request("thread/start", this.threadSettings);

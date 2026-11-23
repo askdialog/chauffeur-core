@@ -35,5 +35,6 @@ Decided with Justin 2026-11-18:
 - A `check` must test the session itself, not credentials derived from it and cached (the AWS CLI answers `sts get-caller-identity` from a role's cached keys after the SSO session ended). Each repo writes its own; Chauffeur runs `check` at most once a minute per session and workspace, and on demand.
 - `login` runs with no terminal: it must not wait for keyboard input. One that does is stopped after 10 minutes, and the request says so.
 - The mobile companion gains the request's card (log in, decline, the printed code, the link opened in the phone's browser) and the `sessions` push preference; the relay gains the push kind. The phone may call `session.login` for `login_remote` only.
+- An exploration's agent has no CLI: it reaches `session.ensure` through its `session_ensure` tool instead ([session-ensure-tool-in-explorations](session-ensure-tool-in-explorations.md), 2026-11-23).
 - Dialog's repos declare their sessions (AWS SSO per profile, the Dialog CLI per environment) in their own `.chauffeur/settings.toml`, and their agent instructions say to run `chauffeur session ensure` before work that needs one. Nothing of this is in Core.
 - Not done yet: waking the Mac for a routine, renewing a session before it ends, and sessions a user shares with colleagues.
