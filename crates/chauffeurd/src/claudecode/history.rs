@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use chauffeur_protocol::claudecode::ClaudeCodeHistoryPlan;
 use chauffeur_protocol::client::CreateWorkspaceParams;
-use chauffeur_protocol::model::WorkspaceState;
 
 use super::copy::Report;
 use super::sessions::Session;
@@ -20,12 +19,7 @@ const EXPLORATION: &str = "claudecode_history:";
 /// The history exploration an earlier import made for `repo`, while it is ready: one archived
 /// since gets a new one.
 pub(super) fn exploration(d: &Daemon, repo: &str) -> Result<Option<WorkspaceRow>> {
-    let Some(id) = d.store.kv_get(&format!("{EXPLORATION}{repo}"))? else {
-        return Ok(None);
-    };
-    Ok(d.store
-        .find_workspace(&id)?
-        .filter(|row| row.state == WorkspaceState::Ready))
+    super::ready_workspace(d, &format!("{EXPLORATION}{repo}"))
 }
 
 /// Imports each history's sessions into its exploration, made when the repo has none ready, and

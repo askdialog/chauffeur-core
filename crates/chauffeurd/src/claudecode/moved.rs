@@ -102,11 +102,8 @@ pub(super) async fn move_out(
         }
     }
     // Where it is, as git says.
-    let back_on = match git
-        .run(folder, &["symbolic-ref", "-q", "--short", "HEAD"])
-        .await
-    {
-        Ok(branch) if !branch.is_empty() => branch,
+    let back_on = match git.current_branch(folder).await {
+        Ok(Some(branch)) => branch,
         _ => {
             let commit = git.run(folder, &["rev-parse", "--short", "HEAD"]).await?;
             format!("{commit}, detached")

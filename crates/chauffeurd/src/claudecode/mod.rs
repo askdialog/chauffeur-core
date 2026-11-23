@@ -24,8 +24,9 @@ use chauffeur_protocol::claudecode::{
     ClaudeCodeOutcome, ClaudeCodeRelease, ClaudeCodeSessionPlan, ClaudeCodeWorkspaceKind,
     ClaudeCodeWorkspacePlan,
 };
+use chauffeur_protocol::model::WorkspaceState;
 
-use crate::conductor::{reference, remote_of};
+use crate::conductor::{reference, remote_of, same_folder};
 use crate::git::Git;
 use crate::settings::expand_home;
 use crate::worker_claude_config::Locations;
@@ -215,22 +216,20 @@ pub async fn import(
         if let Some((row, record)) = parent {
             plan.lands_in = Some(row.slug.clone());
             earlier_parents.push((Some(session.id.clone()), row, record));
-            plans.push(plan);
-            found.insert(session.id.clone(), session);
-            continue;
+        } else {
+            placed.push(place::Session {
+                id: session.id.clone(),
+                title: session.title.clone(),
+                last_active: session.last_active.clone(),
+                repo,
+                live: plan
+                    .branches
+                    .iter()
+                    .filter(|b| b.live)
+                    .map(|b| (b.repo.clone(), b.branch.clone()))
+                    .collect(),
+            });
         }
-        placed.push(place::Session {
-            id: session.id.clone(),
-            title: session.title.clone(),
-            last_active: session.last_active.clone(),
-            repo,
-            live: plan
-                .branches
-                .iter()
-                .filter(|b| b.live)
-                .map(|b| (b.repo.clone(), b.branch.clone()))
-                .collect(),
-        });
         plans.push(plan);
         found.insert(session.id.clone(), session);
     }
@@ -250,7 +249,7 @@ pub async fn import(
     let mut changed: BTreeMap<String, PathBuf> = BTreeMap::new();
     let mut bases = HashMap::new();
     for repo in &touched {
-        for clone in repos.clones.get(repo).cloned().unwrap_or_default() {
+        for clone in repos.clones_of(repo) {
             let base = repos.refs(&clone).await.base.clone();
             if repos.default_has_changes(&clone, &base).await {
                 match changed.get(repo) {
@@ -316,7 +315,7 @@ pub async fn import(
             continue;
         };
         // An earlier import's workspace on the branch: only the repos it lacks.
-        let existing = branches::existing(d, workspace, branch)?;
+        let existing = branches::existing_in(d, &workspace.repos, branch)?;
         for repo in &branches::missing_repos(d, workspace, branch, existing.as_ref())? {
             let clone = repos.source(repo, branch).await;
             let (chauffeur, adopt) = chosen_clone(d, &mut chosen, repo, clone.as_ref());
@@ -327,27 +326,17 @@ pub async fn import(
                 .holders(repo, branch)
                 .await
                 .into_iter()
-                .filter(|h| {
-                    clone
-                        .as_ref()
-                        .is_some_and(|c| crate::conductor::same_folder(c, &h.clone))
-                })
+                .filter(|h| clone.as_ref().is_some_and(|c| same_folder(c, &h.clone)))
                 .collect();
-            let released = chauffeur.as_ref().is_some_and(|c| {
-                clone
-                    .as_ref()
-                    .is_some_and(|u| crate::conductor::same_folder(c, u))
-            });
+            let released = chauffeur
+                .as_ref()
+                .is_some_and(|c| clone.as_ref().is_some_and(|u| same_folder(c, u)));
             // Where Claude Code still runs, nothing is released: the import refuses that branch.
-            let running = |h: &&Holder| {
-                let folder = real(Path::new(&h.release.folder));
-                running_folders.iter().any(|r| r.starts_with(&folder))
-            };
             if released {
                 releases.extend(
                     holders
                         .iter()
-                        .filter(|h| !running(h))
+                        .filter(|h| !runs_in(&running_folders, &h.release.folder))
                         .map(|h| h.release.clone()),
                 );
             }
@@ -387,12 +376,7 @@ pub async fn import(
     // Every repo whose sessions the run imports, into a new workspace or an earlier one's.
     let user_clones: BTreeMap<String, Vec<PathBuf>> = touched
         .iter()
-        .map(|repo| {
-            (
-                repo.clone(),
-                repos.clones.get(repo).cloned().unwrap_or_default(),
-            )
-        })
+        .map(|repo| (repo.clone(), repos.clones_of(repo)))
         .collect();
     let state = locations
         .as_ref()
@@ -406,7 +390,7 @@ pub async fn import(
         for workspace in &mut plan.workspaces {
             if let Some(branch) = workspace.branch.clone() {
                 workspace.workspace =
-                    branches::existing(d, workspace, &branch)?.map(|row| row.slug);
+                    branches::existing_in(d, &workspace.repos, &branch)?.map(|row| row.slug);
             } else if workspace.kind == ClaudeCodeWorkspaceKind::Changes
                 && let Some(repo) = workspace.repos.first()
             {
@@ -429,7 +413,7 @@ pub async fn import(
         for (folder, done) in std::mem::take(&mut report.moved) {
             if let Some(release) = releases
                 .iter_mut()
-                .find(|r| crate::conductor::same_folder(Path::new(&r.folder), &folder))
+                .find(|r| same_folder(Path::new(&r.folder), &folder))
             {
                 release.moved = Some(done);
             }
@@ -528,34 +512,38 @@ fn with_earlier_parent(
         }
         if branches::existing_in(d, &child.repos, &child.branch)?.is_none() {
             children.push(ClaudeCodeWorkspacePlan {
-                name: child.branch.clone(),
-                kind: ClaudeCodeWorkspaceKind::Branch,
                 branch: Some(child.branch.clone()),
-                repos: child.repos.clone(),
                 parent: Some(row.slug.clone()),
-                sessions: Vec::new(),
-                changes_from: Vec::new(),
-                outcome: ClaudeCodeOutcome::Import,
-                reason: None,
-                workspace: None,
+                ..place::new_workspace(
+                    child.branch.clone(),
+                    ClaudeCodeWorkspaceKind::Branch,
+                    child.repos.clone(),
+                )
             });
         }
     }
     let parent = ClaudeCodeWorkspacePlan {
-        name: row.slug.clone(),
-        kind: ClaudeCodeWorkspaceKind::Parent,
-        branch: None,
-        repos: vec![record.repo.clone()],
-        parent: None,
         sessions: session.into_iter().collect(),
-        changes_from: Vec::new(),
-        outcome: ClaudeCodeOutcome::Import,
-        reason: None,
         workspace: Some(row.slug.clone()),
+        ..place::new_workspace(
+            row.slug.clone(),
+            ClaudeCodeWorkspaceKind::Parent,
+            vec![record.repo.clone()],
+        )
     };
     plan.workspaces.insert(0, parent);
     plan.workspaces.extend(children);
     Ok(())
+}
+
+/// The workspace whose id the `kv` record `key` holds, while it is ready.
+fn ready_workspace(d: &Daemon, key: &str) -> Result<Option<crate::store::WorkspaceRow>> {
+    let Some(id) = d.store.kv_get(key)? else {
+        return Ok(None);
+    };
+    Ok(d.store
+        .find_workspace(&id)?
+        .filter(|row| row.state == WorkspaceState::Ready))
 }
 
 /// Chauffeur's clone of `repo` for the whole run: its own, else the user's chosen for it earlier
@@ -585,6 +573,12 @@ pub(super) struct Holder {
     pub(super) clone: PathBuf,
     /// Its folder is gone: git keeps it only in the clone's `.git`.
     pub(super) gone: bool,
+}
+
+/// Claude Code still runs in `folder` or below it.
+fn runs_in(running: &[PathBuf], folder: &str) -> bool {
+    let folder = real(Path::new(folder));
+    running.iter().any(|r| r.starts_with(&folder))
 }
 
 /// Under the system's temporary folders (`/tmp`, `$TMPDIR`), where cleanups delete files.
@@ -781,13 +775,7 @@ impl<'a> Repos<'a> {
                 None
             }
         };
-        let branch = self
-            .git
-            .run(&top, &["symbolic-ref", "-q", "--short", "HEAD"])
-            .await
-            .ok()
-            .map(|b| b.trim().to_string())
-            .filter(|b| !b.is_empty());
+        let branch = self.git.current_branch(&top).await.ok().flatten();
         Some(Checkout {
             top,
             clone,
@@ -1009,7 +997,7 @@ impl<'a> Repos<'a> {
         }
         // Squash-merged: a merged PR from the branch into the default branch whose head is its
         // tip or after it.
-        let Some(heads) = self.merged_heads(clone, branch).await else {
+        let Some(heads) = self.merged_heads(clone, branch, &base).await else {
             self.warnings.push(format!(
                 "Could not ask whether {branch} is merged: it is counted as live."
             ));
@@ -1032,33 +1020,17 @@ impl<'a> Repos<'a> {
     }
 
     /// The (head, base) of the merged PRs from `branch`: on GitHub from the repo's recent merged
-    /// PRs, read once (`MERGED_PRS`); on GitLab, asked for that branch.
-    async fn merged_heads(&mut self, clone: &Path, branch: &str) -> Option<Vec<(String, String)>> {
+    /// PRs, read once (`MERGED_PRS`); on GitLab, asked for that branch, `base` (the clone's default
+    /// branch) standing for a PR that names none.
+    async fn merged_heads(
+        &mut self,
+        clone: &Path,
+        branch: &str,
+        base: &str,
+    ) -> Option<Vec<(String, String)>> {
         let forge = self.d.settings.get().forge;
         if forge == chauffeur_protocol::client::Forge::Gitlab {
-            let prs = crate::prs::pr_list(
-                forge,
-                &self.d.shell_env,
-                clone,
-                branch,
-                "merged",
-                "headRefOid,baseRefName",
-            )
-            .await?;
-            let base = self.refs(clone).await.base.clone();
-            return Some(
-                prs.iter()
-                    .filter_map(|pr| {
-                        let head = pr["headRefOid"].as_str()?.to_string();
-                        Some((
-                            head,
-                            pr["baseRefName"]
-                                .as_str()
-                                .map_or_else(|| base.clone(), String::from),
-                        ))
-                    })
-                    .collect(),
-            );
+            return self.merged_from(forge, clone, branch, Some(base)).await;
         }
         if !self.merged.contains_key(clone) {
             let heads = crate::prs::merged_heads(&self.d.shell_env, clone, MERGED_PRS).await;
@@ -1072,6 +1044,18 @@ impl<'a> Repos<'a> {
         if heads.values().map(Vec::len).sum::<usize>() < MERGED_PRS as usize {
             return Some(Vec::new());
         }
+        self.merged_from(forge, clone, branch, None).await
+    }
+
+    /// The merged PRs from `branch`, asked for by name: (head, base), `base` standing for one
+    /// that names none (dropped without it).
+    async fn merged_from(
+        &self,
+        forge: chauffeur_protocol::client::Forge,
+        clone: &Path,
+        branch: &str,
+        base: Option<&str>,
+    ) -> Option<Vec<(String, String)>> {
         let prs = crate::prs::pr_list(
             forge,
             &self.d.shell_env,
@@ -1086,7 +1070,7 @@ impl<'a> Repos<'a> {
                 .filter_map(|pr| {
                     Some((
                         pr["headRefOid"].as_str()?.to_string(),
-                        pr["baseRefName"].as_str()?.to_string(),
+                        pr["baseRefName"].as_str().or(base)?.to_string(),
                     ))
                 })
                 .collect(),
@@ -1215,11 +1199,11 @@ impl<'a> Repos<'a> {
 
     /// The clone is on its default branch with uncommitted changes.
     async fn default_has_changes(&self, clone: &Path, base: &str) -> bool {
-        let on = self
-            .git
-            .run(clone, &["symbolic-ref", "-q", "--short", "HEAD"])
-            .await;
-        on.is_ok_and(|b| b.trim() == base) && self.has_changes(clone).await
+        self.git
+            .current_branch(clone)
+            .await
+            .is_ok_and(|b| b.as_deref() == Some(base))
+            && self.has_changes(clone).await
     }
 
     /// Uncommitted changes, untracked files included, read without refreshing the index.
@@ -1230,12 +1214,17 @@ impl<'a> Repos<'a> {
             .is_ok_and(|out| !out.trim().is_empty())
     }
 
+    /// The user's clones of `repo`, in the order met.
+    fn clones_of(&self, repo: &str) -> Vec<PathBuf> {
+        self.clones.get(repo).cloned().unwrap_or_default()
+    }
+
     /// The checkouts of `branch` in the user's clones of `repo` (the clone itself or one of its
     /// worktrees, gone or not), outside Chauffeur's workspaces: released to make its workspace.
     async fn holders(&mut self, repo: &str, branch: &str) -> Vec<Holder> {
         let workspaces = self.workspaces.clone();
         let mut holders = Vec::new();
-        for clone in self.clones.get(repo).cloned().unwrap_or_default() {
+        for clone in self.clones_of(repo) {
             let entries = self.refs(&clone).await.worktrees.clone();
             for e in entries {
                 if e.branch.as_deref() != Some(branch) || e.path.starts_with(&workspaces) {
@@ -1261,9 +1250,8 @@ impl<'a> Repos<'a> {
     /// The user's clone of `repo` holding `branch`: the one it is checked out in, else the first
     /// one that has it.
     async fn source(&mut self, repo: &str, branch: &str) -> Option<PathBuf> {
-        let clones = self.clones.get(repo).cloned().unwrap_or_default();
         let mut has = None;
-        for clone in clones {
+        for clone in self.clones_of(repo) {
             let refs = self.refs(&clone).await;
             if !refs.tips.contains_key(branch) {
                 continue;
