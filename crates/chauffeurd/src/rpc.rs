@@ -326,16 +326,9 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
                 .remove_agent_worktrees(&params.workspace, &params.target)
                 .await?,
         ),
-        ClientCall::SecurityAuditList(params) => {
-            to_value(crate::security_audits::list(daemon, &params.workspace).await?)
-        }
-        ClientCall::SecurityAuditReport(params) => {
-            to_value(crate::security_audits::report(daemon, params).await?)
-        }
-        ClientCall::SecurityAuditCancel(params) => {
-            Box::pin(crate::security_audits::cancel(daemon, params)).await?;
-            to_value(EmptyParams {})
-        }
+        call @ (ClientCall::SecurityAuditList(_)
+        | ClientCall::SecurityAuditReport(_)
+        | ClientCall::SecurityAuditCancel(_)) => handle_security_audits(daemon, call).await,
         ClientCall::ProcessList(params) => {
             to_value(daemon.workspaces.processes(&params.workspace)?)
         }
@@ -1115,6 +1108,30 @@ fn handle_deliverables(
                     .set_brand(&params.chat, params.brand.as_deref())?,
             ),
             _ => unreachable!("only deliverable calls reach this handler"),
+        }
+    })
+}
+
+// Cancellation sends through a Codex chat. Construct that future outside the general dispatch
+// frame, which must still fit on a worker's stack when a cloud transfer reenters it.
+#[inline(never)]
+fn handle_security_audits(
+    daemon: &Arc<Daemon>,
+    call: ClientCall,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
+    Box::pin(async move {
+        match call {
+            ClientCall::SecurityAuditList(params) => {
+                to_value(crate::security_audits::list(daemon, &params.workspace).await?)
+            }
+            ClientCall::SecurityAuditReport(params) => {
+                to_value(crate::security_audits::report(daemon, params).await?)
+            }
+            ClientCall::SecurityAuditCancel(params) => {
+                crate::security_audits::cancel(daemon, params).await?;
+                to_value(EmptyParams {})
+            }
+            _ => unreachable!("only security audit calls reach this handler"),
         }
     })
 }
