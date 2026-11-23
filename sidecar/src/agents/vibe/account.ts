@@ -268,7 +268,7 @@ export async function vibeLogin(deps: VibeSessionDeps, log: Logger, ended: (succ
     await initialize(connection, { "browser-auth-delegated": true });
     const answer = await connection.request<{ _meta?: { "browser-auth-delegated"?: DelegatedSignIn } }>("authenticate", {
       methodId: "browser-auth-delegated",
-      action: "start",
+      _meta: { action: "start" },
     });
     started = answer._meta?.["browser-auth-delegated"] ?? {};
     if (!started.signInUrl || !started.attemptId) throw new Error("Mistral Vibe gave no sign-in page");
@@ -284,7 +284,8 @@ export async function vibeLogin(deps: VibeSessionDeps, log: Logger, ended: (succ
     let completion: { _meta?: { "browser-auth-delegated"?: DelegatedSignIn } } | undefined;
     while (!current.cancelled && Date.now() < expiresAt) {
       try {
-        completion = await connection.request("authenticate", { methodId: "browser-auth-delegated", action: "complete", attemptId });
+        // ACP forwards extension arguments to Vibe only from _meta.
+        completion = await connection.request("authenticate", { methodId: "browser-auth-delegated", _meta: { action: "complete", attemptId } });
         break;
       } catch (failure) {
         error = errorMessage(failure);
