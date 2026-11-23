@@ -15,7 +15,6 @@ pub(crate) mod resume;
 mod sessions;
 mod setup;
 
-use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -97,7 +96,7 @@ pub async fn import(
         (None, None) => None,
     };
     let cutoff = start.map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
-    let (read, running) = {
+    let (mut read, running) = {
         let claude = claude.clone();
         tokio::task::spawn_blocking(move || {
             (
@@ -122,7 +121,10 @@ pub async fn import(
     let mut homes: HashMap<String, PathBuf> = HashMap::new();
     let mut placed = Vec::new();
     let mut found = HashMap::new();
-    let mut running_folders = Vec::new();
+    // Where Claude Code still runs, as its session files say (a session with no message yet
+    // included): no branch is released from under it.
+    let mut running_folders: Vec<PathBuf> =
+        running.values().flatten().map(|cwd| real(cwd)).collect();
     // The transcripts Claude keeps for a Chauffeur workspace's own folder (archived ones too): its
     // chats', and the sessions an import copied there, which still name the folder they first ran
     // in. A session run in a folder inside a workspace is left out by its folder, below.
@@ -137,39 +139,34 @@ pub async fn import(
         .collect();
     // Chauffeur's own chats are Claude Code sessions too, run through the Agent SDK (as other apps'
     // are): only sessions of Claude Code itself, in a terminal or an editor, come.
-    let comes = |session: &sessions::Session| {
+    let workspaces_dir = real(&d.paths.workspaces_dir);
+    read.retain(|session| {
         session.folder.as_deref().is_some_and(|folder| {
-            !real(folder).starts_with(real(&d.paths.workspaces_dir))
+            !real(folder).starts_with(&workspaces_dir)
                 && !workspaces.contains(&session.project)
                 && !session
                     .entrypoint
                     .as_deref()
                     .is_some_and(|e| e.starts_with("sdk"))
         })
-    };
+    });
     // A session kept in several folders (resumed from a renamed one) is read from a copy whose
     // folder still exists, the most recent of those: `read` comes most recent first.
-    let mut used: HashMap<&str, &sessions::Session> = HashMap::new();
-    for session in read.iter().filter(|s| comes(s)) {
-        let exists = |s: &sessions::Session| s.folder.as_deref().is_some_and(Path::is_dir);
-        match used.entry(&session.id) {
-            Entry::Vacant(copy) => {
-                copy.insert(session);
-            }
-            Entry::Occupied(mut copy) => {
-                if !exists(copy.get()) && exists(session) {
-                    copy.insert(session);
-                }
-            }
+    let exists = |s: &sessions::Session| s.folder.as_deref().is_some_and(Path::is_dir);
+    let mut copies: HashMap<&str, &sessions::Session> = HashMap::new();
+    for session in &read {
+        let copy = copies.entry(&session.id).or_insert(session);
+        if !exists(copy) && exists(session) {
+            *copy = session;
         }
     }
     // The project folder each session is read from, and its title there.
-    let used: HashMap<String, (String, String)> = used
+    let used: HashMap<String, (String, String)> = copies
         .into_iter()
         .map(|(id, s)| (id.to_string(), (s.project.clone(), s.title.clone())))
         .collect();
     for mut session in read {
-        let Some(folder) = session.folder.clone().filter(|_| comes(&session)) else {
+        let Some(folder) = session.folder.clone() else {
             continue;
         };
         let (project, title) = &used[&session.id];
@@ -190,11 +187,9 @@ pub async fn import(
             reason: None,
             lands_in: None,
         };
-        // Where Claude Code still runs, the folder it started in and the one it is in now: no
-        // branch is released from under it.
-        if let Some(now) = running.get(&session.id) {
+        // The folder a running session started in, too.
+        if running.contains_key(&session.id) {
             running_folders.push(real(&folder));
-            running_folders.extend(now.as_deref().map(real));
         }
         // An orchestration an earlier import made the parent of: its children still missing come.
         let parent = branches::recorded_parent(d, &session.id)?;

@@ -2479,19 +2479,9 @@ async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() 
     );
     std::fs::remove_file(&hook).unwrap();
 
-    // Then a Claude Code session runs in feat/held's worktree, started in a folder gone since, as
-    // its session file says: that child fails, the rest is made.
+    // Then Claude Code is opened in feat/held's worktree, no message sent yet: only its session
+    // file says where. That child fails, the rest is made.
     let held_folder = f.root.join("wt/held");
-    std::fs::write(
-        f.claude.join("projects/-code/busy-held.jsonl"),
-        line(
-            &f.root.join("moved-away"),
-            "feat/held",
-            &ago(1),
-            r#""message":{"content":[]}"#,
-        ) + "\n",
-    )
-    .unwrap();
     let busy = f.claude.join(format!(
         "sessions/{}.json",
         std::os::unix::process::parent_id()
