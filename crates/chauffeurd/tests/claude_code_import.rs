@@ -1262,7 +1262,7 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
 
     // A session since: added to the same exploration, its project folder holding the others.
     // Resumed from another folder since, where it goes on under a new title: one session, read
-    // from there.
+    // from there. Not from a later copy whose folder is gone (renamed since).
     past_session(&f, "later", &ago(8));
     let original = std::fs::read_to_string(f.claude.join("projects/-code/later.jsonl")).unwrap();
     let resumed_at = (chrono::Utc::now() - chrono::Duration::days(8) + chrono::Duration::hours(1))
@@ -1275,6 +1275,19 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
     let other = f.claude.join("projects/-other");
     std::fs::create_dir_all(&other).unwrap();
     std::fs::write(other.join("later.jsonl"), &resumed).unwrap();
+    let web = f.root.join("clones/web").display().to_string();
+    let gone_at = (chrono::Utc::now() - chrono::Duration::days(8) + chrono::Duration::hours(2))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let gone = f.claude.join("projects/-gone");
+    std::fs::create_dir_all(&gone).unwrap();
+    std::fs::write(
+        gone.join("later.jsonl"),
+        resumed.replace(&web, &f.root.join("renamed").display().to_string())
+            + &format!(
+                "{{\"type\":\"user\",\"timestamp\":\"{gone_at}\",\"message\":{{\"role\":\"user\",\"content\":\"And on\"}}}}\n"
+            ),
+    )
+    .unwrap();
     let planned = import(&f, true).await;
     let later: Vec<_> = planned
         .sessions
@@ -1283,11 +1296,12 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
         .collect();
     assert_eq!(later.len(), 1);
     assert_eq!(later[0].title, "Later, resumed");
-    assert!(
-        planned.warnings.contains(&"“Later, resumed” (later) is kept in several folders of Claude Code's projects: read from -other, its copy in -code left out.".to_string()),
-        "{:?}",
-        planned.warnings
-    );
+    for left in ["-code", "-gone"] {
+        let said = format!(
+            "“Later, resumed” (later) is kept in several folders of Claude Code's projects: read from -other, its copy in {left} left out."
+        );
+        assert!(planned.warnings.contains(&said), "{:?}", planned.warnings);
+    }
     assert_eq!(
         planned.histories[0].workspace.as_deref(),
         Some("web-history")
@@ -2465,12 +2479,13 @@ async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() 
     );
     std::fs::remove_file(&hook).unwrap();
 
-    // Then a Claude Code session runs in feat/held's worktree: that child fails, the rest is made.
+    // Then a Claude Code session runs in feat/held's worktree, started in a folder gone since, as
+    // its session file says: that child fails, the rest is made.
     let held_folder = f.root.join("wt/held");
     std::fs::write(
         f.claude.join("projects/-code/busy-held.jsonl"),
         line(
-            &held_folder,
+            &f.root.join("moved-away"),
             "feat/held",
             &ago(1),
             r#""message":{"content":[]}"#,
@@ -2484,8 +2499,9 @@ async fn an_orchestration_becomes_a_parent_whose_chat_is_told_of_its_children() 
     std::fs::write(
         &busy,
         format!(
-            r#"{{"pid":{},"sessionId":"busy-held"}}"#,
-            std::os::unix::process::parent_id()
+            r#"{{"pid":{},"sessionId":"busy-held","cwd":"{}"}}"#,
+            std::os::unix::process::parent_id(),
+            held_folder.display()
         ),
     )
     .unwrap();
