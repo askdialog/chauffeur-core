@@ -1261,8 +1261,8 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
     assert_eq!(d.store.chats_of(&ws.id).unwrap().len(), chats.len());
 
     // A session since: added to the same exploration, its project folder holding the others.
-    // Resumed from two other folders since, where it goes on alike: one session, read from the
-    // first of those by name.
+    // Resumed from another folder since, where it goes on under a new title: one session, read
+    // from there.
     past_session(&f, "later", &ago(8));
     let original = std::fs::read_to_string(f.claude.join("projects/-code/later.jsonl")).unwrap();
     let resumed_at = (chrono::Utc::now() - chrono::Duration::days(8) + chrono::Duration::hours(1))
@@ -1270,23 +1270,24 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
     let resumed = original
         + &format!(
             "{{\"type\":\"user\",\"timestamp\":\"{resumed_at}\",\"message\":{{\"role\":\"user\",\"content\":\"Go on\"}}}}\n"
-        );
-    for folder in ["-zeta", "-other"] {
-        let folder = f.claude.join("projects").join(folder);
-        std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("later.jsonl"), &resumed).unwrap();
-    }
+        )
+        + "{\"type\":\"ai-title\",\"aiTitle\":\"Later, resumed\"}\n";
+    let other = f.claude.join("projects/-other");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("later.jsonl"), &resumed).unwrap();
     let planned = import(&f, true).await;
-    assert_eq!(
-        planned.sessions.iter().filter(|s| s.id == "later").count(),
-        1
+    let later: Vec<_> = planned
+        .sessions
+        .iter()
+        .filter(|s| s.id == "later")
+        .collect();
+    assert_eq!(later.len(), 1);
+    assert_eq!(later[0].title, "Later, resumed");
+    assert!(
+        planned.warnings.contains(&"“Later, resumed” (later) is kept in several folders of Claude Code's projects: read from -other, its copy in -code left out.".to_string()),
+        "{:?}",
+        planned.warnings
     );
-    for left in ["-code", "-zeta"] {
-        let said = format!(
-            "“What does later change?” is kept in several folders of Claude Code's projects: read from -other, its copy in {left} left out."
-        );
-        assert!(planned.warnings.contains(&said), "{:?}", planned.warnings);
-    }
     assert_eq!(
         planned.histories[0].workspace.as_deref(),
         Some("web-history")

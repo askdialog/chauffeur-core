@@ -134,8 +134,8 @@ pub async fn import(
             [project_key(path), project_key(&real(path))]
         })
         .collect();
-    // The project folder each session is read from.
-    let mut seen: HashMap<String, String> = HashMap::new();
+    // The project folder each session is read from, and its title there.
+    let mut seen: HashMap<String, (String, String)> = HashMap::new();
     for mut session in read {
         let Some(folder) = session.folder.clone() else {
             continue;
@@ -153,14 +153,17 @@ pub async fn import(
         }
         // A session kept in several folders (resumed from a renamed one): its copy read first, the
         // most recent.
-        if let Some(used) = seen.get(&session.id) {
+        if let Some((used, title)) = seen.get(&session.id) {
             warnings.push(format!(
-                "“{}” is kept in several folders of Claude Code's projects: read from {used}, its copy in {} left out.",
-                session.title, session.project
+                "“{title}” ({}) is kept in several folders of Claude Code's projects: read from {used}, its copy in {} left out.",
+                session.id, session.project
             ));
             continue;
         }
-        seen.insert(session.id.clone(), session.project.clone());
+        seen.insert(
+            session.id.clone(),
+            (session.project.clone(), session.title.clone()),
+        );
         let mut plan = ClaudeCodeSessionPlan {
             id: session.id.clone(),
             title: session.title.clone(),
