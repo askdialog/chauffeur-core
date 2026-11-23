@@ -68,6 +68,7 @@ describe("agent accounts", () => {
     ["save_error:permission denied", false, "Vibe could not save its credentials"],
   ] as const)("Vibe checks saved credentials after browser sign-in (%s, authenticated: %s)", async (persistResult, authenticated, error) => {
     const processes: FakeAcp[] = [];
+    let completed = false;
     const deps = {
       baseEnv: {},
       resolveExecutable: () => "/usr/bin/vibe-acp",
@@ -78,15 +79,23 @@ describe("agent accounts", () => {
         const request = process.request.bind(process);
         process.request = async <T>(method: string, params: unknown): Promise<T> => {
           if (signIn && method === "authenticate") {
-            const details = params && typeof params === "object" && "action" in params && params.action === "start"
-              ? { attemptId: "vibe-login", signInUrl: "https://example.com/vibe" }
-              : { persistResult };
+            // The ACP SDK forwards only methodId and the fields inside _meta.
+            const { methodId, _meta } = params as { methodId: string; _meta?: { action?: string; attemptId?: string } };
+            expect(methodId).toBe("browser-auth-delegated");
+            const completing = _meta?.action === "complete";
+            if (completing) {
+              expect(_meta.attemptId).toBe("vibe-login");
+              completed = true;
+            }
+            const details = completing
+              ? { status: "completed", attemptId: "vibe-login", persistResult }
+              : { attemptId: "vibe-login", signInUrl: "https://example.com/vibe" };
             return { _meta: { "browser-auth-delegated": details } } as T;
           }
           if (method === "_auth/status") {
             expect(signIn).toBe(false);
             expect(processes[0]?.closed).toBe(true);
-            return { authenticated } as T;
+            return { authenticated: authenticated && completed } as T;
           }
           return request<T>(method, params);
         };
