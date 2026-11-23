@@ -31,6 +31,7 @@ import type {
   ToolDelegateResult,
   ToolDelegateStarted,
   ToolListReposResult,
+  LoginSessionInfo,
 } from "../protocol.ts";
 import type { Logger } from "../log.ts";
 
@@ -50,6 +51,8 @@ export interface SessionHost {
   listRepos(): Promise<ToolListReposResult>;
   /** Adds a repo to the chat's workspace, once the user said yes (`tool.add_repo`). */
   addRepo(repo: string): Promise<ToolAddRepoResult>;
+  /** An exploration's `session_ensure` tool: waits until a declared login holds (`tool.session_ensure`). */
+  sessionEnsure(name: string): Promise<LoginSessionInfo>;
   /** Gives a delegated chat its task: a new one, or one the chat started earlier (`tool.delegate`). */
   delegate(params: Omit<ToolDelegateParams, "chat_id">): Promise<ToolDelegateStarted>;
   /** Waits for a delegated chat's answer (`tool.delegate_wait`). */

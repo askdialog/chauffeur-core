@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::client::ContextDetail;
+use crate::client::{ContextDetail, LoginSessionInfo};
 use crate::events::{ChatEvent, ContextUsage};
 use crate::model::{
     AgentKind, AgentModel, Attachment, ChatStatus, PermissionMode, RequestResponse, SlashCommand,
@@ -153,6 +153,11 @@ methods! {
         /// as `workspace.add_repo` does. Refused in a design chat.
         #[serde(rename = "tool.add_repo")]
         ToolAddRepo(ToolAddRepoParams) -> ToolAddRepoResult,
+        /// An exploration's `session_ensure` tool, its way to a declared login without the CLI
+        /// (docs/adr/session-ensure-tool-in-explorations.md): `session.ensure` for the chat's
+        /// workspace, its request asked in the chat. Refused in a design chat.
+        #[serde(rename = "tool.session_ensure")]
+        ToolSessionEnsure(ToolSessionEnsureParams) -> LoginSessionInfo,
         /// The agent's `delegate` tool (story 49): starts a delegated chat in the chat's workspace with
         /// the task, or gives one it started earlier more work, and returns at once. Refused in a
         /// design chat and in a delegated chat.
@@ -987,6 +992,15 @@ pub struct ToolRepo {
 pub struct ToolAddRepoParams {
     pub chat_id: String,
     pub repo: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+#[ts(optional_fields)]
+pub struct ToolSessionEnsureParams {
+    pub chat_id: String,
+    /// The session's name, as the workspace's repos or the user declare it.
+    pub name: String,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]

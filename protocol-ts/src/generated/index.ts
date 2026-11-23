@@ -634,6 +634,7 @@ export type { ToolDelegateResult } from "./ToolDelegateResult";
 export type { ToolDelegateStarted } from "./ToolDelegateStarted";
 export type { ToolListReposResult } from "./ToolListReposResult";
 export type { ToolRepo } from "./ToolRepo";
+export type { ToolSessionEnsureParams } from "./ToolSessionEnsureParams";
 export type { TranscriptEvent } from "./TranscriptEvent";
 export type { TransferEndpoint } from "./TransferEndpoint";
 export type { TransferInfo } from "./TransferInfo";

@@ -7,7 +7,8 @@ use std::sync::{Arc, Weak};
 use anyhow::Context;
 use chauffeur_protocol::client::{
     CommentAuthor, ConfigureChatParams, ContextDetail, ContextUsageResult, CreateChatParams,
-    QueueItem, ShellResult, SubagentMessagesParams, SubagentMessagesResult,
+    LoginSessionEnsureParams, LoginSessionInfo, QueueItem, ShellResult, SubagentMessagesParams,
+    SubagentMessagesResult,
 };
 use chauffeur_protocol::events::{
     ChatEvent, CompactionBy, ContextCategoryKind, ContextCompaction, ContextUsage, DelegatedAnswer,
@@ -3860,6 +3861,23 @@ impl ChatManager {
                 .then(|| worktree.branch.clone()),
             setup,
         })
+    }
+
+    /// An exploration's `session_ensure` tool (docs/adr/session-ensure-tool-in-explorations.md):
+    /// `session.ensure` for the chat's workspace, its request asked in this chat. Refused in a
+    /// design chat, which has no such tool.
+    pub async fn tool_session_ensure(&self, chat_id: &str, name: &str) -> Result<LoginSessionInfo> {
+        let d = self.d();
+        let chat = self.current(chat_id)?;
+        if chat.kind == ChatKind::Design {
+            return Err(Error::Conflict("a design chat ensures no session".into()));
+        }
+        let params = LoginSessionEnsureParams {
+            workspace: chat.workspace_id.clone(),
+            name: name.to_string(),
+            chat: Some(chat.id.clone()),
+        };
+        d.sessions.ensure(&d, params).await
     }
 
     /// The agent's `delegate` tool (story 49): a delegated chat gets the task, a new one in the

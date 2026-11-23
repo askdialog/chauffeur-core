@@ -32,6 +32,7 @@ import {
   type ToolDelegateResult,
   type ToolDelegateStarted,
   type ToolListReposResult,
+  type LoginSessionInfo,
 } from "./protocol.ts";
 import { DeltaCoalescer } from "./delta-coalescer.ts";
 import { RpcError } from "./rpc/peer.ts";
@@ -45,6 +46,7 @@ export interface DaemonLink {
   observeWorktree(chatId: string, path: string): Promise<void>;
   listRepos(chatId: string): Promise<ToolListReposResult>;
   addRepo(chatId: string, repo: string): Promise<ToolAddRepoResult>;
+  sessionEnsure(chatId: string, name: string): Promise<LoginSessionInfo>;
   delegate(params: ToolDelegateParams): Promise<ToolDelegateStarted>;
   delegateWait(chatId: string, child: string): Promise<ToolDelegateResult>;
   delegateStop(chatId: string, child: string): Promise<void>;
@@ -334,6 +336,7 @@ export class SessionManager {
       observeWorktree: (path) => daemon().observeWorktree(chatId, path),
       listRepos: () => daemon().listRepos(chatId),
       addRepo: (repo) => daemon().addRepo(chatId, repo),
+      sessionEnsure: (name) => daemon().sessionEnsure(chatId, name),
       delegate: (params) => daemon().delegate({ ...params, chat_id: chatId }),
       delegateWait: (child) => daemon().delegateWait(chatId, child),
       delegateStop: (child) => daemon().delegateStop(chatId, child),

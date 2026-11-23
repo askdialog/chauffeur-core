@@ -5,6 +5,7 @@ import type { ToolAddRepoParams } from "./ToolAddRepoParams";
 import type { ToolChatParams } from "./ToolChatParams";
 import type { ToolDelegateChildParams } from "./ToolDelegateChildParams";
 import type { ToolDelegateParams } from "./ToolDelegateParams";
+import type { ToolSessionEnsureParams } from "./ToolSessionEnsureParams";
 import type { WorktreeCreateParams } from "./WorktreeCreateParams";
 import type { WorktreeObservedParams } from "./WorktreeObservedParams";
 import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
@@ -13,4 +14,4 @@ import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
  * Messages the sidecar sends to the daemon: notifications (`session.event`) and requests
  * (`hook.*`), told apart by the presence of an id.
  */
-export type SidecarToDaemon = { "method": "session.event", "params": SessionEventParams } | { "method": "hook.worktree_create", "params": WorktreeCreateParams } | { "method": "hook.worktree_remove", "params": WorktreeRemoveParams } | { "method": "hook.worktree_observed", "params": WorktreeObservedParams } | { "method": "tool.list_repos", "params": ToolChatParams } | { "method": "tool.add_repo", "params": ToolAddRepoParams } | { "method": "tool.delegate", "params": ToolDelegateParams } | { "method": "tool.delegate_wait", "params": ToolDelegateChildParams } | { "method": "tool.delegate_stop", "params": ToolDelegateChildParams } | { "method": "tool.delegate_detach", "params": ToolDelegateChildParams } | { "method": "agent.login_ended", "params": AgentLoginEndedParams };
+export type SidecarToDaemon = { "method": "session.event", "params": SessionEventParams } | { "method": "hook.worktree_create", "params": WorktreeCreateParams } | { "method": "hook.worktree_remove", "params": WorktreeRemoveParams } | { "method": "hook.worktree_observed", "params": WorktreeObservedParams } | { "method": "tool.list_repos", "params": ToolChatParams } | { "method": "tool.add_repo", "params": ToolAddRepoParams } | { "method": "tool.session_ensure", "params": ToolSessionEnsureParams } | { "method": "tool.delegate", "params": ToolDelegateParams } | { "method": "tool.delegate_wait", "params": ToolDelegateChildParams } | { "method": "tool.delegate_stop", "params": ToolDelegateChildParams } | { "method": "tool.delegate_detach", "params": ToolDelegateChildParams } | { "method": "agent.login_ended", "params": AgentLoginEndedParams };

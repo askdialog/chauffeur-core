@@ -20,6 +20,7 @@ import { type CloneMemories, memoriesPrompt, memoryDirs } from "./memory.ts";
 import { DELEGATE_TOOL } from "../delegate-tool.ts";
 import { DESIGN_BROWSER, designBrowserCommand } from "../design-browser.ts";
 import { ADD_REPO_TOOL, CHAUFFEUR_TOOLS, LIST_REPOS_TOOL, UPDATE_PLAN_TOOL } from "../repo-tools.ts";
+import { SESSION_ENSURE_TOOL } from "../session-tool.ts";
 import { readOnlyAllowedDomains } from "../../guard/read-only-guard.ts";
 
 /**
@@ -56,7 +57,9 @@ export const READ_ONLY_NO_PLANS_DISALLOWED_TOOLS = ["Edit", "Write", "MultiEdit"
  * workspace folder (the disposable checkouts; the clones' refs and the state folder are out of
  * reach) but out of its notes (`notesDir`, kept on archive: plans come through the Write tool and
  * the plan guard), and in the exploration's own temporary folder (`CLAUDE_CODE_TMPDIR`, from the
- * daemon); no Unix socket (so no way to the daemon), no network but GitHub (and the GitLab on an installation set to it), the Jev key withheld.
+ * daemon); no Unix socket (so no way to the daemon: a declared login goes through the
+ * `session_ensure` tool, session-tool.ts), no network but GitHub (and the GitLab on an
+ * installation set to it), the Jev key withheld.
  * A command that fails under the sandbox is never retried outside it, and a machine without the
  * sandbox's dependencies refuses the session rather than running unsandboxed. The read-only
  * guard (hooks.ts) still refuses git and GitHub writes by name, with a reason the agent can read.
@@ -182,7 +185,7 @@ export interface OptionDeps {
  * Chauffeur's own tools, allowed by the chat: `add_repo` asks the user itself, and a subagent
  * chat asks for what its own agent does.
  */
-export const CHAUFFEUR_TOOL_RULES = [LIST_REPOS_TOOL, ADD_REPO_TOOL, DELEGATE_TOOL, UPDATE_PLAN_TOOL];
+export const CHAUFFEUR_TOOL_RULES = [LIST_REPOS_TOOL, ADD_REPO_TOOL, DELEGATE_TOOL, UPDATE_PLAN_TOOL, SESSION_ENSURE_TOOL];
 
 export function buildClaudeOptions(params: SessionStartParams, deps: OptionDeps): Options {
   const options: Options = {

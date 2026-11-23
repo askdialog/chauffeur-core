@@ -422,6 +422,12 @@ async fn handle_hook_call(daemon: &Arc<Daemon>, call: SidecarToDaemon) -> Result
                 .tool_add_repo(&params.chat_id, &params.repo)
                 .await?,
         )?),
+        SidecarToDaemon::ToolSessionEnsure(params) => Ok(serde_json::to_value(
+            daemon
+                .chats
+                .tool_session_ensure(&params.chat_id, &params.name)
+                .await?,
+        )?),
         SidecarToDaemon::ToolDelegate(params) => Ok(serde_json::to_value(
             daemon.chats.tool_delegate(params).await?,
         )?),

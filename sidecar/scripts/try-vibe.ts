@@ -40,6 +40,9 @@ const host: SessionHost = {
       { name: "analytics", description: "Dashboards", path: null },
     ],
   }) as never,
+  sessionEnsure: async () => {
+    throw new Error("declared sessions require the Chauffeur daemon");
+  },
   addRepo: async () => {
     throw new Error("not in this script");
   },

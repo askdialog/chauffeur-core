@@ -78,6 +78,7 @@ export type {
   ToolDelegateResult,
   ToolDelegateStarted,
   ToolListReposResult,
+  LoginSessionInfo,
   Empty,
   SidecarMethods,
   DaemonHookMethods,
