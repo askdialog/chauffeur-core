@@ -268,7 +268,8 @@ const LISTING = {
   tag: { flags: ["-l", "--list", "-v", "--verify", "-q", "--quiet"], patterns: ["-l", "--list", "-v", "--verify"] },
 };
 const LISTING_FLAGS = ["--color", "--no-color", "--column", "--no-column", "-i", "--ignore-case", "--omit-empty", "--abbrev", "--no-abbrev"];
-const LISTING_VALUES = ["--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"];
+/** `git branch` and `git tag` options taking the next word as their value. */
+const LISTING_VALUES = new Set(["--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"]);
 /** `git config` options that read, and those taking a value. */
 const CONFIG_READS = [
   ...["--global", "--system", "--local", "--worktree", "--show-origin", "--show-scope", "--null", "-z", "--name-only"],
@@ -356,8 +357,8 @@ class Judge {
     const eq = value.text.indexOf("=");
     if (eq < 0) return undefined;
     const assigned = value.text.slice(eq + 1);
-    if (isAbsolute(assigned)) return cloneAround(resolve(assigned), this.clones);
-    return assigned && state.dir !== undefined ? cloneAround(resolve(state.dir, assigned), this.clones) : undefined;
+    const path = assigned ? this.place(assigned, state.dir) : undefined;
+    return path === undefined ? undefined : cloneAround(path, this.clones);
   }
 
   private redirections({ redirections }: Command | Group, state: State): void {
@@ -433,6 +434,8 @@ class Judge {
     }
     const name = basename(program.text);
     const texts = args.map((arg) => arg.text);
+    // A program that writes given some arguments, with one only known as the line runs.
+    const blindArgs = WRITES_BY_ARGUMENT.has(name) && args.some((arg) => !arg.known);
     if (name === "for" || name === "select") {
       if (texts[0]) this.looped.add(texts[0]);
       this.reads(args.slice(texts.indexOf("in") + 1 || args.length), state);
@@ -454,11 +457,11 @@ class Judge {
     else if (name === "xargs") this.xargs(args, state);
     else if (name === "find") this.find(args, state, fed);
     else if (name === "git") this.git(args, state, fed);
-    else if (READERS.has(name) && onlyReads(name, texts) && !runsAProgram(name, args) && (!WRITES_BY_ARGUMENT.has(name) || args.every((arg) => arg.known))) {
+    else if (READERS.has(name) && onlyReads(name, texts) && !runsAProgram(name, args) && !blindArgs) {
       this.reads(args, state);
     }
     else {
-      const targets = WRITES_BY_ARGUMENT.has(name) && !args.every((arg) => arg.known) ? undefined : writeTargets(name, args);
+      const targets = blindArgs ? undefined : writeTargets(name, args);
       if (!targets) {
         this.opaque([program, ...args], state, fed, input);
         return;
@@ -555,6 +558,7 @@ class Judge {
   private wrapper(name: string, args: Value[], state: State, fed: boolean, input: string[]): void {
     const spec = WRAPPERS[name];
     if (!spec) return;
+    const { values, dirs = [] } = spec;
     const local = copy(state);
     let i = 0;
     while (i < args.length) {
@@ -573,15 +577,15 @@ class Judge {
       let [opt, attached] = option(arg.text);
       // `-S'…'`, `-Cdir`: a short option with its value attached.
       const short = opt.slice(0, 2);
-      if (!opt.startsWith("--") && opt.length > 2 && (spec.values.includes(short) || (spec.dirs ?? []).includes(short))) {
+      if (!opt.startsWith("--") && opt.length > 2 && (values.includes(short) || dirs.includes(short))) {
         attached = opt.slice(2);
         opt = short;
       }
-      const takes = spec.values.includes(opt) || (spec.dirs ?? []).includes(opt);
+      const takes = values.includes(opt) || dirs.includes(opt);
       const value = attached !== undefined ? after(arg, arg.text.length - attached.length) : takes ? args[i + 1] : undefined;
       i += attached === undefined && takes ? 2 : 1;
       if (!value) continue;
-      if ((spec.dirs ?? []).includes(opt)) {
+      if (dirs.includes(opt)) {
         local.previous = local.dir;
         local.dir = isExact(value) ? this.place(value.text, local.dir) : undefined;
       } else if (name === "time" && (opt === "-o" || opt === "--output")) this.writes(value, state, false);
@@ -674,7 +678,7 @@ class Judge {
   }
 
   /** Git changes the repository it runs on, unless it reads; whatever it reads, its outputs. */
-  private git(args: Value[], state: State, fed = false): void {
+  private git(args: Value[], state: State, fed: boolean): void {
     let where = state.dir;
     const given: (string | undefined)[] = [];
     let i = 0;
@@ -698,8 +702,9 @@ class Judge {
     // The repository it works on: `--work-tree` and `--git-dir` both given, where it runs no longer counts.
     const repos = file ? [isExact(file) ? this.place(file.text, where) : undefined] : given.length === 2 ? given : [where, ...given];
     let clone = first(repos, (repo) => cloneOf(repo, this.clones));
+    const makes = sub.text === "clone" || sub.text === "init";
     // The folder `clone` and `init` make, and paths outside the repository it names.
-    if (sub.text === "clone" || sub.text === "init") {
+    if (makes) {
       const operands = gitOperands(texts);
       const folder = sub.text === "clone" ? operands[1] : operands[0];
       const target = folder === undefined ? where : this.place(folder, where);
@@ -707,7 +712,7 @@ class Judge {
       if (target === undefined) this.verdict.blind = true;
     }
     // `GIT_DIR` and the like, set for it, point it at a clone.
-    clone ??= sub.text === "clone" || sub.text === "init" ? undefined : state.env;
+    else clone ??= state.env;
     // From a worktree of the workspace, git shares its clone's branches and settings.
     const sharing = file ? undefined : first(repos, (repo) => worktreeOf(repo, this.clones));
     // `git config --file "$F" key value` from a worktree: the file may be the clone's settings.
@@ -728,8 +733,7 @@ class Judge {
         what: `may change what it shares with ${sharing.clone}: its subcommand is only known as the line runs`,
         instead: ASK_USER,
       };
-    }
-    if (sharing && sub.known) {
+    } else if (sharing) {
       // `xargs` gives it more operands, only known as the line runs.
       const change = sharedChange(sub.text, fed ? [...rest, UNKNOWN] : rest, sharing, where);
       if (change) this.verdict.shared ??= { clone: sharing, ...change };
@@ -745,7 +749,7 @@ class Judge {
       const script = rest.slice(texts.indexOf("foreach") + 1).find((arg) => !arg.text.startsWith("-"));
       if (script) this.script([script], local);
       return;
-    } else if (sub.text !== "clone" && sub.text !== "init" && gitReads(sub.text, texts)) {
+    } else if (!makes && gitReads(sub.text, texts)) {
       this.verdict.named ??= clone;
       return;
     }
@@ -904,11 +908,10 @@ function onlyReads(name: string, texts: string[]): boolean {
     case "rg":
       return !texts.some((text) => text.startsWith("--pre"));
     case "tree":
+    case "base64":
       return !texts.some((text) => text === "-o" || text.startsWith("--output"));
     case "xxd":
       return !texts.some((text) => /^-[a-zA-Z]*r/.test(text) || text === "-revert");
-    case "base64":
-      return !texts.some((text) => text === "-o" || text.startsWith("--output"));
     case "fd":
     case "fdfind":
       return !texts.some((text) => ["-x", "-X", "--exec", "--exec-batch"].includes(text));
@@ -1073,8 +1076,6 @@ function optionValue(args: Value[], names: string[]): Value | undefined {
   return undefined;
 }
 
-/** `git branch` options taking the next word as their value. */
-const BRANCH_VALUES = new Set(["--contains", "--no-contains", "--merged", "--no-merged", "--points-at", "--sort", "--format"]);
 /** `fetch`, `pull` and `push` options taking the next word as their value. */
 const REFSPEC_VALUES = new Set([
   ...["-o", "--push-option", "--receive-pack", "--exec", "--upload-pack", "-j", "--jobs", "--depth", "--deepen"],
@@ -1083,7 +1084,9 @@ const REFSPEC_VALUES = new Set([
 /** Subcommands that rewrite what git keeps for the whole repository. */
 const HOUSEKEEPING = new Set(["gc", "prune", "repack", "pack-refs", "maintenance"]);
 /** `git remote` subcommands that change the repository's remotes (`prune` drops only stale copies, as `fetch --prune`). */
-const REMOTE_CHANGES = new Set(["add", "set-url", "remove", "rm", "rename", "set-head", "set-branches"]);
+const REMOTE_CHANGES = ["add", "set-url", "remove", "rm", "rename", "set-head", "set-branches"];
+/** `git reflog` actions that rewrite it. */
+const REFLOG_CHANGES = ["expire", "delete", "drop", "write"];
 /** `git rev-parse` options printing a path in the repository's `.git`. */
 const GIT_PATHS = new Set(["--git-path", "--git-common-dir", "--git-dir", "--absolute-git-dir"]);
 /** An operand only known as the line runs. */
@@ -1177,9 +1180,9 @@ function sharedChange(sub: string, rest: Value[], clone: GuardedClone, where: st
         ? undefined
         : { what: `changes the settings of ${clone.clone}`, instead: ONE_COMMAND };
     case "remote":
-      return asked(actionIn(action, [...REMOTE_CHANGES]) ? `changes the remotes of ${clone.clone}` : undefined);
+      return asked(actionIn(action, REMOTE_CHANGES) ? `changes the remotes of ${clone.clone}` : undefined);
     case "reflog":
-      return asked(actionIn(action, ["expire", "delete", "drop", "write"]) ? `rewrites the reflogs of ${clone.clone}` : undefined);
+      return asked(actionIn(action, REFLOG_CHANGES) ? `rewrites the reflogs of ${clone.clone}` : undefined);
     case "replace":
       // Replacements are refs of the repository: the clone's. Listing them reads.
       return asked(
@@ -1226,7 +1229,7 @@ function branchChange(args: Value[], branch: (value: Value | undefined) => strin
       settings = true;
       if (attached === undefined) i++;
     } else if (opt === "--unset-upstream" || opt === "--edit-description") settings = true;
-    else if (BRANCH_VALUES.has(opt) && attached === undefined) i++;
+    else if (LISTING_VALUES.has(opt) && attached === undefined) i++;
   }
   if (settings) {
     const named = operands.map(branch).find(Boolean);
@@ -1256,12 +1259,8 @@ function switchChange(sub: string, args: Value[], branch: (value: Value | undefi
     // `-Bmain`: the short option with its value attached.
     const glued = forceCreate.find((short) => short.length === 2 && opt.length > 2 && opt.startsWith(short) && !opt.startsWith("--"));
     if (!arg.known || !opt.startsWith("-")) operands.push(arg);
-    else if (glued) {
-      const reset = branch(after(arg, 2));
-      if (reset) return `resets ${reset}`;
-      created = true;
-    } else if (forceCreate.includes(opt)) {
-      const reset = branch(attached !== undefined ? after(arg, opt.length + 1) : args[++i]);
+    else if (glued || forceCreate.includes(opt)) {
+      const reset = branch(glued ? after(arg, 2) : attached !== undefined ? after(arg, opt.length + 1) : args[++i]);
       if (reset) return `resets ${reset}`;
       created = true;
     } else if (creates.includes(opt)) {
@@ -1300,12 +1299,8 @@ function worktreeAdd(args: Value[], branch: (value: Value | undefined) => string
     if (!arg) continue;
     const [opt, attached] = option(arg.text);
     if (!arg.known || !opt.startsWith("-")) operands.push(arg);
-    else if (opt.startsWith("-B") && opt.length > 2) {
-      const reset = branch(after(arg, 2));
-      if (reset) return `resets ${reset}`;
-      created = true;
-    } else if (opt === "-B") {
-      const reset = branch(attached !== undefined ? after(arg, 3) : args[++i]);
+    else if (opt.startsWith("-B")) {
+      const reset = branch(opt.length > 2 ? after(arg, 2) : args[++i]);
       if (reset) return `resets ${reset}`;
       created = true;
     } else if (opt === "-b" || opt === "--orphan") {
@@ -1408,13 +1403,12 @@ function gitReads(sub: string, texts: string[]): boolean {
     case "remote":
       return words.length === 0 ? texts.every((text) => text === "-v" || text === "--verbose") : words[0] === "get-url" || words[0] === "show";
     case "stash":
+    case "notes":
       return words[0] === "list" || words[0] === "show";
     case "worktree":
       return words[0] === "list";
     case "reflog":
-      return !["expire", "delete", "drop", "write"].includes(words[0] ?? "");
-    case "notes":
-      return words[0] === "list" || words[0] === "show";
+      return !REFLOG_CHANGES.includes(words[0] ?? "");
     case "submodule":
       return words[0] === undefined || words[0] === "status" || words[0] === "summary";
     case "config":
@@ -1442,7 +1436,7 @@ function listing(texts: string[], { flags, patterns }: { flags: string[]; patter
   for (let i = 0; i < texts.length; i++) {
     const [opt, attached] = option(texts[i] ?? "");
     if (!opt.startsWith("-")) operands++;
-    else if (LISTING_VALUES.includes(opt)) {
+    else if (LISTING_VALUES.has(opt)) {
       if (attached === undefined) i++;
     } else if (flags.includes(opt) || LISTING_FLAGS.includes(opt) || /^-n\d*$/.test(opt)) pattern ||= patterns.includes(opt);
     else return false;
@@ -1516,7 +1510,8 @@ function isLink(path: string): boolean {
 function cloneOf(path: string, clones: GuardedClone[]): GuardedClone | undefined {
   // Each form on its own: a link in the worktree may lead into a clone.
   for (const form of forms(path)) {
-    if (exempt(form, clones)) continue;
+    // A path in a worktree of the workspace, or in its git folder in the clone's `.git`.
+    if (worktreeOf(form, clones)) continue;
     let found: GuardedClone | undefined;
     for (const candidate of clones) {
       if (inside(form, candidate.clone) && (found === undefined || candidate.clone.length > found.clone.length)) found = candidate;
@@ -1532,11 +1527,6 @@ function worktreeOf(path: string, clones: GuardedClone[]): GuardedClone | undefi
     ({ worktree, gitdir, realGitdir }) =>
       inside(path, worktree) || [gitdir, realGitdir].some((dir) => dir !== undefined && inside(path, dir)),
   );
-}
-
-/** A path in a worktree of the workspace, or in its git folder in the clone's `.git`. */
-function exempt(path: string, clones: GuardedClone[]): boolean {
-  return worktreeOf(path, clones) !== undefined;
 }
 
 /** macOS's file system ignores case: `~/Documents/GitHub/web` is `~/Documents/github/web`. */
