@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CanUseTool, HookCallback, HookInput, PermissionUpdate, SDKMessage, Settings } from "@anthropic-ai/claude-agent-sdk";
 import { CHAUFFEUR_TOOL_RULES, plansDirectory } from "../src/agents/claude/options.ts";
-import { ClaudeSession } from "../src/agents/claude/session.ts";
+import { CLEARED, ClaudeSession } from "../src/agents/claude/session.ts";
 import { ErrorCode, type SessionStartParams } from "../src/protocol.ts";
 import { RpcError } from "../src/rpc/peer.ts";
 import { appended, memoryDir } from "./support/claude-options.ts";
@@ -931,6 +931,27 @@ describe("configure and stop", () => {
     await session.configure({ model: "claude-haiku-4-5" });
     expect(query.calls.slice(-2)).toEqual(["setPermissionMode:acceptEdits", "setModel:claude-haiku-4-5"]);
     expect(modes().at(-1)).toEqual({ type: "permission_mode_effective", mode: "accept_edits" });
+  });
+
+  test("a /clear sent says in the chat that the agent starts over, once its new session starts", async () => {
+    const { session, query, host } = await started();
+    const init = (id: string) => query.push({ type: "system", subtype: "init", session_id: id, model: "claude-haiku-4-5-20251001", permissionMode: "default" } as never);
+    const cleared = () => host.events.filter((e) => e.type === "notice" && e.message === CLEARED);
+    init("sess-1");
+    await flush();
+    // Another session without a /clear (a resume): nothing said.
+    init("sess-2");
+    await flush();
+    expect(cleared()).toEqual([]);
+    session.send("/clear");
+    init("sess-2");
+    await flush();
+    expect(cleared()).toEqual([]);
+    init("sess-3");
+    init("sess-3");
+    await flush();
+    expect(cleared()).toHaveLength(1);
+    expect(host.events.filter((e) => e.type === "session_started").map((e) => e.type === "session_started" && e.agent_session_id)).toContain("sess-3");
   });
 
   test("an exploration keeps plan mode when asked to change it", async () => {

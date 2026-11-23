@@ -261,7 +261,9 @@ test -f "$T/resumed.txt" || { echo "the resumed agent did not write resumed.txt"
 
 echo "== 1c. a repo's skill is listed for / and runs"
 c commands chat-one | tee "$T/commands.txt" | grep -E "^/e2e-ping"
-if grep -qE "^/(model|clear) " "$T/commands.txt"; then echo "the chat's command list offers /model or /clear"; exit 1; fi
+if grep -qE "^/(model|effort|fast|color|focus) " "$T/commands.txt"; then echo "the chat's command list offers a built-in it hides (/model, /effort, /fast, /color, /focus)"; exit 1; fi
+grep -qE "^/compact " "$T/commands.txt" || { echo "the chat's command list lacks /compact"; exit 1; }
+grep -qE "^/clear " "$T/commands.txt" || { echo "the chat's command list lacks /clear"; exit 1; }
 c send chat-one "/e2e-ping" >/dev/null
 c --json wait chat-one --timeout 180 | python3 -c 'import sys,json; t=json.load(sys.stdin)["last_text"]; print(t); assert "PONG-SKILL" in (t or "")'
 
