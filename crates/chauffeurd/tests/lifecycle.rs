@@ -3852,6 +3852,7 @@ async fn a_restore_tried_again_starts_the_setup_of_every_group_it_brought_back_o
     assert_eq!(failed.state, WorkspaceState::CleanupFailed);
     let group_a = PathBuf::from(&group.path).join("repo-a");
     assert!(group_a.exists());
+    assert!(ran().is_empty(), "{:?}", ran());
     std::fs::rename(&away, &clone_b).unwrap();
     let again = d.workspaces.restore(&ws.slug).await.unwrap();
     assert_eq!(again.state, WorkspaceState::Ready, "{:?}", again.last_error);
@@ -3871,6 +3872,16 @@ async fn a_restore_tried_again_starts_the_setup_of_every_group_it_brought_back_o
         assert_ne!(ran[0].0, ran[1].0, "{ran:?}");
     };
     each_once().await;
+    // No snapshot left, those of the first try included: a group removed later stays removed.
+    let left: Vec<_> = d
+        .store
+        .worktrees_of(&ws.id)
+        .unwrap()
+        .into_iter()
+        .filter(|w| w.snapshot_ref.is_some())
+        .map(|w| w.repo)
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
 
     // A restore that succeeds at once: the same.
     d.workspaces.archive(&ws.slug, true).await.unwrap();
