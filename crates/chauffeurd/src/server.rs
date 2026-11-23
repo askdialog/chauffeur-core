@@ -851,6 +851,7 @@ pub async fn connection(daemon: Arc<Daemon>, socket: WebSocket, access: Access) 
             }
         }
     });
+    let canvas_connection = uuid::Uuid::now_v7();
     let mut subscriptions: HashMap<String, JoinHandle<()>> = HashMap::new();
     let shutdown = daemon.shutdown.clone();
     loop {
@@ -908,6 +909,13 @@ pub async fn connection(daemon: Arc<Daemon>, socket: WebSocket, access: Access) 
             continue;
         }
         match call {
+            ClientCall::DesignViewport(params) => {
+                let response = match daemon.shares.viewport(canvas_connection, params) {
+                    Ok(()) => Response::ok(id, Value::Null),
+                    Err(error) => Response::err(id, error.to_rpc()),
+                };
+                send(&tx, &response);
+            }
             ClientCall::EventsSubscribe(params) => {
                 let subscription = uuid::Uuid::now_v7().to_string();
                 // A moved workspace's events are the machine's it runs on: it answers there.
@@ -1031,6 +1039,7 @@ pub async fn connection(daemon: Arc<Daemon>, socket: WebSocket, access: Access) 
             }
         }
     }
+    daemon.shares.leave_canvases(canvas_connection);
     for (_, handle) in subscriptions {
         handle.abort();
     }
@@ -1161,6 +1170,7 @@ fn resolve_filter(daemon: &Arc<Daemon>, params: &SubscribeParams) -> crate::Resu
         all: params.all,
         registry: params.registry,
         office: params.office,
+        design_participants: params.design_participants && params.ephemeral,
         ..Default::default()
     };
     for workspace in &params.workspaces {

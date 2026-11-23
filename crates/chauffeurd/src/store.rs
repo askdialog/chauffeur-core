@@ -2975,6 +2975,7 @@ pub struct EventFilter {
     pub registry: bool,
     /// The `office` scope (live only: it is never stored).
     pub office: bool,
+    pub design_participants: bool,
     pub workspaces: Vec<String>,
     pub chats: Vec<String>,
     pub limit: Option<u32>,

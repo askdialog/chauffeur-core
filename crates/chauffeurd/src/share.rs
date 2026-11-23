@@ -16,8 +16,9 @@ use chauffeur_protocol::client::{
     FilesLinkedResult, ReviewerComment, ShareConnection, ShareStartParams, SharedDesignsResult,
 };
 use chauffeur_protocol::design_share::{
-    DesignQuestion, DesignQuestionResult, FromDaemon, SHARE_PROTOCOL_VERSION, ShareParams,
-    ShareSnapshot, ShareStatus, SharedDesign, ToDaemon,
+    DesignParticipant, DesignQuestion, DesignQuestionResult, DesignViewport, DesignViewportParams,
+    FromDaemon, MAX_OWNER_VIEWS, SHARE_PROTOCOL_VERSION, ShareParams, ShareSnapshot, ShareStatus,
+    SharedDesign, ToDaemon, valid_session,
 };
 use chauffeur_protocol::events::{ChatEvent, WorkspaceEvent};
 use chauffeur_protocol::model::{ChatInfo, ChatKind};
@@ -69,6 +70,15 @@ struct Link {
     status: Option<ShareStatus>,
     comments_rev: u64,
     last_comment: Option<ReviewerComment>,
+    participants: Vec<DesignParticipant>,
+    owner_views: BTreeMap<String, OwnerView>,
+    view_changed: Arc<Notify>,
+}
+
+struct OwnerView {
+    connection: uuid::Uuid,
+    view: DesignViewport,
+    refreshed: Instant,
 }
 
 /// What the service holds of the link's folder: each file's change time when it was sent.
@@ -412,6 +422,73 @@ impl Shares {
         Ok(self.state_of(&chat.id))
     }
 
+    pub fn participants(&self, chat: &str) -> Vec<DesignParticipant> {
+        self.links
+            .lock()
+            .unwrap()
+            .get(chat)
+            .map(|l| l.participants.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn viewport(&self, connection: uuid::Uuid, params: DesignViewportParams) -> Result<()> {
+        if file_of(&params.chat).is_some()
+            || !valid_session(&params.session)
+            || params.view.as_ref().is_some_and(|v| !v.valid())
+        {
+            return Err(Error::BadRequest(
+                "The design viewport or its session is out of range".into(),
+            ));
+        }
+        let mut links = self.links.lock().unwrap();
+        let Some(link) = links
+            .get_mut(&params.chat)
+            .filter(|l| l.connection == ShareConnection::Online)
+        else {
+            return Err(Error::Unavailable("The design share is offline".into()));
+        };
+        if link
+            .owner_views
+            .get(&params.session)
+            .is_some_and(|v| v.connection != connection)
+        {
+            return Err(Error::Conflict(
+                "This canvas session belongs to another connection".into(),
+            ));
+        }
+        if let Some(view) = params.view {
+            if link.owner_views.len() >= MAX_OWNER_VIEWS
+                && !link.owner_views.contains_key(&params.session)
+            {
+                return Err(Error::Conflict(
+                    "Too many canvases are open on this design".into(),
+                ));
+            }
+            link.owner_views.insert(
+                params.session,
+                OwnerView {
+                    connection,
+                    view,
+                    refreshed: Instant::now(),
+                },
+            );
+        } else {
+            link.owner_views.remove(&params.session);
+        }
+        link.view_changed.notify_one();
+        Ok(())
+    }
+
+    pub fn leave_canvases(&self, connection: uuid::Uuid) {
+        for link in self.links.lock().unwrap().values_mut() {
+            let before = link.owner_views.len();
+            link.owner_views.retain(|_, v| v.connection != connection);
+            if link.owner_views.len() != before {
+                link.view_changed.notify_one();
+            }
+        }
+    }
+
     fn state_of(&self, chat_id: &str) -> DesignShareState {
         let links = self.links.lock().unwrap();
         let link = links.get(chat_id);
@@ -615,6 +692,9 @@ impl Shares {
                     status: None,
                     comments_rev: 0,
                     last_comment: None,
+                    participants: Vec::new(),
+                    owner_views: BTreeMap::new(),
+                    view_changed: Arc::new(Notify::new()),
                 },
             ) {
                 old.stop.notify_waiters();
@@ -1089,6 +1169,19 @@ impl Shares {
                 outcome = self.session(&row, &workspace_id, &mut listing) => outcome,
                 _ = stop.notified() => return,
             };
+            self.update_link(&row.chat_id, |l| {
+                l.owner_views.clear();
+                l.participants.clear();
+            });
+            if file_of(&row.chat_id).is_none() {
+                self.d().events.chat(
+                    &workspace_id,
+                    &row.chat_id,
+                    ChatEvent::DesignParticipants {
+                        participants: Vec::new(),
+                    },
+                );
+            }
             match outcome {
                 Ok(Ended::Stopped) => {
                     // The service says the share is gone: nothing to reconnect to.
@@ -1102,6 +1195,7 @@ impl Shares {
                 }
                 Ok(Ended::Closed) => {
                     self.update_link(&row.chat_id, |l| l.connection = ShareConnection::Connecting);
+                    self.publish(&workspace_id, &row.chat_id);
                     backoff = Duration::from_secs(1);
                 }
                 Err(message) => {
@@ -1170,12 +1264,27 @@ impl Shares {
                 _ => return Err("The share service closed before its welcome".into()),
             }
         };
+        if file_of(&row.chat_id).is_none() {
+            sink.send(say(&FromDaemon::Follow))
+                .await
+                .map_err(|e| e.to_string())?;
+        }
         self.update_link(&row.chat_id, |l| {
             l.connection = ShareConnection::Online;
             l.status = Some(welcome);
         });
         self.publish(workspace_id, &row.chat_id);
 
+        let view_changed = self
+            .links
+            .lock()
+            .unwrap()
+            .get(&row.chat_id)
+            .map(|l| l.view_changed.clone())
+            .ok_or("The share was closed")?;
+        let mut last_views = BTreeMap::new();
+        let mut send_after = tokio::time::Instant::now();
+        let mut expires = tokio::time::Instant::now();
         // The whole design on the first connection, what changed since on the next ones.
         let mut comments_seen: Option<u64> = None;
         // The linked files the last look found: a reviewer's comment on one is kept on its path.
@@ -1183,6 +1292,30 @@ impl Shares {
         let mut interval = tokio::time::interval(SCAN_EVERY);
         loop {
             tokio::select! {
+                _ = async {
+                    tokio::time::sleep_until(send_after).await;
+                    tokio::select! {
+                        _ = view_changed.notified() => {},
+                        _ = tokio::time::sleep_until(expires), if !last_views.is_empty() => {},
+                    }
+                }, if file_of(&row.chat_id).is_none() => {
+                    let mut views = BTreeMap::new();
+                    let ttl = Duration::from_secs(35);
+                    let now = Instant::now();
+                    expires = (now + ttl).into();
+                    self.update_link(&row.chat_id, |l| {
+                        l.owner_views.retain(|_, local| now.saturating_duration_since(local.refreshed) < ttl);
+                        for (session, local) in &l.owner_views {
+                            expires = expires.min((local.refreshed + ttl).into());
+                            views.insert(session.clone(), local.view.clone());
+                        }
+                    });
+                    if views != last_views {
+                        sink.send(say(&FromDaemon::Viewports {views: views.clone()})).await.map_err(|e| e.to_string())?;
+                        last_views = views;
+                    }
+                    send_after = tokio::time::Instant::now() + Duration::from_millis(50);
+                }
                 _ = interval.tick() => {
                     if self.d().workspaces.row(workspace_id).is_ok_and(|w| w.state == chauffeur_protocol::model::WorkspaceState::Archiving) { continue; }
                     let Some((_, mut source)) = self.source(&row.chat_id) else { continue };
@@ -1262,6 +1395,12 @@ impl Shares {
                         Some(Err(e)) => return Err(format!("The share service closed: {e}")),
                     };
                     match message {
+                        ToDaemon::Participants {participants} => {
+                            if file_of(&row.chat_id).is_none() {
+                                self.update_link(&row.chat_id, |l| l.participants.clone_from(&participants));
+                                self.d().events.chat(workspace_id, &row.chat_id, ChatEvent::DesignParticipants {participants});
+                            }
+                        }
                         ToDaemon::Welcome { share } => {
                             self.update_link(&row.chat_id, |l| l.status = Some(share));
                             self.publish(workspace_id, &row.chat_id);

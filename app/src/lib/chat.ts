@@ -371,6 +371,7 @@ function apply(current: ChatView, event: ChatEvent, envelope: EventEnvelope): Ch
     case "permission_mode_effective":
     case "mcp_status":
     case "account_lost":
+    case "design_participants":
     case "design_share":
     case "suggestions":
     case "share_comments":

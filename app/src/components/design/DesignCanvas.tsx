@@ -9,7 +9,10 @@
 // screen for the element under it and opens a bubble; the Comments panel lists them and sends
 // the new ones to the agent. "Keep these" sends it the selection, asking to drop the rest.
 
-import type { CanvasResult, ChatInfo, CommentAuthor, DesignComment, DesignQuestion, DesignQuestionOption, Mention } from "@chauffeur/protocol";
+import { DesignFollowControls, useDesignFollow } from "@/components/design/DesignFollow";
+import { useCanvasFollowView } from "@/components/design/useCanvasFollowView";
+import { followPeers, useViewportPublication } from "@/components/design/useViewportPublication";
+import type { DesignParticipant, DesignViewport, CanvasResult, ChatInfo, CommentAuthor, DesignComment, DesignQuestion, DesignQuestionOption, Mention } from "@chauffeur/protocol";
 import { Check, Crosshair, ImageDown, MessageSquare, MessageSquarePlus, MessageSquareText, Play, RotateCw, Scan, Send, Share2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { canvasRevision, changedScreens, layoutCanvas, modifiedTimes, noScreens, pageSections, percent, presentOrder, type ShownSection, ZOOM_STEPS } from "@/lib/canvas";
@@ -156,10 +159,6 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
   useEffect(() => setCanvasPage(chat.id, pageScreens(sections)), [chat.id, sections]);
   const published = useMemo(() => publishedScreens(view.items, result?.dir ?? null), [view.items, result?.dir]);
 
-  const { zoom, area, setArea, moveView, fit, zoomTo, reveal, revealComment, commentsPanel } = useCanvasView(layout, pageIndex, result, setPage);
-  const snapshots = useScreenSnapshots(layout, zoom, area, picturesScreens);
-  const [fullScreen, setFullScreen] = useState<number | null>(null);
-  const [presenting, setPresenting] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const exportPng = async (request: ExportRequest) => {
     setExporting(true);
@@ -204,6 +203,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
     }
   };
   const startComment = (file: string, x: number, y: number, whole: boolean, frame?: HTMLIFrameElement | null) => {
+    follow.navigate();
     setOpenThread(null);
     setDraft({ file, x, y, whole, element: null });
     if (!whole) {
@@ -218,6 +218,54 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
   const [attaching, setAttaching] = useState(false);
   const [variants, setVariants] = useState<DesignQuestionOption[]>([]);
   const questionsButton = useRef<HTMLButtonElement>(null);
+  const [session] = useState(() => crypto.randomUUID());
+  const online = status === "open" && share?.connection.state === "online" && !!live;
+  const [participants, setParticipants] = useState<DesignParticipant[] | null>(null);
+  useEffect(() => {
+    setParticipants(null);
+    if (!online) return;
+    let initial = true;
+    const filter = { all: false, registry: false, workspaces: [], chats: [chat.id], ephemeral: true, design_participants: true };
+    const subscription = client.subscribe(
+      filter,
+      ({ event }) => {
+        if (event.scope === "chat" && event.chat_id === chat.id && event.event.type === "design_participants") {
+          initial = false;
+          setParticipants(event.event.participants);
+        }
+      },
+    );
+    void client.call("design.participants", { chat: chat.id }).then((list) => {
+      if (initial) setParticipants(list);
+    }).catch(() => {});
+    return () => {
+      initial = false;
+      subscription.close();
+    };
+  }, [chat.id, live?.id, online]);
+  const peers = useMemo(() => online && participants ? followPeers(participants, `owner:${session}`) : [], [participants, session, online]);
+  const follow = useDesignFollow(peers, () => {
+    setFullScreen(null);
+    setPresenting(null);
+    setOpenThread(null);
+    setDraft(null);
+    setPanel(false);
+    setCommentMode(false);
+    setQuestionsOpen(false);
+    setSharing(false);
+    setAttaching(false);
+  });
+  const { localView, zoom, area, setArea, moveView, fit, zoomTo, reveal, revealComment, commentsPanel } = useCanvasView(layout, pageIndex, result, setPage, follow);
+  const snapshots = useScreenSnapshots(layout, zoom, area, picturesScreens);
+  const { advertised, shownPresentation, shownFullscreen, setPresenting, setFullScreen } = useCanvasFollowView({
+    localView, remote: follow.remote, page: pageIndex, steps, selection, select,
+  });
+  const publish = useCallback((view: DesignViewport | null) => {
+    if (client.state.status === "open") {
+      void client.call("design.viewport", { chat: chat.id, session, view }).catch(() => {});
+    }
+  }, [chat.id, session]);
+  useViewportPublication(advertised, online && participants !== null, publish, true);
   const questionScreens = useQuestionScreens(result, pageIndex, setPage, select, reveal);
   const loadQuestions = useCallback(() => client.call("design.questions", { chat: chat.id }), [chat.id, live?.id]);
   const publishQuestion = (question: DesignQuestion) => client.call("design.question_publish", { chat: chat.id, question });
@@ -227,6 +275,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
     questionsButton.current?.focus();
   };
   const toggleQuestions = () => {
+    follow.navigate();
     if (questionsOpen) {
       closeQuestions();
       return;
@@ -327,6 +376,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
     if (await sendNow(chat, keep)) toast("Sent to the agent");
   };
   const escape = () => {
+    follow.navigate();
     if (attaching) setAttaching(false);
     else if (questionsOpen) closeQuestions();
     else if (draft) setDraft(null);
@@ -337,11 +387,12 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
   };
   const shownThread = openThread ? (threads.find((t) => t.comment.id === openThread) ?? null) : null;
   const showThread = useCallback((thread: Thread) => {
+    follow.navigate();
     if (revealComment(thread)) setPanel(false);
     select([thread.comment.screen]);
     setDraft(null);
     setOpenThread(thread.comment.id);
-  }, [revealComment, select]);
+  }, [revealComment, select, follow.navigate]);
   // The user's unread mentions on this share: badged in the panel, read once their thread opens.
   const allMentions = useApp((s) => s.mentions);
   const unreadHere = useMemo(
@@ -412,10 +463,11 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
       </div>
     ) : null;
   // Full screen and Present comment as the canvas does; the bubble shows only in front.
-  const overlay = fullScreen != null || presenting != null;
+  const overlay = shownFullscreen != null || shownPresentation != null;
   const commenting: ScreenCommenting = {
     commentMode,
     onToggleCommentMode: () => {
+      follow.navigate();
       if (questionsOpen) closeQuestions();
       setCommentMode((on) => !on);
       setDraft(null);
@@ -426,6 +478,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
     onFrame: onOverlayFrame,
     onCommentAt: startComment,
     onOpenThread: (id) => {
+      follow.navigate();
       setDraft(null);
       setOpenThread(id);
     },
@@ -439,6 +492,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
 
   const present = () => {
     if (steps.length === 0) return;
+    follow.navigate();
     const start = steps.findIndex((step) => selection.includes(step.screen.file));
     setPresenting(Math.max(0, start));
   };
@@ -465,6 +519,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
             value={String(pageIndex)}
             options={pages.map((p, i) => ({ value: String(i), label: p.name || `Page ${i + 1}` }))}
             onChange={(value) => {
+              follow.navigate();
               setPage(Number(value));
               select([]);
             }}
@@ -479,6 +534,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
           </span>
         )}
         <div className="ml-auto flex items-center gap-0.5">
+          {online && <DesignFollowControls follow={follow} />}
           {loading && result && <Spinner size={11} className="mr-1 text-faint" />}
           <Select
             value={zoomValue != null ? String(zoomValue) : "custom"}
@@ -520,6 +576,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
             size="sm"
             variant={panel ? "secondary" : "ghost"}
             onClick={() => {
+              follow.navigate();
               if (questionsOpen) closeQuestions();
               setPanel((on) => !on);
             }}
@@ -560,7 +617,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
           <Button
             size="sm"
             variant={isShared(share) ? "secondary" : "ghost"}
-            onClick={() => setSharing(true)}
+            onClick={() => { follow.navigate(); setSharing(true); }}
             title={shareTitle(share)}
             data-testid="canvas-share"
           >
@@ -629,7 +686,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
               setZoom={moveView}
               onArea={setArea}
               selection={selection}
-              onSelect={select}
+              onSelect={(files) => { follow.navigate(); select(files); }}
               flash={flash}
               commentMode={commentMode}
               pins={pins}
@@ -641,7 +698,7 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
               onEscape={escape}
               onToggleCommentMode={commenting.onToggleCommentMode}
               popover={overlay ? null : popover}
-              onFullScreen={setFullScreen}
+              onFullScreen={(index) => { follow.navigate(); setFullScreen(index); }}
               onExport={(index) => {
                 const request = sections[index] && sectionExport(sections[index]);
                 if (request && !exporting) void exportPng(request);
@@ -674,7 +731,8 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
             />
           )}
         </div>
-      {!chat.brand && <DesignQuestions open={questionsOpen} load={live ? loadQuestions : null} {...questionScreens} onClose={closeQuestions}
+      {!chat.brand && <DesignQuestions open={questionsOpen} load={live ? loadQuestions : null} available={questionScreens.available}
+        locate={(file) => { follow.navigate(); questionScreens.locate(file); }} onClose={closeQuestions}
         author={{
           options: variants,
           attaching,
@@ -685,11 +743,11 @@ export function DesignCanvas({ chat, view, headerStart }: { chat: ChatInfo; view
           share: () => setSharing(true),
         }} />}
       </div>
-      {fullScreen != null && sections[fullScreen] && (
-        <FullScreenSection section={sections[fullScreen]} onClose={() => setFullScreen(null)} commenting={commenting} />
+      {shownFullscreen != null && sections[shownFullscreen] && (
+        <FullScreenSection section={sections[shownFullscreen]} follow={follow} onClose={() => { follow.navigate(); setFullScreen(null); }} commenting={commenting} />
       )}
-      {presenting != null && steps.length > 0 && (
-        <PresentScreens steps={steps} start={presenting} published={published} onClose={() => setPresenting(null)} commenting={commenting} />
+      {shownPresentation != null && steps[shownPresentation] && (
+        <PresentScreens steps={steps} start={shownPresentation} follow={follow} onStep={(index) => { follow.navigate(); setPresenting(index); }} published={published} onClose={() => { follow.navigate(); setPresenting(null); }} commenting={commenting} />
       )}
     </div>
   );

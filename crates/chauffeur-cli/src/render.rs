@@ -1067,6 +1067,7 @@ fn chat_event(event: &ChatEvent, chat_hint: &str) -> Option<String> {
         | ChatEvent::PromptSuggestion { .. }
         | ChatEvent::PermissionCheck { .. }
         | ChatEvent::DesignShare { .. }
+        | ChatEvent::DesignParticipants { .. }
         | ChatEvent::Suggestions { .. }
         | ChatEvent::ShareComments { .. }
         | ChatEvent::ContextUsage { .. }

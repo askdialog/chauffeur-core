@@ -13156,6 +13156,52 @@ async fn a_shared_design_reaches_the_service_and_a_reviewer_s_comment_comes_back
     .expect("the snapshot");
     assert_eq!(snapshot.comments[0].text, "Too low");
 
+    // The owner's local canvas is bound to its client connection. Its current view comes
+    // back through the service as an ephemeral event; a second client cannot withdraw it.
+    let view = chauffeur_protocol::design_share::DesignViewport {
+        page: 0,
+        selected: Some(0),
+        scale: 1.25,
+        center_x: 0.25,
+        center_y: 0.75,
+        presentation: None,
+        fullscreen: Some(0),
+    };
+    let owner_view = chauffeur_protocol::design_share::DesignViewportParams {
+        chat: chat.id.clone(),
+        session: "local-canvas".into(),
+        view: Some(view.clone()),
+    };
+    let connection = uuid::Uuid::now_v7();
+    d.shares.viewport(connection, owner_view.clone()).unwrap();
+    assert!(d.shares.viewport(uuid::Uuid::now_v7(), owner_view).is_err());
+    let participants = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let envelope = events.recv().await.unwrap();
+            if let Event::Chat {
+                event: ChatEvent::DesignParticipants { participants },
+                ..
+            } = &envelope.event
+                && !participants.is_empty()
+            {
+                assert!(envelope.seq.is_none());
+                break participants.clone();
+            }
+        }
+    })
+    .await
+    .expect("the owner's live viewport");
+    assert_eq!(participants[0].view, view);
+    assert_eq!(participants[0].session, "owner:local-canvas");
+    assert_eq!(d.shares.participants(&chat.id), participants);
+    d.shares.leave_canvases(connection);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = events.recv().await.unwrap();
+            if matches!(&event.event, Event::Chat {event: ChatEvent::DesignParticipants {participants}, ..} if participants.is_empty()) { break }
+        }
+    }).await.expect("disconnect withdrew the owner's view");
+
     // The owner mentions a reviewer in a reply: kept in comments.json, named as the share knows
     // them. Someone the share is not open to is refused.
     let mention = |email: &str| {

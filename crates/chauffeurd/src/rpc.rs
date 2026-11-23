@@ -440,6 +440,12 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         | ClientCall::FilesShareUpdate(_)
         | ClientCall::FilesShareStop(_)) => handle_sharing(daemon, call).await,
         ClientCall::SharesList(_) => to_value(daemon.shares.list()?),
+        ClientCall::DesignViewport(_) => Err(Error::BadRequest(
+            "A live canvas needs a persistent WebSocket connection".into(),
+        )),
+        ClientCall::DesignParticipants(params) => {
+            to_value(daemon.shares.participants(&params.chat))
+        }
         ClientCall::DesignShareState(params) => to_value(daemon.shares.state(&params.chat)?),
         ClientCall::DesignImport(params) => to_value(daemon.shares.import(&params).await?),
         ClientCall::MentionsList(_) => to_value(daemon.mentions.list()),

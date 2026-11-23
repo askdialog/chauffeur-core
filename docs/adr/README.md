@@ -193,3 +193,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Shared HTML documents take passage comments](comments-on-shared-html.md) | 2026-11-20 | accepted |
 | [File workspaces by their exact repository set](exact-repository-section-matches.md) | 2026-11-20 | accepted |
 | [Codex Security audits in a workspace](codex-security-audits.md) | 2026-11-23 | accepted |
+| [Follow a participant on a shared design canvas](follow-design-view.md) | 2026-11-23 | accepted |

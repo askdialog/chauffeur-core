@@ -230,11 +230,69 @@ pub struct SignInLinkSessionParams {
     pub token: String,
 }
 
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[ts(export)]
+pub struct DesignViewport {
+    /// Flattened screen index on this page, even when selecting it leaves the camera still.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub selected: Option<u32>,
+    pub page: u32,
+    pub scale: f64,
+    pub center_x: f64,
+    pub center_y: f64,
+    pub presentation: Option<u32>,
+    pub fullscreen: Option<u32>,
+}
+
+impl DesignViewport {
+    pub fn valid(&self) -> bool {
+        self.page < 10_000
+            && (0.05..=4.0).contains(&self.scale)
+            && self.center_x.abs() <= 10_000.0
+            && self.center_y.abs() <= 10_000.0
+            && self.selected.is_none_or(|i| i < 10_000)
+            && self.presentation.is_none_or(|i| i < 10_000)
+            && self.fullscreen.is_none_or(|i| i < 10_000)
+    }
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[ts(export)]
+pub struct DesignParticipant {
+    pub session: String,
+    pub author: CommentAuthor,
+    pub view: DesignViewport,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
+#[ts(export)]
+pub struct DesignViewportParams {
+    pub chat: String,
+    pub session: String,
+    pub view: Option<DesignViewport>,
+}
+
+/// A short opaque identifier for one local canvas, scoped to its authenticated owner socket.
+pub fn valid_session(session: &str) -> bool {
+    (1..=64).contains(&session.len())
+        && session
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+}
+
+pub const MAX_OWNER_VIEWS: usize = 16;
+
 /// What a daemon says on its WebSocket (`/v1/shares/{id}/daemon`).
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum FromDaemon {
+    /// Opt in after Welcome so older daemons receive only the original messages.
+    Follow,
+    Viewports {
+        views: std::collections::BTreeMap<String, DesignViewport>,
+    },
     /// First, within seconds: the owner's Google ID token.
     Hello { id_token: String, version: u32 },
     /// The whole of `comments.json`, after each change of the daemon's.
@@ -251,6 +309,9 @@ pub enum FromDaemon {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum ToDaemon {
+    Participants {
+        participants: Vec<DesignParticipant>,
+    },
     Welcome {
         share: ShareStatus,
     },
@@ -278,6 +339,9 @@ pub enum ToDaemon {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum FromReviewer {
+    Viewport {
+        view: Option<DesignViewport>,
+    },
     Add {
         screen: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -320,6 +384,10 @@ pub enum FromReviewer {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(export)]
 pub enum ToReviewer {
+    Participants {
+        session: String,
+        participants: Vec<DesignParticipant>,
+    },
     Snapshot {
         snapshot: ShareSnapshot,
     },
@@ -449,4 +517,30 @@ pub enum ToMentionsDaemon {
     Refused {
         reason: String,
     },
+}
+
+#[cfg(test)]
+mod follow_tests {
+    use super::DesignViewport;
+    use serde_json::json;
+
+    #[test]
+    fn a_camera_accepts_off_page_centres_and_optional_bounded_selection() {
+        let camera = json!({"page": 0, "scale": 1, "center_x": -1.25, "center_y": 1.5});
+        let mut view: DesignViewport = serde_json::from_value(camera).unwrap();
+        assert!(view.valid());
+        assert!(
+            serde_json::to_value(&view)
+                .unwrap()
+                .get("selected")
+                .is_none()
+        );
+        view.selected = Some(9999);
+        assert!(view.valid());
+        view.selected = Some(10000);
+        assert!(!view.valid());
+        view.selected = None;
+        view.scale = f64::NAN;
+        assert!(!view.valid());
+    }
 }

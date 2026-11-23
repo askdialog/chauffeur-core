@@ -1297,6 +1297,7 @@ pub fn trimmed(envelope: &EventEnvelope) -> Option<EventEnvelope> {
         ChatEvent::Suggestions { .. }
         | ChatEvent::ShareComments { .. }
         | ChatEvent::DesignShare { .. }
+        | ChatEvent::DesignParticipants { .. }
         | ChatEvent::PermissionCheck { .. }
         | ChatEvent::TaskProgress { .. }
         | ChatEvent::PromptSuggestion { .. }

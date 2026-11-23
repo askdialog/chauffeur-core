@@ -197,6 +197,14 @@ pub fn for_registry(event: &Event) -> bool {
 
 /// Whether a live envelope passes a subscription filter.
 pub fn matches(filter: &EventFilter, envelope: &EventEnvelope) -> bool {
+    if let Event::Chat {
+        chat_id,
+        event: ChatEvent::DesignParticipants { .. },
+        ..
+    } = &envelope.event
+    {
+        return filter.design_participants && filter.chats.contains(chat_id);
+    }
     // Office events go to Office views only, not even to `all`.
     if matches!(envelope.event, Event::Office { .. }) {
         return filter.office;
@@ -255,6 +263,34 @@ mod tests {
         });
         assert!(!for_registry(&delta.event));
         assert!(!matches(&registry, &delta));
+    }
+
+    #[test]
+    fn only_an_opted_in_canvas_hears_its_design_participants() {
+        let event = EventEnvelope {
+            seq: None,
+            ts: String::new(),
+            event: Event::Chat {
+                workspace_id: "w".into(),
+                chat_id: "c".into(),
+                event: ChatEvent::DesignParticipants {
+                    participants: Vec::new(),
+                },
+            },
+        };
+        let mut filter = EventFilter {
+            all: true,
+            registry: true,
+            workspaces: vec!["w".into()],
+            ..Default::default()
+        };
+        assert!(!matches(&filter, &event));
+        filter.design_participants = true;
+        assert!(!matches(&filter, &event));
+        filter.chats.push("c".into());
+        assert!(matches(&filter, &event));
+        filter.design_participants = false;
+        assert!(!matches(&filter, &event));
     }
 
     /// Many tasks publishing at once: a live subscriber sees every persisted event, in sequence

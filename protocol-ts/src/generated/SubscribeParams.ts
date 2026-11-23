@@ -27,4 +27,8 @@ replay?: Replay,
  * The `office` scope, delivered to no other subscription. An Office view subscribes with
  * it: while one does, the daemon stays connected to the office server.
  */
-office?: boolean, };
+office?: boolean, 
+/**
+ * Live viewport updates for the design chats explicitly named by this subscription.
+ */
+design_participants?: boolean, };

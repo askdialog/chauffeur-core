@@ -412,7 +412,7 @@ async fn a_share_is_read_and_commented_by_its_reviewers_only() {
         410
     );
     assert_eq!(put("again.html", "x").await.unwrap().status(), 410);
-    // The daemon's socket is still up: the live list is dropped with the next connection attempt.
+    // A stopped design refuses even its owner's next connection.
     let mut late = connect(&format!("{ws_base}/v1/shares/{}/daemon", share.id), None).await;
     late.send(say(&FromDaemon::Hello {
         id_token: "dev:carol@example.com".into(),
@@ -1289,4 +1289,132 @@ async fn only_the_owner_publishes_and_each_reviewer_unlocks_results_with_one_vot
         200
     );
     assert_eq!(list(&bob).send().await.unwrap().status(), 410);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn active_canvases_share_current_views_across_sockets_and_leave_independently() {
+    use chauffeur_protocol::design_share::{DesignParticipant, DesignViewport};
+
+    async fn participants(page: &mut Socket, count: usize) -> (String, Vec<DesignParticipant>) {
+        loop {
+            if let ToReviewer::Participants {
+                session,
+                participants,
+            } = next(page).await
+                && participants.len() == count
+            {
+                return (session, participants);
+            }
+        }
+    }
+    let server = server().await;
+    let share: ShareStatus = reqwest::Client::new()
+        .post(format!("{}/v1/shares", server.base))
+        .bearer_auth("dev:owner@example.com")
+        .json(&serde_json::json!({"title":"Review","reviewers":["alice@example.com"]}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let ws = format!(
+        "{}/v1/shares/{}",
+        server.base.replace("http://", "ws://"),
+        share.id
+    );
+    let cookie = session_cookie(&server.base, "alice@example.com").await;
+    let page = format!("{ws}/reviewer");
+    let mut alice = connect(&page, Some(&cookie)).await;
+    let view = DesignViewport {
+        page: 3,
+        selected: Some(4),
+        scale: 1.0,
+        center_x: -0.2,
+        center_y: 0.9,
+        presentation: Some(2),
+        fullscreen: None,
+    };
+    alice
+        .send(say(&FromReviewer::Viewport {
+            view: Some(view.clone()),
+        }))
+        .await
+        .unwrap();
+    let (first, initial) = participants(&mut alice, 1).await;
+    assert_eq!(initial[0].session, first);
+    assert_eq!(initial[0].author.email, "alice@example.com");
+    assert_eq!(initial[0].view, view);
+    let mut other = connect(&page, Some(&cookie)).await;
+    let (second, current) = participants(&mut other, 1).await;
+    assert_ne!(second, first);
+    assert_eq!(current, initial);
+    let selected = DesignViewport {
+        selected: Some(5),
+        ..view.clone()
+    };
+    alice
+        .send(say(&FromReviewer::Viewport {
+            view: Some(selected.clone()),
+        }))
+        .await
+        .unwrap();
+    let (_, current) = participants(&mut other, 1).await;
+    assert_eq!(current[0].view, selected);
+    other
+        .send(say(&FromReviewer::Viewport {
+            view: Some(view.clone()),
+        }))
+        .await
+        .unwrap();
+    participants(&mut alice, 2).await;
+    let mut daemon = connect(&format!("{ws}/daemon"), None).await;
+    daemon
+        .send(say(&FromDaemon::Hello {
+            id_token: "dev:owner@example.com".into(),
+            version: SHARE_PROTOCOL_VERSION,
+        }))
+        .await
+        .unwrap();
+    assert!(matches!(
+        next::<ToDaemon>(&mut daemon).await,
+        ToDaemon::Welcome { .. }
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), daemon.next())
+            .await
+            .is_err(),
+        "a legacy daemon receives no viewport frames"
+    );
+    daemon.send(say(&FromDaemon::Follow)).await.unwrap();
+    loop {
+        if let ToDaemon::Participants { participants } = next(&mut daemon).await {
+            assert_eq!(participants.len(), 2);
+            break;
+        }
+    }
+    daemon
+        .send(say(&FromDaemon::Viewports {
+            views: [("local".into(), view.clone())].into(),
+        }))
+        .await
+        .unwrap();
+    let (_, all) = participants(&mut alice, 3).await;
+    assert!(all.iter().any(|p| p.session == "owner:local"
+        && p.author.email == "owner@example.com"
+        && p.view == view));
+    participants(&mut other, 3).await;
+    alice.close(None).await.unwrap();
+    let (_, remaining) = participants(&mut other, 2).await;
+    assert!(remaining.iter().all(|p| p.session != first));
+    daemon.close(None).await.unwrap();
+    let (_, alone) = participants(&mut other, 1).await;
+    assert_eq!(alone[0].session, second);
+    other
+        .send(say(&FromReviewer::Viewport { view: None }))
+        .await
+        .unwrap();
+    participants(&mut other, 0).await;
 }
