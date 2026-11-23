@@ -12,7 +12,7 @@ use std::sync::{Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use chauffeur_protocol::client::{GithubConnecting, GithubStatus};
+use chauffeur_protocol::client::{Forge, GithubConnecting, GithubStatus};
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
@@ -591,17 +591,9 @@ fn unpack(archive: &Path, root: &Path) -> anyhow::Result<PathBuf> {
 }
 
 /// `owner/name` of a GitHub remote URL (`git@github.com:o/n.git`, `https://github.com/o/n`,
-/// `ssh://git@github.com/o/n`).
+/// `ssh://git@github.com/o/n`), whatever forge the installation is set to.
 pub(crate) fn github_repo(url: &str) -> Option<(String, String)> {
-    let url = url.trim().trim_end_matches('/');
-    let url = url.strip_suffix(".git").unwrap_or(url);
-    let (_, path) = url.split_once("github.com")?;
-    let mut parts = path.trim_start_matches([':', '/']).split('/');
-    let (owner, name) = (parts.next()?, parts.next()?);
-    if owner.is_empty() || name.is_empty() || parts.next().is_some() {
-        return None;
-    }
-    Some((owner.to_string(), name.to_string()))
+    crate::repos::remote_repo(url, "github.com", Forge::Github)
 }
 
 #[cfg(test)]

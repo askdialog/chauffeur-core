@@ -36,13 +36,29 @@ struct Fixture {
     daemon: Arc<Daemon>,
 }
 
+fn fixture() -> Fixture {
+    fixture_on(false)
+}
+
 /// Clones `alpha` and `beta` (origin `github.com/fixture/<name>`, fetched from a local bare repo)
 /// that Chauffeur already knows; Conductor's `lima` on alpha's `fix-1-pricing` with uncommitted
-/// work and `oslo` on `feat/linked` with beta as an /add-dir folder.
-fn fixture() -> Fixture {
+/// work and `oslo` on `feat/linked` with beta as an /add-dir folder. With `gitlab`, the
+/// installation is set to `gitlab.example.com`, main group `team`: alpha is `team/alpha` there,
+/// beta `team/shop/beta`, and a third clone, `gamma`, is on GitHub.
+fn fixture_on(gitlab: bool) -> Fixture {
+    let url_of = |name: &str| match (gitlab, name) {
+        (false, _) | (true, "gamma") => format!("https://github.com/fixture/{name}.git"),
+        (true, "beta") => "https://gitlab.example.com/team/shop/beta.git".to_string(),
+        (true, _) => format!("https://gitlab.example.com/team/{name}.git"),
+    };
+    let names: &[&str] = if gitlab {
+        &["alpha", "beta", "gamma"]
+    } else {
+        &["alpha", "beta"]
+    };
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
-    for name in ["alpha", "beta"] {
+    for &name in names {
         let seed = root.join("seed").join(name);
         std::fs::create_dir_all(&seed).unwrap();
         git(&seed, &["init", "-q", "-b", "main"]);
@@ -70,7 +86,7 @@ fn fixture() -> Fixture {
                 clone.to_str().unwrap(),
             ],
         );
-        let url = format!("https://github.com/fixture/{name}.git");
+        let url = url_of(name);
         git(&clone, &["remote", "set-url", "origin", &url]);
         git(
             &clone,
@@ -115,8 +131,8 @@ fn fixture() -> Fixture {
         .unwrap();
     conn.execute_batch(&format!(
         "INSERT INTO repos (id, name, remote_url, root_path) VALUES
-           ('r-alpha', 'alpha', 'git@github.com:fixture/alpha.git', '{alpha}'),
-           ('r-beta', 'beta', 'https://github.com/fixture/beta', '{beta}');
+           ('r-alpha', 'alpha', '{alpha_url}', '{alpha}'),
+           ('r-beta', 'beta', '{beta_url}', '{beta}');
          INSERT INTO workspaces (local_id, repository_id, directory_name, workspace_name, branch, state, workspace_path, linked_directory_paths)
          VALUES ('w-lima', 'r-alpha', 'lima', 'Pricing filters', 'fix-1-pricing', 'ready', '{lima}', NULL),
                 ('w-oslo', 'r-alpha', 'oslo', 'Linked work', 'feat/linked', 'ready', '{oslo}', '[\"{beta}\"]');
@@ -126,6 +142,11 @@ fn fixture() -> Fixture {
          VALUES ('m-1', 's-1', 'user', 'Add a price filter', '2026-10-02T05:37:21.545Z');",
         alpha = alpha.display(),
         beta = root.join("clones/beta").display(),
+        // As Conductor records them: SSH for alpha, HTTPS without `.git` for beta.
+        alpha_url = url_of("alpha")
+            .replace("https://", "git@")
+            .replacen(".com/", ".com:", 1),
+        beta_url = url_of("beta").trim_end_matches(".git"),
         lima = lima.display(),
         oslo = oslo.display(),
     ))
@@ -137,8 +158,13 @@ fn fixture() -> Fixture {
     std::fs::write(
         home.join("settings.toml"),
         format!(
-            "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = [\"{}\"]\nport_range_start = 46900\nlinear_enabled = false\n",
-            root.join("clones").display()
+            "github_org = \"fixture\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = [\"{}\"]\nport_range_start = 46900\nlinear_enabled = false\n{}",
+            root.join("clones").display(),
+            if gitlab {
+                "forge = \"gitlab\"\ngitlab_host = \"gitlab.example.com\"\ngitlab_group = \"team\"\n"
+            } else {
+                ""
+            }
         ),
     )
     .unwrap();
@@ -228,6 +254,33 @@ async fn a_workspace_on_a_shared_clone_is_copied_and_its_branch_released_in_cond
         .unwrap();
     assert_eq!(lima_again.outcome, ConductorOutcome::AlreadyImported);
     assert_eq!(lima_again.workspace.as_deref(), Some("pricing-filters"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn on_a_gitlab_clones_are_matched_by_their_project_on_its_host() {
+    let f = fixture_on(true);
+    let gamma = f.root.join("clones/gamma");
+    let conn = rusqlite::Connection::open(&f.db).unwrap();
+    conn.execute(
+        "INSERT INTO repos (id, name, remote_url, root_path) VALUES ('r-gamma', 'gamma', 'https://github.com/fixture/gamma.git', ?1)",
+        [gamma.to_string_lossy()],
+    )
+    .unwrap();
+    drop(conn);
+
+    let plan = chauffeurd::conductor::import(&f.daemon, params(&f, true, &[]))
+        .await
+        .unwrap();
+    let gamma = plan.repos.iter().find(|r| r.conductor_name == "gamma");
+    let skipped = gamma.and_then(|r| r.skipped.as_deref());
+    assert!(skipped.is_some_and(|s| s.contains("GitLab")), "{gamma:?}");
+    // Conductor's record and an /add-dir clone, both read on the GitLab, named as the picker does.
+    let linked = plan
+        .workspaces
+        .iter()
+        .find(|w| w.name == "Linked work")
+        .unwrap();
+    assert_eq!(linked.repos, ["alpha", "team/shop/beta"], "{linked:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

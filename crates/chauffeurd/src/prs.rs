@@ -563,26 +563,35 @@ async fn open_prs(forge: Forge, env: &ShellEnv, clone: &Path) -> Option<Vec<Valu
     }
 }
 
-/// A GitHub repo's merged PRs, (head commit, base branch) by branch name: the `limit` most
-/// recent, in one `gh pr list`; `None` when gh fails.
+/// A repo's merged PRs, (head commit, base branch) by branch name, the `limit` most recent: on
+/// GitHub in one `gh pr list`; on a GitLab, its merge requests into `base`, read by pages. `None`
+/// when the forge's CLI fails.
 pub(crate) async fn merged_heads(
+    forge: Forge,
     env: &ShellEnv,
     clone: &Path,
+    base: &str,
     limit: u32,
 ) -> Option<HashMap<String, Vec<(String, String)>>> {
-    let limit = limit.to_string();
-    let args = [
-        "pr",
-        "list",
-        "--state",
-        "merged",
-        "--limit",
-        &limit,
-        "--json",
-        "headRefName,headRefOid,baseRefName",
-    ];
+    let prs = match forge {
+        Forge::Github => {
+            let limit = limit.to_string();
+            let args = [
+                "pr",
+                "list",
+                "--state",
+                "merged",
+                "--limit",
+                &limit,
+                "--json",
+                "headRefName,headRefOid,baseRefName",
+            ];
+            gh_json(env, clone, &args).await?
+        }
+        Forge::Gitlab => crate::mrs::merged_into(env, clone, base, limit).await?,
+    };
     let mut heads: HashMap<String, Vec<(String, String)>> = HashMap::new();
-    for pr in gh_json(env, clone, &args).await? {
+    for pr in prs {
         if let (Some(name), Some(oid), Some(base)) = (
             pr["headRefName"].as_str(),
             pr["headRefOid"].as_str(),

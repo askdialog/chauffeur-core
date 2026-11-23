@@ -20,9 +20,9 @@ use chauffeur_protocol::conductor::{
 use chauffeur_protocol::model::{TicketRef, WorkspaceState};
 
 use crate::git::Git;
-use crate::github::github_repo;
 use crate::paths::NOTES_DIR;
 use crate::repos::repo_folder;
+use crate::repos::{forge_remote, forge_repo, repo_reference};
 use crate::settings::expand_home;
 use crate::store::{TitleSource, WorkspaceRow, now};
 use crate::{Daemon, Error, Result};
@@ -174,16 +174,6 @@ fn select<'a>(
     Ok(picked)
 }
 
-/// Chauffeur's name of a GitHub repo: its short name in the main organization, else `owner/name`.
-pub(crate) fn reference(d: &Daemon, owner: &str, name: &str) -> String {
-    let org = d.settings.get().github_org.clone();
-    if !org.is_empty() && org.eq_ignore_ascii_case(owner) {
-        name.to_string()
-    } else {
-        format!("{owner}/{name}")
-    }
-}
-
 pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
@@ -191,21 +181,23 @@ pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// The GitHub remote of a clone: Conductor's record of it, else its `origin` as configured (not
-/// as rewritten by `insteadOf`).
+/// The repo a clone's remote names on the installation's forge (GitHub, or its GitLab): Conductor's
+/// record of it, else its `origin` as configured (not as rewritten by `insteadOf`).
 pub(crate) async fn remote_of(
+    d: &Daemon,
     git: &Git,
     clone: &Path,
     recorded: Option<&str>,
 ) -> Option<(String, String)> {
-    if let Some(found) = recorded.and_then(github_repo) {
+    let settings = d.settings.get();
+    if let Some(found) = recorded.and_then(|url| forge_repo(&settings, url)) {
         return Some(found);
     }
     let url = git
         .run(clone, &["config", "--get", "remote.origin.url"])
         .await
         .ok()?;
-    github_repo(&url)
+    forge_repo(&settings, &url)
 }
 
 async fn plan_repo(d: &Daemon, git: &Git, repo: &db::Repo, env: &[db::EnvVar]) -> Repo {
@@ -230,11 +222,11 @@ async fn plan_repo(d: &Daemon, git: &Git, repo: &db::Repo, env: &[db::EnvVar]) -
         planned.plan.skipped = Some(format!("its clone {} is gone", repo.root_path));
         return planned;
     }
-    let Some((owner, name)) = remote_of(git, &root, repo.remote_url.as_deref()).await else {
-        planned.plan.skipped = Some("it has no GitHub remote".into());
+    let Some((owner, name)) = remote_of(d, git, &root, repo.remote_url.as_deref()).await else {
+        planned.plan.skipped = Some(format!("it has no {}", forge_remote(&d.settings.get())));
         return planned;
     };
-    let reference = reference(d, &owner, &name);
+    let reference = repo_reference(&d.settings.get(), &owner, &name);
     match d.repos.existing_clone(&reference) {
         Some(clone) if same_folder(&clone, &root) => {
             planned.plan.clone = ConductorClone::Shared;
@@ -511,7 +503,7 @@ async fn branch_conflict(
 }
 
 /// The Chauffeur repo of an `/add-dir` folder: a Conductor repo's clone, or a clone Chauffeur
-/// knows by its GitHub remote.
+/// knows by its remote on the installation's forge.
 async fn linked_repo(
     d: &Daemon,
     git: &Git,
@@ -530,10 +522,10 @@ async fn linked_repo(
     if !folder.join(".git").exists() {
         return Err("it is not a git clone".into());
     }
-    let (owner, name) = remote_of(git, folder, None)
+    let (owner, name) = remote_of(d, git, folder, None)
         .await
-        .ok_or("it has no GitHub remote")?;
-    let reference = reference(d, &owner, &name);
+        .ok_or_else(|| format!("it has no {}", forge_remote(&d.settings.get())))?;
+    let reference = repo_reference(&d.settings.get(), &owner, &name);
     match d.repos.existing_clone(&reference) {
         Some(_) => Ok(reference),
         None => Err(format!("Chauffeur has no clone of {reference}")),
@@ -1005,24 +997,6 @@ fn rfc3339(stamp: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn github_remotes_are_read_in_every_form_git_writes_them() {
-        for url in [
-            "git@github.com:acme/web.git",
-            "https://github.com/acme/web",
-            "https://github.com/acme/web.git/",
-            "ssh://git@github.com/acme/web.git",
-        ] {
-            assert_eq!(
-                github_repo(url),
-                Some(("acme".into(), "web".into())),
-                "{url}"
-            );
-        }
-        assert_eq!(github_repo("https://gitlab.com/acme/web.git"), None);
-        assert_eq!(github_repo("https://github.com/acme"), None);
-    }
 
     #[test]
     fn a_linear_issue_is_read_from_the_start_of_the_branch_name_only() {

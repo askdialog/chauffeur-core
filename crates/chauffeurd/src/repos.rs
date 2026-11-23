@@ -751,32 +751,65 @@ fn origin_is(clone: &Path, host: &str, full_name: &str) -> bool {
         else {
             continue;
         };
-        let url = url.trim().trim_end_matches('/');
-        let url = url.strip_suffix(".git").unwrap_or(url);
-        if host.is_empty() {
-            return false;
-        }
-        let Some((_, path)) = url.split_once(host) else {
-            return false;
-        };
-        // On a GitLab, an `ssh://` URL may name a port after the host (`host:2222/path`), which is
-        // not part of the path; `host:1234/path` without the scheme is a path, as on GitHub.
-        let path = match path.strip_prefix(':').map(|rest| rest.split_once('/')) {
-            Some(Some((port, rest)))
-                if host != "github.com"
-                    && url.starts_with("ssh://")
-                    && !port.is_empty()
-                    && port.bytes().all(|b| b.is_ascii_digit()) =>
-            {
-                rest
-            }
-            _ => path,
-        };
-        return path
-            .trim_start_matches([':', '/'])
-            .eq_ignore_ascii_case(full_name);
+        return remote_path(url, host).is_some_and(|path| path.eq_ignore_ascii_case(full_name));
     }
     false
+}
+
+/// The path a remote URL names on `host` (`o/n`, `team/sub/n`), without `.git`: as
+/// `scheme://[user@]host[:port]/path` or `[user@]host:path`. The host is compared whole, in any
+/// case and without a port on either side (a GitLab served on `host:8443` is reached over SSH at
+/// `host`). None for another host.
+fn remote_path<'a>(url: &'a str, host: &str) -> Option<&'a str> {
+    let url = url.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    let (authority, path) = match url.split_once("://") {
+        Some((_, rest)) => rest.split_once('/')?,
+        None => url.split_once(':')?,
+    };
+    let without_port = |h: &'a str| h.split_once(':').map_or(h, |(name, _)| name);
+    let named = without_port(authority.rsplit_once('@').map_or(authority, |(_, h)| h));
+    let wanted = host.split_once(':').map_or(host, |(name, _)| name);
+    (!wanted.is_empty() && named.eq_ignore_ascii_case(wanted)).then(|| path.trim_start_matches('/'))
+}
+
+/// The repo a remote URL names on the installation's forge, as (owner, name): `o/n` on GitHub;
+/// on a GitLab, the project's namespace, subgroups included, and its name. None for a remote
+/// elsewhere.
+pub(crate) fn forge_repo(settings: &UserSettings, url: &str) -> Option<(String, String)> {
+    remote_repo(url, forge_host(settings), settings.forge)
+}
+
+/// The repo a remote URL names on `host`, read as `forge` names repos.
+pub(crate) fn remote_repo(url: &str, host: &str, forge: Forge) -> Option<(String, String)> {
+    let path = remote_path(url, host)?;
+    let (owner, name) = match forge {
+        Forge::Github => path
+            .split_once('/')
+            .filter(|(_, name)| !name.contains('/'))?,
+        Forge::Gitlab => path
+            .rsplit_once('/')
+            .filter(|(owner, _)| is_gitlab_namespace(owner))?,
+    };
+    (!owner.is_empty() && !name.is_empty()).then(|| (owner.to_string(), name.to_string()))
+}
+
+/// What a remote on the installation's forge is called, for a clone without one.
+pub(crate) fn forge_remote(settings: &UserSettings) -> String {
+    match settings.forge {
+        Forge::Github => "GitHub remote".to_string(),
+        Forge::Gitlab => format!("GitLab remote ({})", settings.gitlab_host),
+    }
+}
+
+/// The name the repo picker gives `owner/name`: short in the main organization or group, the
+/// whole path otherwise.
+pub(crate) fn repo_reference(settings: &UserSettings, owner: &str, name: &str) -> String {
+    if is_main(settings, owner) {
+        name.to_string()
+    } else {
+        format!("{owner}/{name}")
+    }
 }
 
 /// Refuses a repo name that is not a single plain folder name (GitHub's charset, no leading dot):
@@ -1385,6 +1418,88 @@ mod tests {
             parse_repo_ref(Forge::Github, "o-1/r.x").unwrap(),
             (Some("o-1"), "r.x")
         );
+    }
+
+    #[test]
+    fn a_remote_names_its_repo_on_the_installation_s_forge_only() {
+        let github = UserSettings {
+            github_org: "acme".into(),
+            ..UserSettings::default()
+        };
+        let gitlab = UserSettings {
+            forge: Forge::Gitlab,
+            gitlab_host: "gitlab.example.com".into(),
+            gitlab_group: "team".into(),
+            ..UserSettings::default()
+        };
+        let named = |owner: &str, name: &str| Some((owner.to_string(), name.to_string()));
+        for url in [
+            "git@github.com:acme/web.git",
+            "https://github.com/acme/web",
+            "https://github.com/acme/web.git/",
+            "ssh://git@github.com/acme/web.git",
+        ] {
+            assert_eq!(forge_repo(&github, url), named("acme", "web"), "{url}");
+            assert_eq!(forge_repo(&gitlab, url), None, "{url}");
+            // A PR's GitHub repo is read whatever the forge.
+            assert_eq!(
+                crate::github::github_repo(url),
+                named("acme", "web"),
+                "{url}"
+            );
+        }
+        for (url, owner, name) in [
+            ("https://gitlab.example.com/team/web.git", "team", "web"),
+            (
+                "git@gitlab.example.com:team/shop/api.git",
+                "team/shop",
+                "api",
+            ),
+            (
+                "ssh://git@gitlab.example.com:2222/team/sub/api.git",
+                "team/sub",
+                "api",
+            ),
+            ("https://gitlab.example.com/other/tool/", "other", "tool"),
+        ] {
+            assert_eq!(forge_repo(&gitlab, url), named(owner, name), "{url}");
+            assert_eq!(forge_repo(&github, url), None, "{url}");
+        }
+        // The host whole, in any case, a port on either side left out.
+        let on_a_port = UserSettings {
+            gitlab_host: "gitlab.example.com:8443".into(),
+            ..gitlab.clone()
+        };
+        for url in [
+            "git@GitLab.Example.com:team/web.git",
+            "ssh://git@gitlab.example.com:2222/team/web.git",
+            "https://oauth2:token@gitlab.example.com:8443/team/web",
+        ] {
+            assert_eq!(forge_repo(&gitlab, url), named("team", "web"), "{url}");
+            assert_eq!(forge_repo(&on_a_port, url), named("team", "web"), "{url}");
+        }
+        for nothing in [
+            "https://github.com/acme",
+            "https://github.com/acme/web/extra",
+            "https://gitlab.example.com/web.git",
+            "https://gitlab.com/team/web.git",
+            "https://gitlab.example.com/team/.hidden/web.git",
+            "https://staging-gitlab.example.com/team/web.git",
+            "https://gitlab.example.community/team/web.git",
+            "https://other.org/gitlab.example.com/team/web",
+            "https://other.org/github.com/acme/web",
+            "/code/web",
+        ] {
+            assert_eq!(forge_repo(&github, nothing), None, "{nothing}");
+            assert_eq!(forge_repo(&gitlab, nothing), None, "{nothing}");
+        }
+        // Named as the picker names it: short in the main organization or group only.
+        assert_eq!(repo_reference(&github, "Acme", "web"), "web");
+        assert_eq!(repo_reference(&github, "other", "web"), "other/web");
+        assert_eq!(repo_reference(&gitlab, "team", "web"), "web");
+        assert_eq!(repo_reference(&gitlab, "team/shop", "api"), "team/shop/api");
+        assert_eq!(forge_remote(&github), "GitHub remote");
+        assert_eq!(forge_remote(&gitlab), "GitLab remote (gitlab.example.com)");
     }
 
     #[test]

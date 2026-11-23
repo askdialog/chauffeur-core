@@ -49,6 +49,36 @@ pub async fn list(env: &ShellEnv, clone: &Path, head: &str, state: &str) -> Opti
     }
 }
 
+/// The project's merge requests merged into `target`, most recently updated first, in `list`'s
+/// shape: `limit` at most, 100 a page; `None` when glab fails.
+pub async fn merged_into(
+    env: &ShellEnv,
+    clone: &Path,
+    target: &str,
+    limit: u32,
+) -> Option<Vec<Value>> {
+    let mut merged = Vec::new();
+    for page in 1..=limit.div_ceil(MERGED_PAGE) {
+        let path = format!(
+            "projects/:id/merge_requests?state=merged&target_branch={}&order_by=updated_at&sort=desc&per_page={MERGED_PAGE}&page={page}",
+            utf8_percent_encode(target, NON_ALPHANUMERIC)
+        );
+        let Value::Array(mrs) = api(env, clone, &path).await? else {
+            return None;
+        };
+        let last = mrs.len() < MERGED_PAGE as usize;
+        merged.extend(mrs.iter().map(as_pull_request));
+        if last {
+            break;
+        }
+    }
+    merged.truncate(limit as usize);
+    Some(merged)
+}
+
+/// GitLab's largest page.
+const MERGED_PAGE: u32 = 100;
+
 /// The project's open merge requests, in `list`'s shape; their pipelines are not in it.
 pub async fn open(env: &ShellEnv, clone: &Path) -> Option<Vec<Value>> {
     let path = "projects/:id/merge_requests?state=opened&per_page=100";
