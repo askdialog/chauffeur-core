@@ -105,15 +105,6 @@ fn children(d: &Daemon, workspace: &str) -> Result<Vec<WorkspaceRow>> {
         .collect())
 }
 
-/// The worktrees of `workspace`'s children.
-fn children_worktrees(d: &Daemon, workspace: &str) -> Result<Vec<WorktreeRow>> {
-    let mut worktrees = Vec::new();
-    for child in children(d, workspace)? {
-        worktrees.extend(d.store.worktrees_of(&child.id)?);
-    }
-    Ok(worktrees)
-}
-
 /// What the agent of an imported chat is told before what it reads next, once: the folder its
 /// session ran in, its own folder now, where each repo lives, and which folders are the user's.
 /// None for a chat not imported, or told.
@@ -199,7 +190,10 @@ pub(crate) fn guarded(d: &Daemon, chat: &ChatInfo, clones: &[SourceClone]) -> Ve
             return Ok(Vec::new());
         };
         let own = d.store.worktrees_of(&chat.workspace_id)?;
-        let children = children_worktrees(d, &chat.workspace_id)?;
+        let mut children = Vec::new();
+        for child in self::children(d, &chat.workspace_id)? {
+            children.extend(d.store.worktrees_of(&child.id)?);
+        }
         let mut guarded: Vec<SourceClone> = Vec::new();
         for checkout in &origin.checkouts {
             let Some(worktree) = worktree_of(d, &own, &children, checkout) else {

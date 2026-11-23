@@ -272,7 +272,6 @@ impl Reading {
     }
 }
 
-/// A transcript line's time, read as text: its first `"timestamp":"…"` (keys are never escaped).
 /// A time as UTC with milliseconds (`2026-11-02T06:37:58.718Z`, as Claude Code writes it), so
 /// that times compare as text: another offset or precision is converted; none when it is no time.
 pub fn instant(stamp: &str) -> Option<String> {
@@ -287,6 +286,7 @@ pub fn instant(stamp: &str) -> Option<String> {
     )
 }
 
+/// A transcript line's time, read as text: its first `"timestamp":"…"` (keys are never escaped).
 fn stamp(line: &str) -> Option<&str> {
     let key = "\"timestamp\":\"";
     let start = line.find(key)? + key.len();
@@ -329,7 +329,6 @@ static CREATES: LazyLock<Regex> = LazyLock::new(|| {
 /// The branches a shell command creates (`git worktree add -b`, `git switch -c`, `git checkout
 /// -b`), with the folder given to `-C`.
 pub fn created_branches(command: &str) -> Vec<(Option<String>, String)> {
-    let unquote = |s: &str| s.trim_matches(|c| c == '"' || c == '\'').to_string();
     // A `cd <dir>` before it on the line moves it there, a `-C` after that, further.
     let mut found = Vec::new();
     let mut dir: Option<String> = None;
@@ -338,18 +337,14 @@ pub fn created_branches(command: &str) -> Vec<(Option<String>, String)> {
         if let Some(to) = part.strip_prefix("cd ") {
             let to = unquote(to.trim());
             dir = Some(match &dir {
-                Some(from) if !to.starts_with('/') && !to.starts_with('~') => {
-                    format!("{from}/{to}")
-                }
-                _ => to,
+                Some(from) => under(from, to),
+                None => to,
             });
             continue;
         }
         for (at, branch) in created_in(part) {
             let at = match (&dir, at) {
-                (Some(from), Some(at)) if !at.starts_with('/') && !at.starts_with('~') => {
-                    Some(format!("{from}/{at}"))
-                }
+                (Some(from), Some(at)) => Some(under(from, at)),
                 (_, Some(at)) => Some(at),
                 (from, None) => from.clone(),
             };
@@ -359,8 +354,21 @@ pub fn created_branches(command: &str) -> Vec<(Option<String>, String)> {
     found
 }
 
+/// `to`, a folder a command names, from the folder `from` it runs in, unless it starts from the
+/// root or the home folder.
+fn under(from: &str, to: String) -> String {
+    if to.starts_with('/') || to.starts_with('~') {
+        to
+    } else {
+        format!("{from}/{to}")
+    }
+}
+
+fn unquote(s: &str) -> String {
+    s.trim_matches(|c| c == '"' || c == '\'').to_string()
+}
+
 fn created_in(command: &str) -> Vec<(Option<String>, String)> {
-    let unquote = |s: &str| s.trim_matches(|c| c == '"' || c == '\'').to_string();
     CREATES
         .captures_iter(command)
         .filter_map(|c| {
