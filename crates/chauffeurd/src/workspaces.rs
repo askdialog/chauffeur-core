@@ -3125,7 +3125,7 @@ impl WorkspaceManager {
         }
         self.set_state(&row.id, WorkspaceState::Creating, None)?;
         // Whatever fails leaves it cleanup_failed, to restore again.
-        let restored: Result<(Vec<String>, Vec<String>)> = async {
+        let restored: Result<(Vec<String>, Vec<WorktreeRow>, Vec<String>)> = async {
             self.bring_back_folder(&row)?;
             crate::ports::allocate(
                 &d.store,
@@ -3136,7 +3136,6 @@ impl WorkspaceManager {
             )?;
             let git = self.git();
             let mut errors = Vec::new();
-            let mut groups = Vec::new();
             for worktree in &restorable {
                 let snapshot = worktree.snapshot_ref.clone().unwrap();
                 let clone = Path::new(&worktree.clone_path);
@@ -3170,13 +3169,23 @@ impl WorkspaceManager {
                                 worktree: worktree_info(restored),
                             },
                         );
-                        if let Some(group) = &worktree.group {
-                            groups.push(group.clone());
-                        }
                     }
                     Err(error) => errors.push(format!("{}: {error:#}", worktree.repo)),
                 }
             }
+            // Every worktree back from its snapshot, those an earlier try brought back included
+            // (their snapshots are cleared once the whole restore succeeds): its group gets its
+            // port block and, once ready, its setup.
+            let brought_back: Vec<WorktreeRow> = d
+                .store
+                .worktrees_of(&row.id)?
+                .into_iter()
+                .filter(|w| !w.removed && w.snapshot_ref.is_some())
+                .collect();
+            let mut groups: Vec<String> = brought_back
+                .iter()
+                .filter_map(|w| w.group.clone())
+                .collect();
             groups.sort();
             groups.dedup();
             for group in &groups {
@@ -3189,11 +3198,11 @@ impl WorkspaceManager {
                 )?;
             }
             self.regenerate_config(&row.id)?;
-            Ok((errors, groups))
+            Ok((errors, brought_back, groups))
         }
         .await;
-        let (errors, groups) =
-            restored.unwrap_or_else(|error| (vec![error.to_string()], Vec::new()));
+        let (errors, brought_back, groups) =
+            restored.unwrap_or_else(|error| (vec![error.to_string()], Vec::new(), Vec::new()));
         if !errors.is_empty() {
             // Failed first: no chat is opened once its chats are closed.
             self.set_state(
@@ -3205,7 +3214,7 @@ impl WorkspaceManager {
             return self.get(&row.id);
         }
         // Snapshots stay until expiry: restoring again after a new archive replaces them.
-        for worktree in &restorable {
+        for worktree in &brought_back {
             d.store.clear_snapshot_ref(&worktree.id)?;
         }
         // Ready first: a message to a chat back from the archive never waits for a ready state.
