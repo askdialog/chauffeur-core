@@ -1,8 +1,9 @@
 import { Check, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
+import { copyCodeBlock } from "@/lib/copyMarkdown";
 import { toast } from "@/state/toasts";
 
-/** Copies a code block's source as written, without its highlighting. */
+/** Copies a code block's source as written, without its highlighting, its lines kept in rich editors. */
 export function CopyCodeButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   useEffect(() => {
@@ -12,7 +13,7 @@ export function CopyCodeButton({ text }: { text: string }) {
   }, [copied]);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyCodeBlock(text);
       setCopied(true);
     } catch {
       toast("Could not copy the code", "error");
