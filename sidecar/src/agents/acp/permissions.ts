@@ -43,6 +43,9 @@ const EXPLORATION_EDIT_DENIAL =
   "This Chauffeur workspace is an exploration, read-only: files are not edited. Read and explain; to change code, " +
   "the user creates a Chauffeur workspace.";
 
+/** A variable's name as the shell writes it. */
+const SHELL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 const ALLOW: Decision = { type: "allow" };
 const ASK: Decision = { type: "ask" };
 
@@ -61,7 +64,10 @@ export function decide(tool: AcpToolCall, context: PermissionContext): Decision 
     // Where the process runs and the variables it is given (`GIT_WORK_TREE`…) hold for its whole line,
     // as exported ones do.
     const from = tool.cwd ? resolve(context.cwd, tool.cwd) : context.cwd;
-    const assigned = Object.entries(tool.env ?? {}).map(([name, value]) => ` ${name}='${value.replaceAll("'", `'\\''`)}'`);
+    // Only the names a shell can hold: any other would be read as shell source (`#` hiding the command).
+    const assigned = Object.entries(tool.env ?? {})
+      .filter(([name]) => SHELL_NAME.test(name))
+      .map(([name, value]) => ` ${name}='${value.replaceAll("'", `'\\''`)}'`);
     const line = assigned.length > 0 ? `export${assigned.join("")}; ${command}` : command;
     const intoClone = cloneCommandRefusal(line, from, context.clones);
     if (intoClone) return deny(intoClone);
