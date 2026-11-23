@@ -211,6 +211,12 @@ export class CodexSession implements AgentSession {
     if (this.state !== "new") throw new RpcError(ErrorCode.CONFLICT, "session already started");
     this.state = "starting";
     const env = { ...this.deps.baseEnv, ...this.params.env };
+    // Codex Security may disable Git discovery when an earlier checkout is gone.
+    // Pin only the system Git when it is already the session's selected executable.
+    if (env.CODEX_SECURITY_GIT === undefined && env.PATH &&
+        Bun.which("git", { PATH: env.PATH, cwd: this.params.cwd }) === "/usr/bin/git") {
+      env.CODEX_SECURITY_GIT = "/usr/bin/git";
+    }
     this.agentEnv = env;
     let server: AppServer;
     let hook: string | undefined;
