@@ -3,7 +3,7 @@
 //! the branches its shell commands created, nothing resolved against git yet; and which sessions
 //! still run (`<claude>/sessions/<pid>.json` of a live process).
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -381,9 +381,10 @@ fn created_in(command: &str) -> Vec<(Option<String>, String)> {
         .collect()
 }
 
-/// The sessions still running: those whose `<claude>/sessions/<pid>.json` names a live process.
-pub fn running(sessions: &Path) -> HashSet<String> {
-    let mut running = HashSet::new();
+/// The sessions still running: those whose `<claude>/sessions/<pid>.json` names a live process,
+/// with the folder the file says the session is in now.
+pub fn running(sessions: &Path) -> HashMap<String, Option<PathBuf>> {
+    let mut running = HashMap::new();
     let Ok(files) = std::fs::read_dir(sessions) else {
         return running;
     };
@@ -407,7 +408,8 @@ pub fn running(sessions: &Path) -> HashSet<String> {
                 .is_none_or(|now| now == recorded.split_whitespace().collect::<Vec<_>>().join(" "))
         });
         if i32::try_from(pid).is_ok_and(alive) && same {
-            running.insert(id.to_string());
+            let cwd = entry["cwd"].as_str().map(PathBuf::from);
+            running.insert(id.to_string(), cwd);
         }
     }
     running
@@ -648,7 +650,7 @@ mod tests {
         let me = std::process::id();
         std::fs::write(
             dir.path().join(format!("{me}.json")),
-            format!(r#"{{"pid":{me},"sessionId":"live"}}"#),
+            format!(r#"{{"pid":{me},"sessionId":"live","cwd":"/code/web"}}"#),
         )
         .unwrap();
         std::fs::write(
@@ -672,7 +674,13 @@ mod tests {
             format!(r#"{{"pid":{me},"sessionId":"same","procStart":"{started}"}}"#),
         )
         .unwrap();
-        assert_eq!(running(dir.path()), HashSet::from(["live".to_string()]));
-        assert_eq!(running(other.path()), HashSet::from(["same".to_string()]));
+        assert_eq!(
+            running(dir.path()),
+            HashMap::from([("live".to_string(), Some(PathBuf::from("/code/web")))])
+        );
+        assert_eq!(
+            running(other.path()),
+            HashMap::from([("same".to_string(), None)])
+        );
     }
 }
