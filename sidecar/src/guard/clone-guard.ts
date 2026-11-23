@@ -338,7 +338,7 @@ class Judge {
       return;
     }
     // `GIT_DIR=… git …`: the variable is set for that command only.
-    const env = values.slice(0, i).map((value) => this.envClone(value)).find(Boolean);
+    const env = values.slice(0, i).map((value) => this.envClone(value, state)).find(Boolean);
     const local = env && !state.env ? { ...copy(state), env } : state;
     const input = [
       ...piped,
@@ -348,12 +348,16 @@ class Judge {
     this.run(values.slice(i), local, false, input);
   }
 
-  /** The clone an assignment's value names: a variable exported with it points a program there. */
-  private envClone(value: Value): GuardedClone | undefined {
+  /**
+   * The clone an assignment's value names: a variable exported with it points a program there. A
+   * relative value is a path from the folder the command runs in, as the program reads it.
+   */
+  private envClone(value: Value, state: State): GuardedClone | undefined {
     const eq = value.text.indexOf("=");
     if (eq < 0) return undefined;
     const assigned = value.text.slice(eq + 1);
-    return isAbsolute(assigned) ? cloneAround(resolve(assigned), this.clones) : undefined;
+    if (isAbsolute(assigned)) return cloneAround(resolve(assigned), this.clones);
+    return assigned && state.dir !== undefined ? cloneAround(resolve(state.dir, assigned), this.clones) : undefined;
   }
 
   private redirections({ redirections }: Command | Group, state: State): void {
@@ -469,7 +473,7 @@ class Judge {
   private exported(args: Value[], state: State): void {
     for (const arg of args) {
       const set = /^[A-Za-z_][A-Za-z0-9_]*$/.test(arg.text) ? state.vars.get(arg.text) : undefined;
-      state.env ??= this.envClone(set === undefined ? arg : exact(`=${set}`));
+      state.env ??= this.envClone(set === undefined ? arg : exact(`=${set}`), state);
     }
   }
 
@@ -486,7 +490,7 @@ class Judge {
     // Its variables are the line's from here on; one naming a clone may point a program there.
     for (const [name, value] of assignments) {
       state.vars.set(name, value);
-      state.env ??= this.envClone(exact(`=${value}`));
+      state.env ??= this.envClone(exact(`=${value}`), state);
     }
   }
 
@@ -561,7 +565,7 @@ class Judge {
         break;
       }
       if (name === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg.text)) {
-        local.env ??= this.envClone(arg);
+        local.env ??= this.envClone(arg, local);
         i++;
         continue;
       }

@@ -375,6 +375,20 @@ describe("cloneCommandRefusal", () => {
     true,
   );
 
+  // A variable's relative value is a path from the folder the command runs in, as a program reads it.
+  table(
+    "refuses a variable pointing a program at a clone by a relative path",
+    [
+      "GIT_DIR=../../code/web/.git git commit -am x",
+      "GIT_WORK_TREE=../../code/web git checkout .",
+      "env GIT_DIR=../../code/web/.git git commit -m x",
+      "export CARGO_TARGET_DIR=../../code/web/target && cargo build",
+      "cd ../.. && GIT_DIR=code/web/.git git commit -am x",
+    ],
+    true,
+  );
+  table("allows a variable's relative value outside the clones", ["LANG=C make", "CARGO_TARGET_DIR=target cargo build"], false);
+
   table(
     "refuses what the shell expands to a clone",
     [

@@ -97,6 +97,7 @@ group("decide", () => {
     expect(decide(process({ processId: "ab", bytesBase64: Buffer.from("echo x > /code/web/a\n").toString("base64") }), guarded).type).toBe("deny");
     // A process's variables hold for every command of its line, as an exported variable does.
     expect(decide(process({ command: "true; git clean -fdx", env: { GIT_WORK_TREE: "/code/web", GIT_DIR: "/code/web/.git" } }), guarded).type).toBe("deny");
+    expect(decide(process({ command: "git clean -fdx", env: { GIT_WORK_TREE: "../code/web", GIT_DIR: "../code/web/.git" } }), guarded).type).toBe("deny");
     // A variable whose name no shell could hold does not hide the command from the guard.
     for (const name of ["#", "A;#", "A B", "1A", "A=B"]) {
       expect(decide(process({ command: "touch /code/web/a", env: { [name]: "x" } }), guarded).type).toBe("deny");
