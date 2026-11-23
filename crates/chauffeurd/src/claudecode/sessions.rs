@@ -337,14 +337,14 @@ pub fn created_branches(command: &str) -> Vec<(Option<String>, String)> {
         if let Some(to) = part.strip_prefix("cd ") {
             let to = unquote(to.trim());
             dir = Some(match &dir {
-                Some(from) => under(from, to),
+                Some(from) => resolved_from(from, to),
                 None => to,
             });
             continue;
         }
         for (at, branch) in created_in(part) {
             let at = match (&dir, at) {
-                (Some(from), Some(at)) => Some(under(from, at)),
+                (Some(from), Some(at)) => Some(resolved_from(from, at)),
                 (_, Some(at)) => Some(at),
                 (from, None) => from.clone(),
             };
@@ -356,7 +356,7 @@ pub fn created_branches(command: &str) -> Vec<(Option<String>, String)> {
 
 /// `to`, a folder a command names, from the folder `from` it runs in, unless it starts from the
 /// root or the home folder.
-fn under(from: &str, to: String) -> String {
+fn resolved_from(from: &str, to: String) -> String {
     if to.starts_with('/') || to.starts_with('~') {
         to
     } else {

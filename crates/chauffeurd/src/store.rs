@@ -1862,9 +1862,9 @@ impl Store {
 
     /// Inserts a chat imported from elsewhere with its conversation (each event at its time),
     /// and records `record` with the chat's id and `origin` (a `kv` key and value), in one
-    /// transaction: an import that fails halfway
-    /// leaves nothing, and a recorded one is never imported twice. Returns the events with their
-    /// sequence numbers; None when `record` is there already or the workspace is gone.
+    /// transaction: an import that fails halfway leaves nothing, and a recorded one is never
+    /// imported twice. Returns the events with their sequence numbers; None when `record` is
+    /// there already or the workspace is gone.
     pub fn insert_imported_chat(
         &self,
         chat: &ChatInfo,

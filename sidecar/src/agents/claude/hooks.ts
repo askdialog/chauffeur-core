@@ -131,13 +131,12 @@ export function guardClones(clones: SourceClone[], cwd: string): HookCallback {
   return async (input) => {
     if (input.hook_event_name !== "PreToolUse") return {};
     const from = typeof input.cwd === "string" && input.cwd ? input.cwd : cwd;
-    const command = input.tool_name === "Bash" ? commandOf(input.tool_input) : undefined;
-    const refusal =
-      input.tool_name === "Bash"
-        ? command === undefined
-          ? undefined
-          : cloneCommandRefusal(command, from, all)
-        : cloneWriteRefusal(input.tool_name, input.tool_input, from, all);
+    let refusal: string | undefined;
+    if (input.tool_name !== "Bash") refusal = cloneWriteRefusal(input.tool_name, input.tool_input, from, all);
+    else {
+      const command = commandOf(input.tool_input);
+      refusal = command === undefined ? undefined : cloneCommandRefusal(command, from, all);
+    }
     return refusal === undefined ? {} : denied(refusal);
   };
 }

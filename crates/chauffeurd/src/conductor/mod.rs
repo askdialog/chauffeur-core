@@ -416,11 +416,7 @@ async fn plan_workspace(
         skipped(plan, format!("its folder {} is gone", folder.display()));
         return planned;
     }
-    let checked_out = git
-        .run(&folder, &["symbolic-ref", "-q", "--short", "HEAD"])
-        .await
-        .ok()
-        .filter(|b| !b.is_empty());
+    let checked_out = git.current_branch(&folder).await.ok().flatten();
     match checked_out {
         Some(branch) => {
             plan.branch = branch;
