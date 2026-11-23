@@ -12,6 +12,7 @@ import { fitScale, type PresentStep, type ShownSection, type Size, stepPresent }
 import { openExternal } from "@/lib/native";
 import { Button, cx, IconButton, Kbd } from "../ui";
 import { type ScreenCommenting, ScreenComments } from "./ScreenComments";
+import { DesignFollowControls, type DesignFollow } from "./DesignFollow";
 import { ScreenFrame } from "./ScreenFrame";
 
 /** Esc (and other keys) before anything else of the app: a dialog in front keeps them. */
@@ -106,7 +107,7 @@ function OverlayScreen({ screen, scale, commenting, className }: { screen: Canva
   );
 }
 
-export function FullScreenSection({ section, onClose, commenting }: { section: ShownSection; onClose: () => void; commenting?: ScreenCommenting }) {
+export function FullScreenSection({ section, onClose, commenting, follow }: { section: ShownSection; onClose: () => void; commenting?: ScreenCommenting; follow?: DesignFollow }) {
   useOverlayKeys((event) => {
     if (commentKey(event, commenting)) return true;
     if (event.key !== "Escape") return false;
@@ -130,6 +131,7 @@ export function FullScreenSection({ section, onClose, commenting }: { section: S
             : `${section.screens.length === 1 ? "1 screen" : `${section.screens.length} screens`} at 100%, interactive`}
         </span>
         <span className="ml-auto flex items-center gap-2 text-[11.5px] text-faint">
+          {follow && <DesignFollowControls follow={follow} />}
           {commenting && <CommentModeButton commenting={commenting} />}
           <span>
             <Kbd>esc</Kbd> to leave
@@ -175,21 +177,29 @@ export function PublishedLink({ url, className }: { url: string; className?: str
 export function PresentScreens({
   steps,
   start,
+  onStep,
+  follow,
   published,
   onClose,
   commenting,
 }: {
   steps: PresentStep[];
   start: number;
+  onStep?: (index: number) => void;
+  follow?: DesignFollow;
   /** The claude.ai URL of each published screen, by file. */
   published: Record<string, string>;
   onClose: () => void;
   commenting?: ScreenCommenting;
 }) {
   const [index, setIndex] = useState(start);
-  const current = Math.min(index, steps.length - 1);
+  const current = Math.min(onStep ? start : index, steps.length - 1);
   const step = steps[current];
-  const move = (direction: -1 | 1) => setIndex((i) => stepPresent(Math.min(i, steps.length - 1), steps.length, direction));
+  const move = (direction: -1 | 1) => {
+    const next = stepPresent(current, steps.length, direction);
+    if (onStep) onStep(next);
+    else setIndex(next);
+  };
   useOverlayKeys((event) => {
     if (commentKey(event, commenting)) return true;
     if (event.key === "Escape") onClose();
@@ -219,6 +229,7 @@ export function PresentScreens({
         <span className="text-faint">/</span>
         {step && <ScreenLabel screen={step.screen} commenting={commenting} className="text-fg" />}
         {step && published[step.screen.file] && <PublishedLink url={published[step.screen.file]} />}
+        {follow && <DesignFollowControls follow={follow} />}
         <span className="ml-auto tabular-nums text-muted" data-testid="canvas-present-counter">
           {current + 1} / {steps.length}
         </span>

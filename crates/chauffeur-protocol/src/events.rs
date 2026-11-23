@@ -562,6 +562,10 @@ pub enum ChatEvent {
     PromptSuggestion {
         text: String,
     },
+    /// Current views of the active design canvases. Ephemeral.
+    DesignParticipants {
+        participants: Vec<crate::design_share::DesignParticipant>,
+    },
     /// Ephemeral: the agent's automatic permission check (Claude's auto mode) on a tool call has
     /// run a few seconds and goes on (`checking`), or is over (not `checking`: it says nothing of
     /// the verdict, which the tool's result, a denial or a permission request gives). Best
@@ -824,6 +828,7 @@ impl ChatEvent {
             | ChatEvent::PromptSuggestion { .. }
             | ChatEvent::ShellStarted { .. }
             | ChatEvent::PermissionCheck { .. }
+            | ChatEvent::DesignParticipants { .. }
             | ChatEvent::DesignShare { .. }
             | ChatEvent::Suggestions { .. }
             | ChatEvent::ShareComments { .. }

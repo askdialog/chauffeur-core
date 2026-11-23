@@ -5,6 +5,7 @@ import type { ChatStatus } from "./ChatStatus";
 import type { CommentAuthor } from "./CommentAuthor";
 import type { ContextUsage } from "./ContextUsage";
 import type { DelegatedAnswer } from "./DelegatedAnswer";
+import type { DesignParticipant } from "./DesignParticipant";
 import type { DesignShareState } from "./DesignShareState";
 import type { ForkPoint } from "./ForkPoint";
 import type { ImageInput } from "./ImageInput";
@@ -171,4 +172,4 @@ last_tool: string | null,
 /**
  * A one-line status, when the agent gives one.
  */
-summary: string | null, duration_ms: number | null, tool_uses: number | null, } | { "type": "prompt_suggestion", text: string, } | { "type": "design_share", state: DesignShareState, } | { "type": "suggestions", suggestions: Array<Suggestion>, } | { "type": "share_comments", comments: Array<ShareComment>, } | { "type": "permission_check", tool_use_id: string, checking: boolean, } | { "type": "plan_updated", steps: Array<PlanStep>, } | { "type": "task_ended", task_id: string, status: TaskStatus, summary: string | null, } | { "type": "context_usage", usage: ContextUsage, } | { "type": "permission_mode_effective", mode: PermissionMode, } | { "type": "mcp_status", servers: Array<McpServer>, } | { "type": "account_lost", message: string, };
+summary: string | null, duration_ms: number | null, tool_uses: number | null, } | { "type": "prompt_suggestion", text: string, } | { "type": "design_participants", participants: Array<DesignParticipant>, } | { "type": "design_share", state: DesignShareState, } | { "type": "suggestions", suggestions: Array<Suggestion>, } | { "type": "share_comments", comments: Array<ShareComment>, } | { "type": "permission_check", tool_use_id: string, checking: boolean, } | { "type": "plan_updated", steps: Array<PlanStep>, } | { "type": "task_ended", task_id: string, status: TaskStatus, summary: string | null, } | { "type": "context_usage", usage: ContextUsage, } | { "type": "permission_mode_effective", mode: PermissionMode, } | { "type": "mcp_status", servers: Array<McpServer>, } | { "type": "account_lost", message: string, };

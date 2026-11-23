@@ -126,11 +126,13 @@ import type { DesignComment } from "./DesignComment";
 import type { DesignExportParams } from "./DesignExportParams";
 import type { DesignExportResult } from "./DesignExportResult";
 import type { DesignImportParams } from "./DesignImportParams";
+import type { DesignParticipant } from "./DesignParticipant";
 import type { DesignQuestionPublishParams } from "./DesignQuestionPublishParams";
 import type { DesignQuestionResult } from "./DesignQuestionResult";
 import type { DesignResource } from "./DesignResource";
 import type { DesignResourceParams } from "./DesignResourceParams";
 import type { DesignShareState } from "./DesignShareState";
+import type { DesignViewportParams } from "./DesignViewportParams";
 import type { DevServices } from "./DevServices";
 import type { DevServicesDetected } from "./DevServicesDetected";
 import type { DevServicesSaveParams } from "./DevServicesSaveParams";
@@ -397,7 +399,7 @@ import type { WorktreeCreateResult } from "./WorktreeCreateResult";
 import type { WorktreeObservedParams } from "./WorktreeObservedParams";
 import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 
-export const PROTOCOL_VERSION = 26;
+export const PROTOCOL_VERSION = 27;
 export const MIN_PROTOCOL_VERSION = 1;
 export const PEER_PROTOCOL_VERSION = 4;
 
@@ -568,6 +570,8 @@ export type ClientMethods = {
   "design.comments_send": [CommentsSendParams, CommentsSendResult];
   "shares.list": [EmptyParams, Array<OutgoingShare>];
   "design.share_state": [ChatParams, DesignShareState];
+  "design.viewport": [DesignViewportParams, null];
+  "design.participants": [ChatParams, Array<DesignParticipant>];
   "design.questions": [ChatParams, Array<DesignQuestionResult>];
   "design.question_publish": [DesignQuestionPublishParams, Array<DesignQuestionResult>];
   "design.share_start": [ShareStartParams, DesignShareState];
@@ -985,6 +989,8 @@ export const METHOD_NAMES = [
   "design.comments_send",
   "shares.list",
   "design.share_state",
+  "design.viewport",
+  "design.participants",
   "design.questions",
   "design.question_publish",
   "design.share_start",

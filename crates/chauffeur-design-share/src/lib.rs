@@ -184,6 +184,7 @@ pub struct Service {
 struct Live {
     daemon: Option<(u64, mpsc::UnboundedSender<ToDaemon>)>,
     reviewers: Vec<ReviewerConnection>,
+    follow: ws::Follow,
 }
 
 struct ReviewerConnection {
@@ -955,9 +956,17 @@ async fn delete_share(
     headers: HeaderMap,
     UrlPath(id): UrlPath<String>,
 ) -> Result<Json<ShareStatus>, Reject> {
-    let (_, _) = service.owned(&headers, &id).await?;
+    let (_, share) = service.owned(&headers, &id).await?;
     service.store.stop_share(&id, now_ms()).map_err(internal)?;
     service.files.remove_all(&id);
+    if share.document.is_none() {
+        service.tell_daemon(
+            &id,
+            ToDaemon::Refused {
+                reason: "This share was stopped".into(),
+            },
+        );
+    }
     service.tell_reviewers(
         &id,
         &ToReviewer::Refused {

@@ -4,19 +4,23 @@
 //! author alone edits or removes one, until the owner sent it to the agent; anyone resolves.
 //! A comment's mentions are kept to the people the share is open to (mentions.rs).
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
 use chauffeur_protocol::client::{CommentAuthor, CommentResolved, DesignComment};
 use chauffeur_protocol::design_share::{
-    FromDaemon, FromReviewer, MentionPlace, SHARE_PROTOCOL_VERSION, ToDaemon, ToReviewer,
+    DesignParticipant, DesignViewport, FromDaemon, FromReviewer, MAX_OWNER_VIEWS, MentionPlace,
+    SHARE_PROTOCOL_VERSION, ToDaemon, ToReviewer, valid_session,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::mentions::{self, Audience};
 use crate::{Identity, Service, now_ms, random_hex};
 
+const VIEW_INTERVAL: Duration = Duration::from_millis(50);
+const MAX_REVIEWER_VIEWS: usize = 128;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 const PING_EVERY: Duration = Duration::from_secs(20);
 /// A design's comments, whole, fit in this; a file goes over HTTP.
@@ -24,6 +28,85 @@ const MAX_MESSAGE: usize = 4 * 1024 * 1024;
 const TEXT_MAX: usize = 20_000;
 /// Characters of a markdown file's passage a comment is on, at most (the daemon's limit too).
 const QUOTE_MAX: usize = 2_000;
+
+/// Only the latest position matters. A watch notification wakes slow sockets without
+/// accumulating frames in the reliable comments queue.
+#[derive(Default)]
+pub(super) struct Follow {
+    participants: BTreeMap<String, DesignParticipant>,
+    changed: watch::Sender<()>,
+}
+
+impl Follow {
+    fn subscribe(&self) -> watch::Receiver<()> {
+        let mut rx = self.changed.subscribe();
+        if !self.participants.is_empty() {
+            rx.mark_changed();
+        }
+        rx
+    }
+
+    fn reviewer(&mut self, session: &str, author: &CommentAuthor, view: Option<DesignViewport>) {
+        let changed = match view {
+            Some(view)
+                if view.valid()
+                    && (self.participants.len() < MAX_REVIEWER_VIEWS
+                        || self.participants.contains_key(session)) =>
+            {
+                let entry = DesignParticipant {
+                    session: session.into(),
+                    author: author.clone(),
+                    view,
+                };
+                if self.participants.get(session) == Some(&entry) {
+                    return;
+                }
+                self.participants.insert(session.into(), entry);
+                true
+            }
+            Some(_) => false,
+            None => self.participants.remove(session).is_some(),
+        };
+        if changed {
+            self.changed.send_replace(());
+        }
+    }
+
+    fn owners(&mut self, author: &CommentAuthor, views: BTreeMap<String, DesignViewport>) {
+        if views.len() > MAX_OWNER_VIEWS
+            || views.iter().any(|(s, v)| !valid_session(s) || !v.valid())
+        {
+            return;
+        }
+        let had_owner = self.participants.keys().any(|k| k.starts_with("owner:"));
+        if !had_owner && views.is_empty() {
+            return;
+        }
+        self.participants
+            .retain(|key, _| !key.starts_with("owner:"));
+        for (session, view) in views {
+            let session = format!("owner:{session}");
+            self.participants.insert(
+                session.clone(),
+                DesignParticipant {
+                    session,
+                    author: author.clone(),
+                    view,
+                },
+            );
+        }
+        self.changed.send_replace(());
+    }
+
+    fn list(&self) -> Vec<DesignParticipant> {
+        self.participants.values().cloned().collect()
+    }
+}
+
+async fn follow_changed(rx: &mut watch::Receiver<()>, after: tokio::time::Instant) {
+    tokio::time::sleep_until(after).await;
+    let _ = rx.changed().await;
+}
 
 /// What a reviewer's message does to the comments.
 #[derive(Debug, PartialEq)]
@@ -170,6 +253,7 @@ pub fn apply(
                 ..comment.clone()
             })))
         }
+        FromReviewer::Viewport { .. } => Err("A viewport cannot edit a comment".into()),
         FromReviewer::Seen { thread } => Ok(Change::Seen(thread)),
     }
 }
@@ -242,12 +326,14 @@ pub async fn daemon_socket(service: Arc<Service>, share_id: String, mut socket: 
 
     let id = service.next_connection();
     let (tx, mut rx) = mpsc::unbounded_channel::<ToDaemon>();
-    service.with_live(&share_id, |live| {
+    let mut follow = service.with_live(&share_id, |live| {
+        live.follow.owners(&identity.author(), BTreeMap::new());
         if let Some((_, old)) = live.daemon.replace((id, tx)) {
             let _ = old.send(ToDaemon::Refused {
                 reason: "Another connection of this daemon took the share over".into(),
             });
         }
+        live.follow.subscribe()
     });
     let welcome = ToDaemon::Welcome {
         share: service.status(&share),
@@ -265,10 +351,17 @@ pub async fn daemon_socket(service: Arc<Service>, share_id: String, mut socket: 
     );
     tracing::info!(share = share_id, owner = identity.email, "daemon connected");
 
+    let mut following_enabled = false;
+    let mut after = tokio::time::Instant::now();
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.tick().await;
     loop {
         tokio::select! {
+            _ = follow_changed(&mut follow, after), if following_enabled => {
+                let participants = service.with_live(&share_id, |l| l.follow.list());
+                if socket.send(text(&ToDaemon::Participants { participants })).await.is_err() { break }
+                after = tokio::time::Instant::now() + VIEW_INTERVAL;
+            }
             outgoing = rx.recv() => {
                 let Some(message) = outgoing else { break };
                 let last = matches!(message, ToDaemon::Refused { .. });
@@ -283,6 +376,7 @@ pub async fn daemon_socket(service: Arc<Service>, share_id: String, mut socket: 
             }
             incoming = socket.recv() => {
                 let Some(Ok(message)) = incoming else { break };
+                if matches!(message, Message::Close(_)) { break }
                 let Message::Text(body) = message else { continue };
                 if body.len() > MAX_MESSAGE {
                     break;
@@ -290,6 +384,16 @@ pub async fn daemon_socket(service: Arc<Service>, share_id: String, mut socket: 
                 let Ok(message) = serde_json::from_str::<FromDaemon>(&body) else { continue };
                 match message {
                     FromDaemon::Hello { .. } => {}
+                    FromDaemon::Follow => following_enabled = share.document.is_none(),
+                    FromDaemon::Viewports { views } => {
+                        if following_enabled {
+                            service.with_live(&share_id, |live| {
+                                if live.daemon.as_ref().is_some_and(|(current,_)| *current == id) {
+                                    live.follow.owners(&identity.author(), views);
+                                }
+                            });
+                        }
+                    }
                     FromDaemon::Comments { comments } => {
                         let Ok(Some(share)) = service.store.share(&share_id) else { continue };
                         let stored = service.store.comments(&share_id).unwrap_or_default();
@@ -324,7 +428,9 @@ pub async fn daemon_socket(service: Arc<Service>, share_id: String, mut socket: 
             }
         }
     }
-    leave_daemon(&service, &share_id, id);
+    if !leave_daemon(&service, &share_id, id) {
+        return;
+    }
     let last_push_at = service
         .store
         .share(&share_id)
@@ -341,7 +447,7 @@ pub async fn daemon_socket(service: Arc<Service>, share_id: String, mut socket: 
     tracing::info!(share = share_id, "daemon left");
 }
 
-fn leave_daemon(service: &Service, share_id: &str, id: u64) {
+fn leave_daemon(service: &Service, share_id: &str, id: u64) -> bool {
     service.with_live(share_id, |live| {
         if live
             .daemon
@@ -349,8 +455,17 @@ fn leave_daemon(service: &Service, share_id: &str, id: u64) {
             .is_some_and(|(current, _)| *current == id)
         {
             live.daemon = None;
+            let before = live.follow.participants.len();
+            live.follow
+                .participants
+                .retain(|s, _| !s.starts_with("owner:"));
+            if live.follow.participants.len() != before {
+                live.follow.changed.send_replace(());
+            }
+            return true;
         }
-    });
+        false
+    })
 }
 
 impl Service {
@@ -382,12 +497,13 @@ pub async fn reviewer_socket(
     };
     let id = service.next_connection();
     let (tx, mut rx) = mpsc::unbounded_channel::<ToReviewer>();
-    service.with_live(&share_id, |live| {
+    let mut follow = service.with_live(&share_id, |live| {
         live.reviewers.push(crate::ReviewerConnection {
             id,
             identity: identity.clone(),
             tx,
         });
+        live.follow.subscribe()
     });
     if socket
         .send(text(&ToReviewer::Snapshot { snapshot }))
@@ -399,11 +515,33 @@ pub async fn reviewer_socket(
     }
     service.announce_viewers(&share_id);
     let me = identity.author();
-
+    let session = format!("reviewer:{id}");
+    let mut pending_view = None;
+    let mut publish_after = tokio::time::Instant::now();
+    let mut after = tokio::time::Instant::now();
     let mut ping = tokio::time::interval(PING_EVERY);
     ping.tick().await;
     loop {
         tokio::select! {
+            _ = tokio::time::sleep_until(publish_after), if pending_view.is_some() => {
+                if service.viewable(&share_id, &identity).is_err() {
+                    let _ = socket.send(text(&ToReviewer::Refused { reason: "This share is no longer open to you".into() })).await;
+                    break;
+                }
+                if let Some(view) = pending_view.take() {
+                    service.with_live(&share_id, |live| live.follow.reviewer(&session, &me, view));
+                }
+                publish_after = tokio::time::Instant::now() + VIEW_INTERVAL;
+            }
+            _ = follow_changed(&mut follow, after), if share.document.is_none() => {
+                if service.viewable(&share_id, &identity).is_err() {
+                    let _ = socket.send(text(&ToReviewer::Refused { reason: "This share is no longer open to you".into() })).await;
+                    break;
+                }
+                let participants = service.with_live(&share_id, |l| l.follow.list());
+                if socket.send(text(&ToReviewer::Participants { session: session.clone(), participants })).await.is_err() {break}
+                after = tokio::time::Instant::now() + VIEW_INTERVAL;
+            }
             outgoing = rx.recv() => {
                 let Some(message) = outgoing else { break };
                 let last = matches!(message, ToReviewer::Refused { .. });
@@ -418,11 +556,18 @@ pub async fn reviewer_socket(
             }
             incoming = socket.recv() => {
                 let Some(Ok(message)) = incoming else { break };
+                if matches!(message, Message::Close(_)) { break }
                 let Message::Text(body) = message else { continue };
                 if body.len() > MAX_MESSAGE {
                     break;
                 }
                 let Ok(message) = serde_json::from_str::<FromReviewer>(&body) else { continue };
+                if let FromReviewer::Viewport { view } = message {
+                    if share.document.is_none() && view.as_ref().is_none_or(DesignViewport::valid) {
+                        pending_view = Some(view);
+                    }
+                    continue;
+                }
                 // The share may have been stopped, or the reviewer taken off, since the snapshot.
                 if service.viewable(&share_id, &identity).is_err() {
                     let _ = socket.send(text(&ToReviewer::Refused { reason: "This share is no longer open to you".into() })).await;
@@ -464,7 +609,17 @@ pub async fn reviewer_socket(
 }
 
 fn leave_reviewer(service: &Service, share_id: &str, id: u64) {
-    service.with_live(share_id, |live| live.reviewers.retain(|r| r.id != id));
+    service.with_live(share_id, |live| {
+        live.reviewers.retain(|r| r.id != id);
+        if live
+            .follow
+            .participants
+            .remove(&format!("reviewer:{id}"))
+            .is_some()
+        {
+            live.follow.changed.send_replace(());
+        }
+    });
 }
 
 #[cfg(test)]

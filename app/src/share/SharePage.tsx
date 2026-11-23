@@ -3,7 +3,10 @@
 // who is looking, Live or when the design was last pushed. No chat, no export, nothing to the
 // agent: a reviewer's comments reach the owner's daemon through the service.
 
-import type { CanvasResult, CommentAuthor, DesignComment, FromReviewer, Mention, ShareSnapshot, ToReviewer } from "@chauffeur/protocol";
+import { DesignFollowControls, useDesignFollow } from "@/components/design/DesignFollow";
+import { useCanvasFollowView } from "@/components/design/useCanvasFollowView";
+import { followPeers, useViewportPublication } from "@/components/design/useViewportPublication";
+import type { DesignParticipant, DesignViewport, CanvasResult, CommentAuthor, DesignComment, FromReviewer, Mention, ShareSnapshot, ToReviewer } from "@chauffeur/protocol";
 import { ArrowLeft, AtSign, Copy, Download, Lock, LogOut, Mail, MessageSquarePlus, MessageSquareText, Play, Scan, UserRound, Users, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { layoutCanvas, noScreens, pageSections, percent, presentOrder, ZOOM_STEPS } from "@/lib/canvas";
@@ -578,6 +581,14 @@ function OpenShare({
   const [reviewersOpen, setReviewersOpen] = useState(false);
   const [peopleOpen, setPeopleOpen] = useState(false);
   const [takeOverOpen, setTakeOverOpen] = useState(false);
+  const [mobile, setMobile] = useState(() => matchMedia("(max-width: 700px), (max-height: 500px) and (pointer: coarse)").matches || new URLSearchParams(location.search).get("mobile") === "1");
+  useEffect(() => {
+    const query = matchMedia("(max-width: 700px), (max-height: 500px) and (pointer: coarse)");
+    const change = () => setMobile(query.matches || new URLSearchParams(location.search).get("mobile") === "1");
+    query.addEventListener("change", change);
+    return () => query.removeEventListener("change", change);
+  }, []);
+  const [roster, setRoster] = useState<{ session: string; participants: DesignParticipant[] } | null>(null);
   const [connected, setConnected] = useState(false);
   const [snapshotEpoch, setSnapshotEpoch] = useState(0);
   const [flash, setFlash] = useState<Record<string, number>>({});
@@ -747,6 +758,9 @@ function OpenShare({
           case "comment_removed":
             setLive((l) => ({ ...l, comments: l.comments.filter((c) => c.id !== message.id) }));
             break;
+          case "participants":
+            setRoster(message);
+            break;
           case "viewers":
             setLive((l) => ({ ...l, viewers: message.viewers }));
             break;
@@ -770,6 +784,7 @@ function OpenShare({
       };
       ws.onclose = () => {
         if (socket.current !== ws) return;
+        setRoster(null);
         setConnected(false);
         socket.current = null;
         if (closed) return;
@@ -804,9 +819,6 @@ function OpenShare({
   const layout = useMemo(() => layoutCanvas(sections), [sections]);
   const steps = useMemo(() => presentOrder(sections), [sections]);
   const [selection, setSelection] = useState<string[]>([]);
-  const { zoom, area, setArea, moveView, fit, zoomTo, reveal, revealComment, commentsPanel } = useCanvasView(layout, pageIndex, live.canvas, setPage);
-  const [fullScreen, setFullScreen] = useState<number | null>(null);
-  const [presenting, setPresenting] = useState<number | null>(null);
   const empty = noScreens(live.canvas);
 
   // --- comments ---
@@ -819,6 +831,28 @@ function OpenShare({
   const [panel, setPanel] = useState(false);
   const [questionsOpen, setQuestionsOpen] = useState(false);
   const questionsButton = useRef<HTMLButtonElement>(null);
+  const peers = useMemo(() => roster && !mobile && !fileName ? followPeers(roster.participants, roster.session) : [], [roster, mobile, fileName]);
+  const follow = useDesignFollow(peers, () => {
+    setFullScreen(null);
+    setPresenting(null);
+    setOpenThread(null);
+    setDraft(null);
+    setPanel(false);
+    setCommentMode(false);
+    setQuestionsOpen(false);
+    setPeopleOpen(false);
+    setReviewersOpen(false);
+    setTakeOverOpen(false);
+  });
+  const { localView, zoom, area, setArea, moveView, fit, zoomTo, reveal, revealComment, commentsPanel } = useCanvasView(layout, pageIndex, live.canvas, setPage, follow);
+  const { advertised, shownPresentation, shownFullscreen, setPresenting, setFullScreen } = useCanvasFollowView({
+    localView, remote: follow.remote, page: pageIndex, steps, selection, select: setSelection,
+  });
+  const publish = useCallback((view: DesignViewport | null) => {
+    const ws = socket.current;
+    if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "viewport", view } satisfies FromReviewer));
+  }, []);
+  useViewportPublication(advertised, connected && !mobile && !fileName, publish);
   const questionScreens = useQuestionScreens(live.canvas, pageIndex, setPage, setSelection, reveal);
   const loadQuestions = useCallback(() => api.questions(id), [id]);
   const vote = (question: string, answer: DesignVoteParams) => api.vote(id, question, answer);
@@ -827,6 +861,7 @@ function OpenShare({
     questionsButton.current?.focus();
   };
   const toggleQuestions = () => {
+    follow.navigate();
     if (questionsOpen) {
       closeQuestions();
       return;
@@ -847,6 +882,7 @@ function OpenShare({
     [sections],
   );
   const startComment = (file: string, x: number, y: number, whole: boolean, frame?: HTMLIFrameElement | null) => {
+    follow.navigate();
     setOpenThread(null);
     setDraft({ file, x, y, whole, element: null });
     if (!whole) void elementUnder(file, x, y, frame).then((element) => setDraft((d) => (d && d.file === file && d.x === x && d.y === y ? { ...d, element } : d)));
@@ -892,11 +928,12 @@ function OpenShare({
   }, [openThread, unreadSet]);
   /** Shows a thread: its screen's page, the screen selected, the thread at its pin. */
   const showThread = useCallback((thread: Thread) => {
+    follow.navigate();
     if (revealComment(thread)) setPanel(false);
     setSelection([thread.comment.screen]);
     setDraft(null);
     setOpenThread(thread.comment.id);
-  }, [revealComment]);
+  }, [revealComment, follow.navigate]);
   // `?thread=<id>`: the link of a mention, or one copied from a thread, opens it.
   const linked = useRef(threadParam(location.search));
   useEffect(() => {
@@ -907,6 +944,7 @@ function OpenShare({
     linked.current = null;
   }, [threads, showThread, fileName, focusDocumentThread]);
   const escape = () => {
+    follow.navigate();
     if (takeOverOpen) setTakeOverOpen(false);
     else if (reviewersOpen) setReviewersOpen(false);
     else if (peopleOpen) setPeopleOpen(false);
@@ -961,10 +999,11 @@ function OpenShare({
       </div>
     ) : null;
   // Full screen and Present comment as the canvas does; the bubble shows only in front.
-  const overlay = fullScreen != null || presenting != null;
+  const overlay = shownFullscreen != null || shownPresentation != null;
   const commenting: ScreenCommenting = {
     commentMode,
     onToggleCommentMode: () => {
+      follow.navigate();
       if (questionsOpen) closeQuestions();
       setCommentMode((on) => !on);
       setDraft(null);
@@ -975,6 +1014,7 @@ function OpenShare({
     onFrame: onOverlayFrame,
     onCommentAt: startComment,
     onOpenThread: (threadId) => {
+      follow.navigate();
       setDraft(null);
       setOpenThread(threadId);
     },
@@ -992,13 +1032,6 @@ function OpenShare({
   ];
   const zoomValue = ZOOM_STEPS.find((step) => Math.abs(step - zoom.scale) < 1e-6);
   const status = liveLabel(live.online, live.lastPushAt);
-  const [mobile, setMobile] = useState(() => matchMedia("(max-width: 700px), (max-height: 500px) and (pointer: coarse)").matches || new URLSearchParams(location.search).get("mobile") === "1");
-  useEffect(() => {
-    const query = matchMedia("(max-width: 700px), (max-height: 500px) and (pointer: coarse)");
-    const change = () => setMobile(query.matches || new URLSearchParams(location.search).get("mobile") === "1");
-    query.addEventListener("change", change);
-    return () => query.removeEventListener("change", change);
-  }, []);
   const documentActions: CommentActions = {
     // A comment not sent (no socket, an invitation refused) rejects: its draft stays.
     add: async (quote, text, mentions) => {
@@ -1062,7 +1095,7 @@ function OpenShare({
         )}
         {!owner && (
           <div className="relative ml-auto">
-            <Button size="sm" variant={peopleOpen ? "secondary" : "ghost"} onClick={() => setPeopleOpen((on) => !on)} title="Who this design is shared with" aria-pressed={peopleOpen} data-testid="share-people-button">
+            <Button size="sm" variant={peopleOpen ? "secondary" : "ghost"} onClick={() => { follow.navigate(); setPeopleOpen((on) => !on); }} title="Who this design is shared with" aria-pressed={peopleOpen} data-testid="share-people-button">
               <Users size={12} /> <span className="hidden sm:inline">Shared with</span>
               <span className="rounded-full bg-accent/15 px-1 text-[10.5px] text-accent">{live.people.length}</span>
             </Button>
@@ -1071,7 +1104,7 @@ function OpenShare({
         )}
         {!owner && !fileName && (
           <div className="relative">
-            <Button size="sm" variant={takeOverOpen ? "secondary" : "ghost"} onClick={() => setTakeOverOpen((on) => !on)} title="Take this design over in your own Chauffeur: its screens and comments, for your own agent" aria-pressed={takeOverOpen} data-testid="share-take-over-button">
+            <Button size="sm" variant={takeOverOpen ? "secondary" : "ghost"} onClick={() => { follow.navigate(); setTakeOverOpen((on) => !on); }} title="Take this design over in your own Chauffeur: its screens and comments, for your own agent" aria-pressed={takeOverOpen} data-testid="share-take-over-button">
               <Download size={12} /> <span className="hidden sm:inline">Take over</span>
             </Button>
             {takeOverOpen && <TakeOverPanel url={location.href.split(/[?#]/)[0]} onClose={() => setTakeOverOpen(false)} />}
@@ -1079,7 +1112,7 @@ function OpenShare({
         )}
         {owner && (
           <div className="relative ml-auto">
-            <Button size="sm" variant={reviewersOpen ? "secondary" : "ghost"} onClick={() => setReviewersOpen((on) => !on)} title="Who this design is shared with" aria-pressed={reviewersOpen} data-testid="share-reviewers-button">
+            <Button size="sm" variant={reviewersOpen ? "secondary" : "ghost"} onClick={() => { follow.navigate(); setReviewersOpen((on) => !on); }} title="Who this design is shared with" aria-pressed={reviewersOpen} data-testid="share-reviewers-button">
               <Users size={12} /> <span className="hidden sm:inline">Shared with</span>
               <span className="rounded-full bg-accent/15 px-1 text-[10.5px] text-accent">{live.reviewers.length}</span>
             </Button>
@@ -1102,6 +1135,7 @@ function OpenShare({
             )}
           </div>
         )}
+        {!fileName && <DesignFollowControls follow={follow} />}
         <div className={cx("flex items-center gap-1", !owner && "ml-auto")} data-testid="share-viewers" title={live.viewers.length === 0 ? "Nobody else is looking" : live.viewers.join(", ")}>
           {live.viewers
             .filter((email) => email !== me.email)
@@ -1170,6 +1204,7 @@ function OpenShare({
             value={String(pageIndex)}
             options={pages.map((p, i) => ({ value: String(i), label: p.name || `Page ${i + 1}` }))}
             onChange={(value) => {
+              follow.navigate();
               setPage(Number(value));
               setSelection([]);
             }}
@@ -1195,7 +1230,10 @@ function OpenShare({
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => steps.length > 0 && setPresenting(Math.max(0, steps.findIndex((step) => selection.includes(step.screen.file))))}
+            onClick={() => {
+              follow.navigate();
+              setPresenting(Math.max(0, steps.findIndex((step) => selection.includes(step.screen.file))));
+            }}
             disabled={steps.length === 0}
             title="Present: one screen at a time, interactive (← → between screens, Esc leaves)"
             data-testid="canvas-present"
@@ -1216,6 +1254,7 @@ function OpenShare({
             <MessageSquarePlus size={12} /> <span className="hidden @[640px]:inline">Comment</span>
           </Button>
           <Button size="sm" variant={panel ? "secondary" : "ghost"} onClick={() => {
+            follow.navigate();
             if (questionsOpen) closeQuestions();
             setPanel((on) => !on);
           }} title="The comments, by screen" aria-pressed={panel} data-testid="canvas-comments">
@@ -1245,7 +1284,7 @@ function OpenShare({
               setZoom={moveView}
               onArea={setArea}
               selection={selection}
-              onSelect={setSelection}
+              onSelect={(files) => { follow.navigate(); setSelection(files); }}
               flash={flash}
               commentMode={commentMode}
               pins={pins}
@@ -1257,7 +1296,7 @@ function OpenShare({
               onEscape={escape}
               onToggleCommentMode={commenting.onToggleCommentMode}
               popover={overlay ? null : popover}
-              onFullScreen={setFullScreen}
+              onFullScreen={(index) => { follow.navigate(); setFullScreen(index); }}
               onFit={fit}
               onActualSize={() => zoomTo(1)}
               published={NO_PUBLISHED}
@@ -1287,12 +1326,13 @@ function OpenShare({
             </div>
           )}
         </div>
-      <DesignQuestions open={questionsOpen} load={loadQuestions} vote={owner ? undefined : vote} {...questionScreens} onClose={closeQuestions} />
+      <DesignQuestions open={questionsOpen} load={loadQuestions} vote={owner ? undefined : vote} available={questionScreens.available}
+        locate={(file) => { follow.navigate(); questionScreens.locate(file); }} onClose={closeQuestions} />
       </div>
       </>
       )}
-      {fullScreen != null && sections[fullScreen] && <FullScreenSection section={sections[fullScreen]} onClose={() => setFullScreen(null)} commenting={commenting} />}
-      {presenting != null && steps.length > 0 && <PresentScreens steps={steps} start={presenting} published={NO_PUBLISHED} onClose={() => setPresenting(null)} commenting={commenting} />}
+      {shownFullscreen != null && sections[shownFullscreen] && <FullScreenSection section={sections[shownFullscreen]} follow={follow} onClose={() => { follow.navigate(); setFullScreen(null); }} commenting={commenting} />}
+      {shownPresentation != null && steps[shownPresentation] && <PresentScreens steps={steps} start={shownPresentation} follow={follow} onStep={(index) => { follow.navigate(); setPresenting(index); }} published={NO_PUBLISHED} onClose={() => { follow.navigate(); setPresenting(null); }} commenting={commenting} />}
     </div>
   );
 }

@@ -858,6 +858,14 @@ methods! {
         #[access(Any)]
         #[relay(Local)]
         DesignShareState(ChatParams) -> DesignShareState,
+        #[serde(rename = "design.viewport")]
+        #[access(User)]
+        #[relay(Local)]
+        DesignViewport(crate::design_share::DesignViewportParams) -> (),
+        #[serde(rename = "design.participants")]
+        #[access(User)]
+        #[relay(Local)]
+        DesignParticipants(ChatParams) -> Vec<crate::design_share::DesignParticipant>,
         #[serde(rename = "design.questions")]
         #[access(User)]
         #[relay(Local)]
@@ -3289,6 +3297,10 @@ pub struct SubscribeParams {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub office: bool,
+    /// Live viewport updates for the design chats explicitly named by this subscription.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub design_participants: bool,
 }
 
 /// A part of a long history, so that a client shows the end of a conversation without waiting
