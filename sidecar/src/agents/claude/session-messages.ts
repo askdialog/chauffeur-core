@@ -38,15 +38,17 @@ export function sessionEvents(messages: SessionMessage[]): TranscriptEvent[] {
   const events: TranscriptEvent[] = [];
   for (const message of messages as ReadMessage[]) {
     const at = typeof message.timestamp === "string" ? message.timestamp : null;
-    if (message.type === "user" && message.isCompactSummary === true) {
-      events.push({ at, event: notice("info", "Conversation compacted in Claude Code: what came before is in the summary the agent resumes from") });
-      continue;
-    }
-    if (message.type === "user" && message.is_meta === true) continue;
-    const prompt = message.type === "user" ? promptOf(message.message) : null;
-    if (prompt !== null) {
-      if (prompt) events.push({ at, event: { type: "user_message", text: prompt, queued: false } });
-      continue;
+    if (message.type === "user") {
+      if (message.isCompactSummary === true) {
+        events.push({ at, event: notice("info", "Conversation compacted in Claude Code: what came before is in the summary the agent resumes from") });
+        continue;
+      }
+      if (message.is_meta === true) continue;
+      const prompt = promptOf(message.message);
+      if (prompt !== null) {
+        if (prompt) events.push({ at, event: { type: "user_message", text: prompt, queued: false } });
+        continue;
+      }
     }
     for (const event of shownEvents(mapper, message)) events.push({ at, event });
   }
@@ -66,9 +68,11 @@ const OWN = /^<(local-command-stdout|local-command-stderr|bash-stdout|bash-stder
  * results, which the mapping reads.
  */
 function promptOf(message: unknown): string | null {
-  const content = typeof message === "object" && message !== null ? (message as { content?: unknown }).content : undefined;
-  const blocks = Array.isArray(content) ? content.filter((block) => typeof block === "object" && block !== null) as Array<{ type?: unknown }> : [];
-  if (blocks.some((block) => block.type === "tool_result")) return null;
+  const content: unknown = typeof message === "object" && message !== null ? Reflect.get(message, "content") : undefined;
+  const types = Array.isArray(content)
+    ? content.map((block: unknown) => (typeof block === "object" && block !== null ? Reflect.get(block, "type") : undefined))
+    : [];
+  if (types.includes("tool_result")) return null;
   const raw = messageText(message).trim();
   if (OWN.test(raw) || /^\[Request interrupted by user/.test(raw)) return "";
   const command = /<command-name>([^<]*)<\/command-name>/.exec(raw)?.[1];
@@ -80,5 +84,5 @@ function promptOf(message: unknown): string | null {
   if (shell !== undefined) return `!${shell.trim()}`;
   const text = raw.replace(ADDED, "").trim();
   if (text) return text;
-  return blocks.some((block) => block.type === "image") ? "(an image)" : "";
+  return types.includes("image") ? "(an image)" : "";
 }
