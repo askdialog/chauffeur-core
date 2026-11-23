@@ -26,7 +26,7 @@ use chauffeur_protocol::claudecode::{
 };
 use chauffeur_protocol::model::WorkspaceState;
 
-use crate::conductor::{reference, remote_of, same_folder};
+use crate::conductor::{remote_of, same_folder};
 use crate::git::Git;
 use crate::settings::expand_home;
 use crate::worker_claude_config::Locations;
@@ -753,7 +753,7 @@ impl<'a> Repos<'a> {
         };
         let repo = match remote_of(self.d, &self.git, &clone, None).await {
             Some((owner, name)) => {
-                let name = reference(self.d, &owner, &name);
+                let name = crate::repos::repo_reference(&self.d.settings.get(), &owner, &name);
                 let clones = self.clones.entry(name.clone()).or_default();
                 if !clones.contains(&clone) {
                     clones.push(clone.clone());

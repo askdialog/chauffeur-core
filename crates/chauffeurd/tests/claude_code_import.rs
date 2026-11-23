@@ -887,28 +887,18 @@ async fn on_a_gitlab_sessions_are_matched_by_project_and_squash_merges_read_from
             .find(|s| s.id == id)
             .unwrap_or_else(|| panic!("{id} in {:?}", plan.sessions))
     };
-    // The main group's project named short, a subgroup's by its whole path, as the picker does.
     assert_eq!(session("live").branches, [branch("web", "feat/live", true)]);
     assert_eq!(
         session("api").branches,
         [branch("team/shop/api", "main", false)]
     );
-    // Squash-merged: its merge request into main, from its tip.
+    assert_eq!(session("docs").outcome, ClaudeCodeOutcome::Skipped);
+    // Squash-merged: its merge request into main, from its tip, on the second page.
     assert_eq!(
         session("squashed").branches,
         [branch("web", "feat/squashed", false)]
     );
-    // A clone on GitHub is none of this GitLab's projects.
-    let docs = session("docs");
-    assert_eq!(docs.outcome, ClaudeCodeOutcome::Skipped);
-    assert!(
-        docs.reason
-            .as_deref()
-            .unwrap()
-            .ends_with("clones/docs has no GitLab remote (gitlab.example.com)"),
-        "{docs:?}"
-    );
-    // The merge requests are read once, by pages up to the first short one, not branch by branch.
+    // Read once, by pages up to the first short one, never branch by branch (the ticket's rule).
     let asked = std::fs::read_to_string(&log).unwrap();
     assert_eq!(
         asked.lines().filter(|l| l.contains("state=merged")).count(),

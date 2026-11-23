@@ -785,8 +785,13 @@ fn remote_path<'a>(url: &'a str, host: &str) -> Option<&'a str> {
 /// on a GitLab, the project's namespace, subgroups included, and its name. None for a remote
 /// elsewhere.
 pub(crate) fn forge_repo(settings: &UserSettings, url: &str) -> Option<(String, String)> {
-    let path = remote_path(url, forge_host(settings))?;
-    let (owner, name) = match settings.forge {
+    remote_repo(url, forge_host(settings), settings.forge)
+}
+
+/// The repo a remote URL names on `host`, read as `forge` names repos.
+pub(crate) fn remote_repo(url: &str, host: &str, forge: Forge) -> Option<(String, String)> {
+    let path = remote_path(url, host)?;
+    let (owner, name) = match forge {
         Forge::Github => path
             .split_once('/')
             .filter(|(_, name)| !name.contains('/'))?,
@@ -1444,6 +1449,12 @@ mod tests {
         ] {
             assert_eq!(forge_repo(&github, url), named("acme", "web"), "{url}");
             assert_eq!(forge_repo(&gitlab, url), None, "{url}");
+            // A PR's GitHub repo is read whatever the forge.
+            assert_eq!(
+                crate::github::github_repo(url),
+                named("acme", "web"),
+                "{url}"
+            );
         }
         for (url, owner, name) in [
             ("https://gitlab.example.com/team/web.git", "team", "web"),

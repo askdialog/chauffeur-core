@@ -22,7 +22,7 @@ use chauffeur_protocol::model::{TicketRef, WorkspaceState};
 use crate::git::Git;
 use crate::paths::NOTES_DIR;
 use crate::repos::repo_folder;
-use crate::repos::{forge_remote, forge_repo};
+use crate::repos::{forge_remote, forge_repo, repo_reference};
 use crate::settings::expand_home;
 use crate::store::{TitleSource, WorkspaceRow, now};
 use crate::{Daemon, Error, Result};
@@ -174,11 +174,6 @@ fn select<'a>(
     Ok(picked)
 }
 
-/// Chauffeur's name of a GitHub repo: its short name in the main organization, else `owner/name`.
-pub(crate) fn reference(d: &Daemon, owner: &str, name: &str) -> String {
-    crate::repos::repo_reference(&d.settings.get(), owner, name)
-}
-
 pub(crate) fn same_folder(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
@@ -231,7 +226,7 @@ async fn plan_repo(d: &Daemon, git: &Git, repo: &db::Repo, env: &[db::EnvVar]) -
         planned.plan.skipped = Some(format!("it has no {}", forge_remote(&d.settings.get())));
         return planned;
     };
-    let reference = reference(d, &owner, &name);
+    let reference = repo_reference(&d.settings.get(), &owner, &name);
     match d.repos.existing_clone(&reference) {
         Some(clone) if same_folder(&clone, &root) => {
             planned.plan.clone = ConductorClone::Shared;
@@ -530,7 +525,7 @@ async fn linked_repo(
     let (owner, name) = remote_of(d, git, folder, None)
         .await
         .ok_or_else(|| format!("it has no {}", forge_remote(&d.settings.get())))?;
-    let reference = reference(d, &owner, &name);
+    let reference = repo_reference(&d.settings.get(), &owner, &name);
     match d.repos.existing_clone(&reference) {
         Some(_) => Ok(reference),
         None => Err(format!("Chauffeur has no clone of {reference}")),
