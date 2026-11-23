@@ -96,6 +96,7 @@ pub mod runtime;
 pub mod search;
 pub mod secrets;
 pub mod sections;
+mod security_audits;
 pub mod server;
 pub mod sessions;
 pub mod settings;

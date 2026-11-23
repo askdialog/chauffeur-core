@@ -39,6 +39,7 @@ import { DiffPanel } from "./DiffPanel";
 import { FilesPanel } from "./FilesPanel";
 import { ProcessesPanel } from "./ProcessesPanel";
 import { RoutinePanel } from "./RoutinePanel";
+import { SecurityAuditCard } from "./SecurityAuditCard";
 import { cx, IconButton, Spinner } from "./ui";
 
 import { WORKSPACE_EXTENSION_VIEWS, WorkspaceExtensionViews } from "@/extensions";
@@ -393,6 +394,9 @@ export function WorkspaceViews({
           <span className="ml-auto text-[11.5px] text-accent">Move {LABEL[drag.view]} to the main area</span>
         )}
       </div>
+      {workspace.worktrees.length > 0 && workspace.state !== "creating" && (
+        <SecurityAuditCard key={id} workspace={id} />
+      )}
       <div ref={area} className="relative min-h-0 flex-1" data-testid="view-area" data-split={side ? layout.position : undefined}>
         {shown("chat") &&
           slot(

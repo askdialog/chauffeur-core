@@ -306,6 +306,8 @@ import type { SearchStatus } from "./SearchStatus";
 import type { SectionInfo } from "./SectionInfo";
 import type { SectionParams } from "./SectionParams";
 import type { SectionsResult } from "./SectionsResult";
+import type { SecurityAudit } from "./SecurityAudit";
+import type { SecurityAuditParams } from "./SecurityAuditParams";
 import type { SendParams } from "./SendParams";
 import type { SessionConfigureParams } from "./SessionConfigureParams";
 import type { SessionContextUsageParams } from "./SessionContextUsageParams";
@@ -395,7 +397,7 @@ import type { WorktreeCreateResult } from "./WorktreeCreateResult";
 import type { WorktreeObservedParams } from "./WorktreeObservedParams";
 import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 
-export const PROTOCOL_VERSION = 25;
+export const PROTOCOL_VERSION = 26;
 export const MIN_PROTOCOL_VERSION = 1;
 export const PEER_PROTOCOL_VERSION = 4;
 
@@ -520,6 +522,9 @@ export type ClientMethods = {
   "workspace.wait": [WaitParams, WaitResult];
   "worktree.add": [AddWorktreeParams, AddWorktreeResult];
   "worktree.remove": [RemoveWorktreeParams, RemoveWorktreeResult];
+  "security_audit.list": [WorkspaceParams, Array<SecurityAudit>];
+  "security_audit.report": [SecurityAuditParams, string];
+  "security_audit.cancel": [SecurityAuditParams, EmptyParams];
   "process.list": [WorkspaceParams, ProcessesResult];
   "process.run": [RunScriptParams, ProcessInfo];
   "process.setup": [SetupScriptParams, ProcessInfo];
@@ -934,6 +939,9 @@ export const METHOD_NAMES = [
   "workspace.wait",
   "worktree.add",
   "worktree.remove",
+  "security_audit.list",
+  "security_audit.report",
+  "security_audit.cancel",
   "process.list",
   "process.run",
   "process.setup",

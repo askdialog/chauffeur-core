@@ -49,6 +49,8 @@ fn refuse_internal(daemon: &Daemon, call: &ClientCall) -> Result<()> {
     let key = match call {
         ClientCall::WorkspaceAddRepo(p) => &p.workspace,
         ClientCall::WorkspaceArchive(p) => &p.workspace,
+        ClientCall::SecurityAuditList(p) => &p.workspace,
+        ClientCall::SecurityAuditReport(p) | ClientCall::SecurityAuditCancel(p) => &p.workspace,
         ClientCall::WorkspaceRestore(p) | ClientCall::WorkspaceMarkUnread(p) => &p.workspace,
         ClientCall::WorkspaceRename(p) => &p.workspace,
         ClientCall::WorkspaceRetitle(p) => &p.workspace,
@@ -324,6 +326,16 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
                 .remove_agent_worktrees(&params.workspace, &params.target)
                 .await?,
         ),
+        ClientCall::SecurityAuditList(params) => {
+            to_value(crate::security_audits::list(daemon, &params.workspace).await?)
+        }
+        ClientCall::SecurityAuditReport(params) => {
+            to_value(crate::security_audits::report(daemon, params).await?)
+        }
+        ClientCall::SecurityAuditCancel(params) => {
+            Box::pin(crate::security_audits::cancel(daemon, params)).await?;
+            to_value(EmptyParams {})
+        }
         ClientCall::ProcessList(params) => {
             to_value(daemon.workspaces.processes(&params.workspace)?)
         }
