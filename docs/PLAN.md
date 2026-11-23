@@ -111,6 +111,10 @@ Activity for recaps (story 58, 2026-11-18, [decision](adr/activity-for-recaps.md
 `chauffeur activity --since|--until`, and shared session instructions that start a recap of the
 user's own work from it, then pull requests, commits and tickets.
 
+Saved prompts (story 60, 2026-11-23, proposed, awaiting Justin, [proposal](adr/saved-prompts.md)): not started.
+`prompts.list|save|delete` in the daemon over `~/.chauffeur/prompts/*.md`, the composer's ⇧Tab menu beside the `/`
+menu (stage 5's chat view), Settings › Prompts.
+
 Pull request links (stage 3/7, 2026-10-29): shared session instructions ask Claude Code and Codex
 to link PR mentions to their actual URL, including tables and summaries, in workspaces and explorations.
 
