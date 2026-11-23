@@ -563,6 +563,24 @@ c --json env reload | python3 -c '
 import sys, json
 r = json.load(sys.stdin)
 assert r["added"] == [] and r["profile"] == "~/.profile" and r["shell"].endswith("/login-shell"), r'
+echo "== security audit. the workspace follows a detached Codex Security scan and can open its report"
+printf 'export HOME="%s/audit-home"\n' "$T" >> "$T/profile"
+c env reload >/dev/null
+python3 scripts/fixtures/codex-security.py "$T/audit-home" "$CHAUFFEUR_WORKSPACES_DIR/e2e-prs/alpha"
+bun scripts/app-call.ts security_audit.list '{"workspace":"e2e-prs"}' | python3 -c '
+import json,sys
+current, previous = json.load(sys.stdin)
+assert current["id"] == "current" and current["status"] == "running", current
+assert current["progress"] == {"completed":1,"total":2,"unit":"passes"}, current
+assert current["heartbeat_at"] and not current["has_report"] and not current["owner_chat"], current
+assert previous["id"] == "previous" and previous["status"] == "completed" and previous["has_report"], previous'
+bun scripts/app-call.ts security_audit.report '{"workspace":"e2e-prs","scan":"previous"}' | python3 -c 'import json,sys; assert json.load(sys.stdin).startswith("# Example audit report")'
+refuses "security audit in this workspace" bun scripts/app-call.ts security_audit.report '{"workspace":"e2e-prs","scan":"outside"}'
+refuses "security audit report" bun scripts/app-call.ts security_audit.report '{"workspace":"e2e-prs","scan":"current"}'
+refuses "original Codex chat" bun scripts/app-call.ts security_audit.cancel '{"workspace":"e2e-prs","scan":"current"}'
+refuses "already ended" bun scripts/app-call.ts security_audit.cancel '{"workspace":"e2e-prs","scan":"previous"}'
+sed -i.bak '/^export HOME=/d' "$T/profile"
+c env reload >/dev/null
 c archive e2e-prs --force >/dev/null
 # An exploration continues as a workspace only once what its commands left in its checkouts is
 # discarded, on the user's say-so: refused with the files named, then --discard deletes them.

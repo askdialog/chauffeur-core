@@ -612,6 +612,18 @@ methods! {
         #[access(Any)]
         #[relay(Act)]
         WorktreeRemove(RemoveWorktreeParams) -> RemoveWorktreeResult,
+        #[serde(rename = "security_audit.list")]
+        #[access(User)]
+        #[relay(Local)]
+        SecurityAuditList(WorkspaceParams) -> Vec<SecurityAudit>,
+        #[serde(rename = "security_audit.report")]
+        #[access(User)]
+        #[relay(Local)]
+        SecurityAuditReport(SecurityAuditParams) -> String,
+        #[serde(rename = "security_audit.cancel")]
+        #[access(User)]
+        #[relay(Local)]
+        SecurityAuditCancel(SecurityAuditParams) -> EmptyParams,
         #[serde(rename = "process.list")]
         #[access(Any)]
         #[relay(Read)]
@@ -1945,6 +1957,47 @@ pub enum SemanticState {
 #[ts(optional_fields)]
 pub struct WorkspaceParams {
     pub workspace: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct SecurityAuditParams {
+    pub workspace: String,
+    pub scan: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SecurityAuditStatus {
+    Running,
+    Completed,
+    Failed,
+    Canceled,
+    Interrupted,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct SecurityAuditProgress {
+    pub completed: u32,
+    pub total: u32,
+    pub unit: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct SecurityAudit {
+    pub id: String,
+    pub repo: String,
+    pub mode: String,
+    pub phase: String,
+    pub status: SecurityAuditStatus,
+    pub progress: Option<SecurityAuditProgress>,
+    pub last_activity_at: String,
+    pub heartbeat_at: Option<String>,
+    pub owner_chat: Option<String>,
+    pub has_report: bool,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]
