@@ -577,7 +577,7 @@ pub(crate) struct Changes {
 }
 
 impl Changes {
-    pub(crate) fn files(&self) -> usize {
+    fn files(&self) -> usize {
         self.tracked + self.untracked.len()
     }
 }
@@ -764,7 +764,7 @@ async fn import_active(
         Ok(created) => created.workspace,
         Err(error) => {
             if plan.release {
-                put_back(git, &conductor_clone, &folder, &plan.branch, &head).await;
+                put_back(git, &conductor_clone, &folder, None, &plan.branch, &head).await;
             }
             return Err(error);
         }
@@ -808,19 +808,14 @@ async fn import_active(
     Ok(created.slug)
 }
 
-/// After a failed creation: the branch back in Conductor's worktree, made again at its commit if
-/// the creation's rollback deleted it.
-pub(crate) async fn put_back(git: &Git, clone: &Path, folder: &Path, branch: &str, head: &str) {
-    put_back_head(git, clone, folder, &[], branch, head).await;
-}
-
-/// `put_back`, HEAD run with `git_dir` (`--git-dir=…`, for a worktree whose folder is gone, from
-/// its clone) or in `folder`.
-pub(crate) async fn put_back_head(
+/// After a failed creation: the branch back in the worktree `folder` it was released from (through
+/// its `admin` folder in the clone's `.git` when the worktree's own folder is gone), made again at
+/// its commit if the creation's rollback deleted it.
+pub(crate) async fn put_back(
     git: &Git,
     clone: &Path,
     folder: &Path,
-    git_dir: &[&str],
+    admin: Option<&Path>,
     branch: &str,
     head: &str,
 ) {
@@ -834,10 +829,11 @@ pub(crate) async fn put_back_head(
     {
         tracing::error!(%error, branch, "could not make a released branch again");
     }
-    let at = if git_dir.is_empty() { folder } else { clone };
+    let git_dir = admin.map(|a| format!("--git-dir={}", a.display()));
+    let at = if admin.is_none() { folder } else { clone };
     let args: Vec<&str> = git_dir
         .iter()
-        .copied()
+        .map(String::as_str)
         .chain(["symbolic-ref", "HEAD", reference.as_str()])
         .collect();
     if let Err(error) = git.run(at, &args).await {

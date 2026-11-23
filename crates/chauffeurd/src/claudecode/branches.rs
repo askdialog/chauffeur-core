@@ -524,7 +524,15 @@ async fn make(
         .iter()
         .filter(|r| !r.kept && !added.contains(&r.at.repo))
     {
-        put_back(git, checkout).await;
+        conductor::put_back(
+            git,
+            &checkout.clone,
+            &checkout.folder,
+            checkout.admin.as_deref(),
+            &checkout.at.branch,
+            &checkout.head,
+        )
+        .await;
     }
     let (id, failed) = match (made, &existing) {
         (Ok(id), _) => (id, None),
@@ -807,22 +815,4 @@ async fn admin_dir(git: &Git, clone: &Path, folder: &Path) -> Result<Option<Path
         }
     }
     Ok(None)
-}
-
-/// After a failed workspace: the branch checked out again where it was released.
-async fn put_back(git: &Git, checkout: &Released) {
-    let git_dir = checkout
-        .admin
-        .as_ref()
-        .map(|a| format!("--git-dir={}", a.display()));
-    let git_dir: Vec<&str> = git_dir.iter().map(String::as_str).collect();
-    conductor::put_back_head(
-        git,
-        &checkout.clone,
-        &checkout.folder,
-        &git_dir,
-        &checkout.at.branch,
-        &checkout.head,
-    )
-    .await;
 }
