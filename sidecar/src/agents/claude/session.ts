@@ -101,6 +101,9 @@ const OUR_PERMISSION_MODES = new Map<SdkPermissionMode, PermissionMode>(
   Object.entries(PERMISSION_MODES).map(([ours, theirs]) => [theirs, ours as PermissionMode]),
 );
 
+/** Said in the chat once a `/clear` started Claude Code on an empty conversation. */
+export const CLEARED = "Conversation cleared: the agent starts again from an empty context. The messages above stay here, but it no longer sees them";
+
 /** Points of context a chat must gain after a compaction before Jev compacts it again. */
 const RECOMPACT_GROWTH = 10;
 
@@ -143,6 +146,13 @@ export class ClaudeSession implements AgentSession {
    * compaction that left it past the threshold is not redone until it grows again.
    */
   private compactedAt: number | undefined;
+  /**
+   * A `/clear` was sent: Claude Code starts another session, which the chat then follows, while
+   * the conversation above stays on screen. The new session's init says so in the chat.
+   */
+  private clearing = false;
+  /** The session id of the last init. */
+  private sessionSeen: string | undefined;
   /** The permission mode the chat asks for: auto may be unavailable, see `effectiveMode`. */
   private requestedMode: SdkPermissionMode;
   /** The permission mode Claude Code runs in, as last reported to the daemon. */
@@ -323,6 +333,7 @@ export class ClaudeSession implements AgentSession {
       if (this.busy) this.undelivered.push(messageId);
       else this.emit({ type: "user_message_delivered", message_id: messageId });
     }
+    if (/^\/clear(\s|$)/.test(text.trim())) this.clearing = true;
     this.input.push({
       type: "user",
       message: { role: "user", content: userContent(text, attachments, this.params.cwd) },
@@ -568,6 +579,13 @@ export class ClaudeSession implements AgentSession {
     // subagent hands back, Claude Code starts a turn of the agent's own, which opens one here.
     if (isTurnActivity(message) && fromAgentItself(message)) this.beginTurn();
     for (const event of this.mapper.map(message)) this.emit(event);
+    if (message.type === "system" && message.subtype === "init") {
+      if (this.clearing && this.sessionSeen !== undefined && message.session_id !== this.sessionSeen) {
+        this.clearing = false;
+        this.emit(notice("info", CLEARED));
+      }
+      this.sessionSeen = message.session_id;
+    }
   }
 
   /**

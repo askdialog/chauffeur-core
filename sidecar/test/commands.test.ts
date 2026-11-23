@@ -11,7 +11,7 @@ const row = (name: string, over: Partial<SlashCommand> = {}): SlashCommand => ({
 });
 
 describe("Claude's commands", () => {
-  test("keeps skills and commands, and the built-ins that work in a chat", () => {
+  test("keeps skills, commands and the built-ins but those of the terminal or of a setting Chauffeur owns", () => {
     const rows = [
       row("architect", { argumentHint: "<feature>", description: "Design a feature (project)" }),
       row("acme-skills:implement-ticket"),
@@ -19,15 +19,21 @@ describe("Claude's commands", () => {
       row("model", { builtin: true }),
       row("clear", { builtin: true }),
       row("compact", { builtin: true }),
+      row("color", { builtin: true }),
+      row("focus", { builtin: true }),
+      row("effort", { builtin: true }),
+      row("fast", { builtin: true }),
     ];
     expect(claudeCommands(rows)).toEqual([
       { name: "architect", description: "Design a feature (project)", argument_hint: "<feature>", builtin: false },
       { name: "acme-skills:implement-ticket", description: "acme-skills:implement-ticket it", argument_hint: "", builtin: false },
       { name: "code-review", description: "code-review it", argument_hint: "[low|high]", builtin: true },
+      { name: "clear", description: "clear it", argument_hint: "", builtin: true },
+      { name: "compact", description: "compact it", argument_hint: "", builtin: true },
     ]);
   });
 
-  test("a skill named like a built-in is the built-in, shown only if it works in a chat", () => {
+  test("a skill named like a built-in is the built-in, hidden with it", () => {
     const rows = [row("model"), row("simplify"), row("model", { builtin: true }), row("simplify", { builtin: true })];
     expect(claudeCommands(rows).map((c) => [c.name, c.builtin])).toEqual([["simplify", true]]);
   });
