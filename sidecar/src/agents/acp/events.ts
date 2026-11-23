@@ -167,9 +167,9 @@ export class AcpEventMapper {
     const started = stringField(record(fields.rawOutput), "processId");
     if (started !== undefined && typeof raw.command === "string") this.processes.set(started, { cwd: tool.cwd, env: tool.env });
     const writtenTo = stringField(raw, "processId");
-    const process = writtenTo === undefined ? undefined : this.processes.get(writtenTo);
-    if (process?.cwd !== undefined) tool.cwd ??= process.cwd;
-    if (process?.env !== undefined) tool.env ??= process.env;
+    const running = writtenTo === undefined ? undefined : this.processes.get(writtenTo);
+    if (running?.cwd !== undefined) tool.cwd ??= running.cwd;
+    if (running?.env !== undefined) tool.env ??= running.env;
   }
 
   private result(tool: AcpToolCall, fields: ToolCallFields): ChatEvent {

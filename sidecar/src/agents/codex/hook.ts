@@ -82,7 +82,7 @@ export async function runCodexHook(subcommand: string | undefined, args: string[
     process.stderr.write(`${setup}\n`);
     return 2;
   }
-  // A hook that fails lets the call run: 2, which Codex reads as a refusal, whatever went wrong.
+  // Codex runs the call when a hook fails: exit 2, which it reads as a refusal, whatever went wrong.
   try {
     const answer = preToolUseAnswer(await Bun.stdin.text(), setup);
     if (answer) process.stdout.write(`${answer}\n`);
