@@ -3794,6 +3794,97 @@ async fn a_restore_that_fails_before_its_checkouts_leaves_the_workspace_to_resto
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_restore_tried_again_starts_the_setup_of_every_group_it_brought_back_once() {
+    let f = fixture(47610);
+    let d = &f.daemon;
+    // repo-a's setup logs each run (its port and folder) outside the checkouts.
+    let runs = f.root.join("markers/setup-runs");
+    let mut settings = std::fs::read_to_string(f.root.join("home/settings.toml")).unwrap();
+    settings.push_str(&format!(
+        "\n[repos.repo-a.scripts]\nsetup = \"echo \\\"$CHAUFFEUR_PORT $PWD\\\" >> {}\"\n",
+        runs.display()
+    ));
+    std::fs::write(f.root.join("home/settings.toml"), settings).unwrap();
+    d.settings.update(|_| {}).unwrap();
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("grouped".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let group = d
+        .workspaces
+        .add_agent_worktrees(AddWorktreeParams {
+            workspace: ws.slug.clone(),
+            repos: vec!["repo-a".into()],
+            name: Some("sub task".into()),
+            branch: None,
+        })
+        .await
+        .unwrap();
+    let ran = || -> Vec<(String, String)> {
+        std::fs::read_to_string(&runs)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|l| l.split_once(' '))
+            .map(|(port, folder)| (port.to_string(), folder.to_string()))
+            .collect()
+    };
+    eventually("the workspace's and the group's setups", || {
+        ran().len() == 2
+    })
+    .await;
+    d.workspaces.archive(&ws.slug, true).await.unwrap();
+    eventually("the workspace to be archived", || {
+        d.workspaces.get(&ws.id).unwrap().state == WorkspaceState::Archived
+    })
+    .await;
+    std::fs::remove_file(&runs).unwrap();
+
+    // repo-b cannot come back: the group's repo-a does, and no setup runs yet.
+    let clone_b = f.root.join("clones/repo-b");
+    let away = f.root.join("clones/repo-b-away");
+    std::fs::rename(&clone_b, &away).unwrap();
+    let failed = d.workspaces.restore(&ws.slug).await.unwrap();
+    assert_eq!(failed.state, WorkspaceState::CleanupFailed);
+    let group_a = PathBuf::from(&group.path).join("repo-a");
+    assert!(group_a.exists());
+    std::fs::rename(&away, &clone_b).unwrap();
+    let again = d.workspaces.restore(&ws.slug).await.unwrap();
+    assert_eq!(again.state, WorkspaceState::Ready, "{:?}", again.last_error);
+
+    // The workspace's setup and the group's, though the group came back a try earlier: each once,
+    // on its own port block.
+    let mut expected = [PathBuf::from(&ws.path).join("repo-a"), group_a.clone()]
+        .map(|path| path.canonicalize().unwrap().display().to_string());
+    expected.sort();
+    let each_once = async || {
+        eventually("both setups", || ran().len() >= 2).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let ran = ran();
+        let mut folders: Vec<String> = ran.iter().map(|(_, f)| f.clone()).collect();
+        folders.sort();
+        assert_eq!(folders, expected, "{ran:?}");
+        assert_ne!(ran[0].0, ran[1].0, "{ran:?}");
+    };
+    each_once().await;
+
+    // A restore that succeeds at once: the same.
+    d.workspaces.archive(&ws.slug, true).await.unwrap();
+    eventually("the workspace to be archived again", || {
+        d.workspaces.get(&ws.id).unwrap().state == WorkspaceState::Archived
+    })
+    .await;
+    std::fs::remove_file(&runs).unwrap();
+    let back = d.workspaces.restore(&ws.slug).await.unwrap();
+    assert_eq!(back.state, WorkspaceState::Ready, "{:?}", back.last_error);
+    each_once().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_workspace_whose_restore_failed_takes_no_chat_and_no_message() {
     let f = fixture(47550);
     let d = &f.daemon;

@@ -3136,7 +3136,6 @@ impl WorkspaceManager {
             )?;
             let git = self.git();
             let mut errors = Vec::new();
-            let mut groups = Vec::new();
             for worktree in &restorable {
                 let snapshot = worktree.snapshot_ref.clone().unwrap();
                 let clone = Path::new(&worktree.clone_path);
@@ -3170,13 +3169,20 @@ impl WorkspaceManager {
                                 worktree: worktree_info(restored),
                             },
                         );
-                        if let Some(group) = &worktree.group {
-                            groups.push(group.clone());
-                        }
                     }
                     Err(error) => errors.push(format!("{}: {error:#}", worktree.repo)),
                 }
             }
+            // Every worktree back from its snapshot, those an earlier try brought back included
+            // (a snapshot is cleared only once the whole restore succeeds): its group gets its
+            // port block and, once ready, its setup.
+            let mut groups: Vec<String> = d
+                .store
+                .worktrees_of(&row.id)?
+                .into_iter()
+                .filter(|w| !w.removed && w.snapshot_ref.is_some())
+                .filter_map(|w| w.group)
+                .collect();
             groups.sort();
             groups.dedup();
             for group in &groups {
