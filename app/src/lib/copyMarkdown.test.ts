@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { copyMarkdown, headingsAsBold, markdownHtml } from "./copyMarkdown";
+import { copyCodeBlock, copyMarkdown, headingsAsBold, markdownHtml } from "./copyMarkdown";
 
 const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
 const itemDescriptor = Object.getOwnPropertyDescriptor(globalThis, "ClipboardItem");
@@ -86,4 +86,26 @@ test("everything but the headings is copied byte for byte", () => {
   const rest = "Intro with **bold**, *italic* and a  double space.\n\n- one\n- two\n\n> quote\n>\n> # Quoted heading\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n";
   expect(headingsAsBold(`${rest}## Next\n\n1. first\n2. second\n`)).toBe(`${rest.replace("# Quoted heading", "**Quoted heading**")}**Next**\n\n1. first\n2. second\n`);
   expect(headingsAsBold(source)).toBe(source);
+});
+const message = "Salut,\n\n1. Onboarding\n   Pour qui : <admins> & co\n- adresses :\n    antoine@example.com";
+test("a code block's copy keeps its text and offers each line as an HTML line, indentation kept", async () => {
+  let written = false;
+  clipboard(async (items) => {
+    written = true;
+    const item = items[0];
+    if (!item) throw new Error("no clipboard item");
+    expect(await (await item.getType("text/plain")).text()).toBe(message);
+    expect(await (await item.getType("text/html")).text()).toBe(
+      "<div>Salut,</div><div><br></div><div>1. Onboarding</div><div>&nbsp;&nbsp;&nbsp;Pour qui : &lt;admins&gt; &amp; co</div>"
+        + "<div>- adresses :</div><div>&nbsp;&nbsp;&nbsp;&nbsp;antoine@example.com</div>",
+    );
+  }, async () => { throw new Error("unexpected fallback"); });
+  await copyCodeBlock(message);
+  expect(written).toBe(true);
+});
+test("a code block's copy falls back to plain text where rich copying is refused", async () => {
+  let plain = "";
+  clipboard(async () => { throw new Error("denied"); }, async (text) => { plain = text; });
+  await copyCodeBlock(message);
+  expect(plain).toBe(message);
 });

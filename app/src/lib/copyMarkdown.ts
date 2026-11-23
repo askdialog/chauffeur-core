@@ -56,13 +56,42 @@ export function headingsAsBold(markdown: string): string {
  * (`headingsAsBold`), the HTML is rendered from the source as written.
  */
 export async function copyMarkdown(text: string): Promise<void> {
-  const plain = headingsAsBold(text);
+  await writeClipboard(headingsAsBold(text), markdownHtml(text));
+}
+
+const escapes: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
+
+/**
+ * `text` as HTML lines, each in its own `<div>`, its spaces kept: a pasted line stays as written.
+ * An empty line is `<div><br></div>`, as rich editors write it.
+ */
+export function linesHtml(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      const escaped = line.replace(/[&<>"]/g, (char) => escapes[char] ?? char).replace(/\t/g, "    ");
+      const kept = escaped.replace(/ {2,}|^ /g, (spaces) => "&nbsp;".repeat(spaces.length));
+      return `<div>${kept || "<br>"}</div>`;
+    })
+    .join("");
+}
+
+/**
+ * A code block's text as written, for editors, with the same lines as HTML for rich editors. Slack
+ * reads pasted plain text as Markdown: a line starting with `1.` or `-` becomes a list item and the
+ * indented lines under it are glued onto it. It takes the HTML lines as they are.
+ */
+export async function copyCodeBlock(text: string): Promise<void> {
+  await writeClipboard(text, linesHtml(text));
+}
+
+async function writeClipboard(plain: string, html: string): Promise<void> {
   if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write) {
     try {
       await navigator.clipboard.write([
         new ClipboardItem({
           "text/plain": new Blob([plain], { type: "text/plain" }),
-          "text/html": new Blob([markdownHtml(text)], { type: "text/html" }),
+          "text/html": new Blob([html], { type: "text/html" }),
         }),
       ]);
       return;
