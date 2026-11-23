@@ -1261,16 +1261,32 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
     assert_eq!(d.store.chats_of(&ws.id).unwrap().len(), chats.len());
 
     // A session since: added to the same exploration, its project folder holding the others.
-    // Kept in two project folders (resumed from another folder): one session.
+    // Resumed from two other folders since, where it goes on alike: one session, read from the
+    // first of those by name.
     past_session(&f, "later", &ago(8));
-    let other = f.claude.join("projects/-other");
-    std::fs::create_dir_all(&other).unwrap();
-    std::fs::copy(
-        f.claude.join("projects/-code/later.jsonl"),
-        other.join("later.jsonl"),
-    )
-    .unwrap();
+    let original = std::fs::read_to_string(f.claude.join("projects/-code/later.jsonl")).unwrap();
+    let resumed_at = (chrono::Utc::now() - chrono::Duration::days(8) + chrono::Duration::hours(1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let resumed = original
+        + &format!(
+            "{{\"type\":\"user\",\"timestamp\":\"{resumed_at}\",\"message\":{{\"role\":\"user\",\"content\":\"Go on\"}}}}\n"
+        );
+    for folder in ["-zeta", "-other"] {
+        let folder = f.claude.join("projects").join(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("later.jsonl"), &resumed).unwrap();
+    }
     let planned = import(&f, true).await;
+    assert_eq!(
+        planned.sessions.iter().filter(|s| s.id == "later").count(),
+        1
+    );
+    for left in ["-code", "-zeta"] {
+        let said = format!(
+            "“What does later change?” is kept in several folders of Claude Code's projects: read from -other, its copy in {left} left out."
+        );
+        assert!(planned.warnings.contains(&said), "{:?}", planned.warnings);
+    }
     assert_eq!(
         planned.histories[0].workspace.as_deref(),
         Some("web-history")
@@ -1282,6 +1298,10 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
     assert_eq!(
         outcome(&added, "later"),
         (ClaudeCodeOutcome::Imported, Some("web-history".into()))
+    );
+    assert_eq!(
+        std::fs::read_to_string(copies.join("later.jsonl")).unwrap(),
+        resumed
     );
     assert_eq!(d.store.chats_of(&ws.id).unwrap().len(), chats.len() + 1);
 
