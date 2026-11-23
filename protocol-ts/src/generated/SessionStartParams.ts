@@ -58,9 +58,10 @@ memory_clones?: Array<string>,
  */
 local_allow?: Array<string>, 
 /**
- * The clones of the workspace's repos, each with its worktree in the workspace, given to a
- * Claude chat: its agent never writes into them, and is told the worktree path to write
- * instead (docs/adr/claude-code-import.md).
+ * The clones of the workspace's repos, each with its worktree in the workspace, given to every
+ * chat: a write into one that the sidecar sees is refused (Claude's and Vibe's calls through the
+ * permissions it answers, Codex's shell commands through its hook), naming the worktree path to
+ * write instead. What it does not see is listed in docs/adr/claude-code-import.md.
  */
 source_clones?: Array<SourceClone>, 
 /**

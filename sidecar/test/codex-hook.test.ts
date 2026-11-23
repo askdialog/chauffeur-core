@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { resolveCodexExecutable } from "../src/agents/codex/executable.ts";
-import { hookCommandLine, preToolUseAnswer } from "../src/agents/codex/hook.ts";
+import { hookCommandLine, hookSetup, preToolUseAnswer } from "../src/agents/codex/hook.ts";
 import { appServerArgs, daemonSocket, explorationNetworkConfig, SANDBOX_NOTE, sandboxNetworkOpen, sandboxPolicy, threadConfig } from "../src/agents/codex/options.ts";
 import { ErrorCode } from "../src/protocol.ts";
 
@@ -34,19 +34,42 @@ describe("the Codex PreToolUse hook", () => {
 
   test("in an exploration, also denies git and GitHub writes", () => {
     expect(preToolUseAnswer(payload("git push origin HEAD"))).toBeUndefined();
-    expect(preToolUseAnswer(payload("git push origin HEAD"), "read-only")).toContain("exploration, read-only");
-    expect(preToolUseAnswer(payload(["bash", "-lc", "gh pr create --fill"]), "read-only")).toBeDefined();
-    expect(preToolUseAnswer(payload("git log -5"), "read-only")).toBeUndefined();
-    expect(hookCommandLine("read-only")).toEndWith(" codex-hook pre-tool-use read-only");
+    expect(preToolUseAnswer(payload("git push origin HEAD"), { guard: "read-only", clones: [] })).toContain("exploration, read-only");
+    expect(preToolUseAnswer(payload(["bash", "-lc", "gh pr create --fill"]), { guard: "read-only", clones: [] })).toBeDefined();
+    expect(preToolUseAnswer(payload("git log -5"), { guard: "read-only", clones: [] })).toBeUndefined();
+    expect(hookCommandLine({ guard: "read-only", clones: [] })).toEndWith(" codex-hook pre-tool-use read-only");
   });
 
   test("in a design chat, denies git and GitHub writes with the design chat's reason", () => {
-    const answer = JSON.parse(preToolUseAnswer(payload("git commit -am wip"), "design") as string);
+    const answer = JSON.parse(preToolUseAnswer(payload("git commit -am wip"), { guard: "design", clones: [] }) as string);
     expect(answer.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(answer.hookSpecificOutput.permissionDecisionReason).toContain("design chat");
-    expect(preToolUseAnswer(payload(["bash", "-lc", "gh pr create --fill"]), "design")).toBeDefined();
-    expect(preToolUseAnswer(payload("git log -5"), "design")).toBeUndefined();
-    expect(hookCommandLine("design")).toEndWith(" codex-hook pre-tool-use design");
+    expect(preToolUseAnswer(payload(["bash", "-lc", "gh pr create --fill"]), { guard: "design", clones: [] })).toBeDefined();
+    expect(preToolUseAnswer(payload("git log -5"), { guard: "design", clones: [] })).toBeUndefined();
+    expect(hookCommandLine({ guard: "design", clones: [] })).toEndWith(" codex-hook pre-tool-use design");
+  });
+
+  test("refuses a command writing into a source clone, naming the worktree (the hook reads no mode)", () => {
+    const clones = [{ clone: "/code/web", worktree: "/w/web" }];
+    const answer = JSON.parse(preToolUseAnswer(payload("echo x > /code/web/notes.md"), { clones }) as string);
+    expect(answer.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(answer.hookSpecificOutput.permissionDecisionReason).toContain("/code/web");
+    expect(preToolUseAnswer(payload(["bash", "-lc", "cd /code/web && git commit -am x"]), { clones })).toBeDefined();
+    expect(preToolUseAnswer(payload("cat /code/web/README.md"), { clones })).toBeUndefined();
+    expect(preToolUseAnswer(payload("echo x > /w/web/notes.md"), { clones })).toBeUndefined();
+    // Without the clones given, as before.
+    expect(preToolUseAnswer(payload("echo x > /code/web/notes.md"))).toBeUndefined();
+  });
+
+  test("its command line carries the guard and the clones, read back as they were", () => {
+    const setup = { guard: "read-only" as const, clones: [{ clone: "/code/it's web", worktree: "/w/web" }] };
+    const words = hookCommandLine(setup).split(" ");
+    const args = words.slice(words.indexOf("pre-tool-use") + 1);
+    expect(hookSetup(args)).toEqual(setup);
+    expect(hookSetup([])).toEqual({ clones: [] });
+    expect(hookSetup(["--clones", Buffer.from("[1]").toString("base64")])).toBe("unreadable --clones");
+    expect(hookSetup(["--clones"])).toBe("unreadable --clones");
+    expect(hookSetup(["--bogus"])).toBe("unknown hook argument: --bogus");
   });
 
   test("reads argv-style commands too", () => {

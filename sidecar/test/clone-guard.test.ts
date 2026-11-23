@@ -375,6 +375,20 @@ describe("cloneCommandRefusal", () => {
     true,
   );
 
+  // A variable's relative value is a path from the folder the command runs in, as a program reads it.
+  table(
+    "refuses a variable pointing a program at a clone by a relative path",
+    [
+      "GIT_DIR=../../code/web/.git git commit -am x",
+      "GIT_WORK_TREE=../../code/web git checkout .",
+      "env GIT_DIR=../../code/web/.git git commit -m x",
+      "export CARGO_TARGET_DIR=../../code/web/target && cargo build",
+      "cd ../.. && GIT_DIR=code/web/.git git commit -am x",
+    ],
+    true,
+  );
+  table("allows a variable's relative value outside the clones", ["LANG=C make", "CARGO_TARGET_DIR=target cargo build"], false);
+
   table(
     "refuses what the shell expands to a clone",
     [
@@ -704,6 +718,9 @@ describe("git from a workspace's worktree, which shares its clone's branches and
     "git switch --force-create=main feat/x",
     'cp scripts/pre-commit "$(git rev-parse --git-path hooks)/pre-commit"',
     'git config --file "$(git rev-parse --git-common-dir)/config" user.email x',
+    // Found by the CHF-32 red team: the clone's folder read from `git worktree list`.
+    'git -C "$(git worktree list | awk \'NR==1{print $1}\')" pull',
+    'cd "$(git worktree list --porcelain | head -1 | cut -d\' \' -f2)" && git checkout -- .',
     "git filter-branch --tree-filter 'rm -f secret' -- --all",
     "git push . --delete main",
     "git push . -d main",

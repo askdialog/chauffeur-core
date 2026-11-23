@@ -23,14 +23,21 @@ export interface AcpToolCall {
   title: string | null;
   /** The files it reads or writes. */
   paths: string[];
-  /** The shell command it runs, for `execute`. */
+  /** The shell command it runs, for `execute`: a process started's, or the text written to one. */
   command: string | null;
+  /** For `execute`, the folder it runs in and the variables it is given, when it says. */
+  cwd?: string;
+  env?: Record<string, string>;
   /** Its result was given. */
   ended: boolean;
 }
 
 export class AcpEventMapper {
   private readonly tools = new Map<string, AcpToolCall>();
+  /** What the agent said of each call, its updates merged: a call is described again from them. */
+  private readonly said = new Map<string, ToolCallFields>();
+  /** Each running process's folder and variables, by its id: the input written to it later runs there. */
+  private readonly processes = new Map<string, Pick<AcpToolCall, "cwd" | "env">>();
   private message: { id: string; text: string } | undefined;
   private thought: { id: string; text: string } | undefined;
   /** The context the session's last reading measured, and against which window. */
@@ -131,6 +138,8 @@ export class AcpEventMapper {
   private call(fields: ToolCallFields): ChatEvent[] {
     const tool = describe(fields);
     this.tools.set(tool.id, tool);
+    this.said.set(tool.id, fields);
+    this.followProcess(tool, fields);
     const events: ChatEvent[] = [{ type: "tool_call", tool_use_id: tool.id, name: tool.name, input: tool.input, parent_tool_use_id: null }];
     if (fields.status === "completed" || fields.status === "failed") events.push(this.result(tool, fields));
     return events;
@@ -140,11 +149,27 @@ export class AcpEventMapper {
     const known = this.tools.get(fields.toolCallId);
     // An update for a call never announced: announced now, with what the update says.
     if (!known) return this.call(fields);
-    if (fields.kind) known.kind = fields.kind;
-    if (fields.title) known.title = fields.title;
+    // What it now says of its input, files or diff: described again, so that a permission it asks
+    // is decided on the call as it stands.
+    const merged: ToolCallFields = { ...this.said.get(fields.toolCallId), ...defined(fields), toolCallId: fields.toolCallId };
+    this.said.set(fields.toolCallId, merged);
+    Object.assign(known, { ...describe(merged), ended: known.ended });
+    this.followProcess(known, merged);
     if (fields.status !== "completed" && fields.status !== "failed") return [];
     if (known.ended) return [];
     return [this.result(known, fields)];
+  }
+
+  /** A process started is remembered by the id its output gives; input written to it gets its folder and variables. */
+  private followProcess(tool: AcpToolCall, fields: ToolCallFields): void {
+    if (tool.kind !== "execute") return;
+    const raw = record(fields.rawInput);
+    const started = stringField(record(fields.rawOutput), "processId");
+    if (started !== undefined && typeof raw.command === "string") this.processes.set(started, { cwd: tool.cwd, env: tool.env });
+    const writtenTo = stringField(raw, "processId");
+    const process = writtenTo === undefined ? undefined : this.processes.get(writtenTo);
+    if (process?.cwd !== undefined) tool.cwd ??= process.cwd;
+    if (process?.env !== undefined) tool.env ??= process.env;
   }
 
   private result(tool: AcpToolCall, fields: ToolCallFields): ChatEvent {
@@ -185,8 +210,13 @@ export function describe(fields: ToolCallFields): AcpToolCall {
   const kind = fields.kind ?? null;
   const title = fields.title ?? null;
   const raw = record(fields.rawInput);
-  const paths = [...(fields.locations ?? []).map((location) => location.path), ...diffs(fields.content).map((diff) => diff.path)];
-  const path = paths[0] ?? stringField(raw, "path", "file_path", "filePath");
+  const named = stringField(raw, "path", "file_path", "filePath");
+  const paths = [
+    ...(fields.locations ?? []).map((location) => location.path),
+    ...diffs(fields.content).map((diff) => diff.path),
+    ...(kind !== "execute" && named ? [named] : []),
+  ];
+  const path = paths[0];
   const base = { id: fields.toolCallId, kind, title, paths: [...new Set(paths)], ended: false };
   const mcp = title ? /^mcp_([\w-]+)\.([\w-]+)$/.exec(title) : null;
   if (mcp) return { ...base, name: `mcp__${mcp[1]}__${mcp[2]}`, input: raw, command: null };
@@ -194,8 +224,18 @@ export function describe(fields: ToolCallFields): AcpToolCall {
   if (title && /^search(ing)? for relevant tools/i.test(title)) return { ...base, name: "ToolSearch", input: raw, command: null };
   switch (kind) {
     case "execute": {
-      const command = stringField(raw, "command", "cmd") ?? title?.replace(/^bash:\s*/, "") ?? "";
-      return { ...base, name: "Bash", input: { command, ...(raw.cwd ? { cwd: raw.cwd } : {}) }, command };
+      // A process started (`command`), or input written to one already running (`text`, or bytes).
+      const command = stringField(raw, "command", "cmd", "text") ?? decoded(raw.bytesBase64) ?? title?.replace(/^bash:\s*/, "") ?? "";
+      const cwd = stringField(raw, "cwd");
+      const env = strings(raw.env);
+      return {
+        ...base,
+        name: "Bash",
+        input: { command, ...(cwd ? { cwd } : {}) },
+        command,
+        ...(cwd ? { cwd } : {}),
+        ...(env ? { env } : {}),
+      };
     }
     case "edit":
     case "delete":
@@ -270,6 +310,22 @@ function stopError(reason: StopReason): string | null {
 
 function record(value: unknown): Record<string, JsonValue> {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, JsonValue>) : {};
+}
+
+/** The fields an update gives, without those it leaves out. */
+function defined(fields: ToolCallFields): Partial<ToolCallFields> {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined && value !== null));
+}
+
+/** Bytes written to a process, as text. */
+function decoded(value: JsonValue | undefined): string | undefined {
+  return typeof value === "string" ? Buffer.from(value, "base64").toString("utf8") : undefined;
+}
+
+/** A map of strings, as a process's variables are given. */
+function strings(value: JsonValue | undefined): Record<string, string> | undefined {
+  const entries = Object.entries(record(value)).filter((entry): entry is [string, string] => typeof entry[1] === "string");
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 function stringField(fields: Record<string, JsonValue>, ...names: string[]): string | undefined {

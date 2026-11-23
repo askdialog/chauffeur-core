@@ -1146,10 +1146,12 @@ impl ChatManager {
         crate::ollama::codex_env(&d.paths.home, chat.agent, chat.model.as_deref(), &mut env)?;
         let brands = crate::brands::of_chat(&d, &chat);
         let settings = d.settings.get();
-        // The workspace's repos, for a Claude session's clone memories and local allow rules.
-        let config_repos = match chat.agent {
-            AgentKind::Claude => d.workspaces.config_repos(&workspace.id)?,
-            AgentKind::Codex | AgentKind::Vibe => Vec::new(),
+        // The workspace's repos: their clones are guarded in every chat; their clone memories and
+        // local allow rules are a Claude session's only.
+        let workspace_repos = d.workspaces.config_repos(&workspace.id)?;
+        let config_repos: &[crate::genconfig::RepoEntry] = match chat.agent {
+            AgentKind::Claude => &workspace_repos,
+            AgentKind::Codex | AgentKind::Vibe => &[],
         };
         let params = SessionStartParams {
             launch_id: None,
@@ -1185,13 +1187,13 @@ impl ChatManager {
             // folder where the workspace's generated settings do not apply, nor an exploration,
             // read-only whatever the user allows elsewhere.
             local_allow: if design_dir.is_none() && !workspace.explore {
-                crate::genconfig::local_allow_rules(&config_repos)
+                crate::genconfig::local_allow_rules(config_repos)
             } else {
                 Vec::new()
             },
             source_clones: {
                 // An imported chat's: also the checkouts its session stood or wrote in.
-                let mut clones = source_clones(&d, &config_repos).await;
+                let mut clones = source_clones(&d, &workspace_repos).await;
                 let own = crate::claudecode::resume::guarded(&d, &chat, &clones);
                 clones.extend(own);
                 clones

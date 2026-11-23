@@ -44,7 +44,7 @@ async function started(params: Partial<SessionStartParams> = {}, options: {
     resolveExecutable: () => "/usr/local/bin/codex",
     baseEnv: { PATH: "/usr/bin", HOME: "/home/me" },
     hookCommand: (asked) => {
-      guard = asked;
+      guard = asked.guard;
       return "hook" in options ? options.hook : HOOK;
     },
     initTimeoutMs: 500,
@@ -278,7 +278,7 @@ describe("starting", () => {
   test("warns when the guard hook cannot be trusted", async () => {
     const { server, host } = await started({}, { prepare: (s) => (s.handlers["hooks/list"] = () => ({ data: [] })) });
     expect(server.sent("thread/start")[0].config).toEqual({});
-    expect(host.events[0]).toMatchObject({ type: "notice", level: "warning", message: expect.stringContaining("guard is not active") });
+    expect(host.events[0]).toMatchObject({ type: "notice", level: "warning", message: expect.stringContaining("guards are not active") });
   });
 
   test("runs without the hook when none is configured", async () => {

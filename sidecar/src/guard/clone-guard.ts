@@ -112,6 +112,11 @@ export function cloneWriteRefusal(toolName: string, toolInput: unknown, cwd: str
   if (key === undefined || typeof toolInput !== "object" || toolInput === null) return undefined;
   const written: unknown = Reflect.get(toolInput, key);
   if (typeof written !== "string" || !written) return undefined;
+  return clonePathRefusal(written, cwd, clones);
+}
+
+/** The denial for a write to `written` (a file an agent names, from `cwd`) in a clone, or undefined. */
+export function clonePathRefusal(written: string, cwd: string, clones: GuardedClone[]): string | undefined {
   const path = at(cwd, written);
   const clone = cloneOf(path, clones);
   return clone && writeDenial(path, clone);
@@ -333,7 +338,7 @@ class Judge {
       return;
     }
     // `GIT_DIR=… git …`: the variable is set for that command only.
-    const env = values.slice(0, i).map((value) => this.envClone(value)).find(Boolean);
+    const env = values.slice(0, i).map((value) => this.envClone(value, state)).find(Boolean);
     const local = env && !state.env ? { ...copy(state), env } : state;
     const input = [
       ...piped,
@@ -343,12 +348,16 @@ class Judge {
     this.run(values.slice(i), local, false, input);
   }
 
-  /** The clone an assignment's value names: a variable exported with it points a program there. */
-  private envClone(value: Value): GuardedClone | undefined {
+  /**
+   * The clone an assignment's value names: a variable exported with it points a program there. A
+   * relative value is a path from the folder the command runs in, as the program reads it.
+   */
+  private envClone(value: Value, state: State): GuardedClone | undefined {
     const eq = value.text.indexOf("=");
     if (eq < 0) return undefined;
     const assigned = value.text.slice(eq + 1);
-    return isAbsolute(assigned) ? cloneAround(resolve(assigned), this.clones) : undefined;
+    if (isAbsolute(assigned)) return cloneAround(resolve(assigned), this.clones);
+    return assigned && state.dir !== undefined ? cloneAround(resolve(state.dir, assigned), this.clones) : undefined;
   }
 
   private redirections({ redirections }: Command | Group, state: State): void {
@@ -464,7 +473,7 @@ class Judge {
   private exported(args: Value[], state: State): void {
     for (const arg of args) {
       const set = /^[A-Za-z_][A-Za-z0-9_]*$/.test(arg.text) ? state.vars.get(arg.text) : undefined;
-      state.env ??= this.envClone(set === undefined ? arg : exact(`=${set}`));
+      state.env ??= this.envClone(set === undefined ? arg : exact(`=${set}`), state);
     }
   }
 
@@ -481,7 +490,7 @@ class Judge {
     // Its variables are the line's from here on; one naming a clone may point a program there.
     for (const [name, value] of assignments) {
       state.vars.set(name, value);
-      state.env ??= this.envClone(exact(`=${value}`));
+      state.env ??= this.envClone(exact(`=${value}`), state);
     }
   }
 
@@ -556,7 +565,7 @@ class Judge {
         break;
       }
       if (name === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg.text)) {
-        local.env ??= this.envClone(arg);
+        local.env ??= this.envClone(arg, local);
         i++;
         continue;
       }
@@ -724,9 +733,12 @@ class Judge {
       // `xargs` gives it more operands, only known as the line runs.
       const change = sharedChange(sub.text, fed ? [...rest, UNKNOWN] : rest, sharing, where);
       if (change) this.verdict.shared ??= { clone: sharing, ...change };
-      // `$(git rev-parse --git-path hooks)` prints a path in the clone's `.git`: a line writing
-      // where it says writes into the clone.
-      if (sub.text === "rev-parse" && texts.some((text) => GIT_PATHS.has(option(text)[0]))) this.verdict.pointed ??= sharing;
+      // `$(git rev-parse --git-path hooks)` prints a path in the clone's `.git`, and `git worktree
+      // list` the clone's own folder first: a line writing where they say writes into the clone.
+      const listsWorktrees = sub.text === "worktree" && rest.find((arg) => !arg.text.startsWith("-"))?.text === "list";
+      if ((sub.text === "rev-parse" && texts.some((text) => GIT_PATHS.has(option(text)[0]))) || listsWorktrees) {
+        this.verdict.pointed ??= sharing;
+      }
     }
     if (!sub.known) this.verdict.blind = true;
     else if (sub.text === "submodule" && texts.includes("foreach")) {

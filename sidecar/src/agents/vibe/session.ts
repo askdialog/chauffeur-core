@@ -24,6 +24,7 @@ import { CHAUFFEUR_TOOLS, TOOLS_DESCRIPTION } from "../repo-tools.ts";
 import type { AcpConnection, SpawnAcp } from "../acp/connection.ts";
 import { AcpEventMapper, describe, type AcpToolCall } from "../acp/events.ts";
 import { decide } from "../acp/permissions.ts";
+import { type GuardedClone, withRealPaths } from "../../guard/clone-guard.ts";
 import { ACP_PROTOCOL_VERSION, type ContentBlock, type InitializeResponse, type McpServerSpec, type NewSessionResponse, type PermissionOption, type PromptResponse, type RequestPermissionOutcome, type RequestPermissionRequest, type SessionNotification, type ToolCallFields } from "../acp/protocol.ts";
 import { serveTools, type ToolsServer } from "../acp/tools-server.ts";
 import { vibeChauffeurTools } from "./tools.ts";
@@ -60,6 +61,8 @@ export class VibeSession implements AgentSession {
   /** The rules the user allowed always in this chat. */
   private readonly always: Set<string>;
   private connection: AcpConnection | undefined;
+  /** The workspace's source clones as the guard reads them. */
+  private readonly clones: GuardedClone[];
   private tools: ToolsServer | undefined;
   private state: State = "new";
   private stopping: Promise<void> | undefined;
@@ -103,6 +106,7 @@ export class VibeSession implements AgentSession {
   ) {
     this.requests = new PendingRequests((event) => this.emit(event), deps.newRequestId);
     this.always = new Set(params.always_allow ?? []);
+    this.clones = withRealPaths(params.source_clones ?? []);
     this.mode = params.permission_mode;
     this.instructions = params.resume_session_id ? undefined : params.append_system_prompt?.trim() || undefined;
   }
@@ -516,6 +520,7 @@ export class VibeSession implements AgentSession {
       designDir: this.params.design_dir ?? undefined,
       cwd: this.params.design_dir ?? this.params.cwd,
       roots: [this.params.cwd, ...this.params.additional_directories],
+      clones: this.clones,
     });
     if (decision.type === "allow" && (this.nativeMode !== VIBE_SMART_APPROVE || tool.name.startsWith("mcp__chauffeur__"))) {
       return select(request.options, "allow_once");
