@@ -992,6 +992,32 @@ export function delegatedChat(item: Pick<ToolItem, "toolUseId" | "input">, paren
   return chats.find((chat) => ofParent(chat) && chat.parent_tool_use === item.toolUseId) ?? null;
 }
 
+export type DelegateState = "working" | "waiting for you" | "answered" | "stopped";
+
+/**
+ * Where a `delegate` call stands. A delegated chat at work shows so whatever the call's result:
+ * the parent's turn may have ended first, its result then only saying that the chat works on and
+ * that its answer will come as a message. Once that answer came (`answered`, see
+ * `delegatedAnswers`) the call is answered, whatever its result said (Chauffeur used to give it
+ * Codex's cancellation of the call, an error). Otherwise the result says how it ended.
+ */
+export function delegateState(
+  item: Pick<ToolItem, "result">,
+  chat: Pick<ChatInfo, "status"> | null,
+  answered: boolean,
+): DelegateState {
+  if (chat?.status === "needs_input") return "waiting for you";
+  if (chat?.status === "working") return "working";
+  if (answered) return "answered";
+  if (!item.result) return "working";
+  return item.result.isError ? "stopped" : "answered";
+}
+
+/** The delegated chats whose answer came to this chat as a message, its turn having ended first. */
+export function delegatedAnswers(items: readonly ChatItem[]): ReadonlySet<string> {
+  return new Set(items.flatMap((item) => (item.kind === "user" && item.delegatedAnswer ? [item.delegatedAnswer.chat] : [])));
+}
+
 /** The agent a `delegate` call asked for: its delegated chat's, else its input's. */
 export function delegatedAgent(item: Pick<ToolItem, "input">, chat: ChatInfo | null): AgentKind {
   if (chat) return chat.agent;

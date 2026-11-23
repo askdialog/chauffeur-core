@@ -49,6 +49,8 @@ import {
   ASK_USER_QUESTION,
   delegatedAgent,
   delegatedChat,
+  type DelegateState,
+  delegateState,
   isDelegateCall,
   parseAnswers,
   permissionTitle,
@@ -127,6 +129,8 @@ export const WithdrawContext = createContext<((item: UserItem) => void) | null>(
 
 /** Tool calls auto mode is checking before they run (`ChatView.checking`), by tool use id. */
 export const PermissionChecksContext = createContext<ReadonlySet<string>>(new Set());
+/** The delegated chats whose answer came to the chat as a message (`delegatedAnswers`). */
+export const DelegatedAnswersContext = createContext<ReadonlySet<string>>(new Set());
 
 export const ChatRowView = memo(function ChatRowView({
   row,
@@ -673,6 +677,13 @@ function ToolCall({ item, working }: { item: ToolItem; working: boolean }) {
   );
 }
 
+const DELEGATE_TONES: Record<DelegateState, "danger" | "success" | "attention" | "working"> = {
+  working: "working",
+  "waiting for you": "attention",
+  answered: "success",
+  stopped: "danger",
+};
+
 /**
  * The agent gave a task to a delegated chat (story 49): the other agent, the task, where it stands,
  * and its chat one click away; its answer unfolds once given.
@@ -688,11 +699,9 @@ function DelegateCall({ item }: { item: ToolItem }) {
   const prompt = typeof input?.prompt === "string" ? input.prompt.trim() : "";
   // The chat's title once it differs from the task it was named after (renamed, or titled by a model).
   const title = child?.title && !prompt.startsWith(child.title.replace(/…$/, "").trim()) ? child.title : null;
-  const status = (() => {
-    if (item.result) return item.result.isError ? { tone: "danger", label: "stopped" } : { tone: "success", label: "answered" };
-    if (child?.status === "needs_input") return { tone: "attention", label: "waiting for you" };
-    return { tone: "working", label: "working" };
-  })() as { tone: "danger" | "success" | "attention" | "working"; label: string };
+  const answers = useContext(DelegatedAnswersContext);
+  const label = delegateState(item, child, !!child && answers.has(child.id));
+  const status = { label, tone: DELEGATE_TONES[label] };
   const show = () => {
     if (child) host.openChat(child);
   };

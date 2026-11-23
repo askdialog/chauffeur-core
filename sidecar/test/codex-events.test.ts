@@ -161,6 +161,27 @@ describe("mapping recorded Codex sessions", () => {
     expect(ended("interrupted")).toEqual([{ type: "tool_result", tool_use_id: "call-d", output: "[interrupted]", is_error: true }]);
   });
 
+  test("Codex cancelling the delegate calls its turn ended on leaves their delegated chats working on", () => {
+    // Seven delegate calls from one `exec` script (yield_time_ms 1), the turn ending first: Codex
+    // then completes each item as failed, "cancelled before receiving a response".
+    const ids = Array.from({ length: 7 }, (_, n) => `exec-${n}`);
+    const item = (id: string, status: "inProgress" | "failed") => ({
+      type: "dynamicToolCall", id, namespace: "chauffeur", tool: "delegate", arguments: { agent: "claude", prompt: `Lot ${id}` },
+      status, contentItems: status === "failed" ? [] : null, success: status === "failed" ? false : null, durationMs: null,
+    });
+    const mapper = new CodexEventMapper();
+    mapper.map({ method: "turn/started", params: { threadId: "t", turn: { id: "turn-1", items: [], status: "inProgress", error: null } } } as never);
+    for (const id of ids) mapper.map({ method: "item/started", params: { threadId: "t", turnId: "turn-1", startedAtMs: 1, item: item(id, "inProgress") } } as never);
+    const ended = mapper.map({ method: "turn/completed", params: { threadId: "t", turn: { id: "turn-1", items: [], status: "completed", error: null } } } as never);
+    const cancelled = ids.flatMap((id) =>
+      mapper.map({ method: "item/completed", params: { threadId: "t", turnId: "turn-1", completedAtMs: 2, item: item(id, "failed") } } as never),
+    );
+    expect(only(ended, "tool_result")).toEqual(
+      ids.map((id) => ({ type: "tool_result", tool_use_id: id, output: "[the delegated chat works on: its answer will come as a new message]", is_error: false })),
+    );
+    expect(cancelled).toEqual([]);
+  });
+
   test("a command the sandbox refused before it ran has no item: only its escalated retry shows", () => {
     // Codex reports the refused attempt to the model only (its PreToolUse hook ran, no item).
     const messages = recorded("sandbox-denied");

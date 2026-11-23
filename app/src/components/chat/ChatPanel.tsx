@@ -30,7 +30,7 @@ import { type CSSProperties, memo, type ReactNode, useCallback, useEffect, useMe
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useShallow } from "zustand/react/shallow";
 import { remountLocation, firstItemKey, type ListLocation } from "@/lib/chatList";
-import { type ChatRow, type ChatView, emptyChatView, groupActivity, interruptedMessage, openRequests, type QuestionItem, type UserItem } from "@/lib/chat";
+import { type ChatRow, type ChatView, delegatedAnswers, emptyChatView, groupActivity, interruptedMessage, openRequests, type QuestionItem, type UserItem } from "@/lib/chat";
 import { formatCost, relativeTime } from "@/lib/format";
 import {
   agentBusy,
@@ -96,6 +96,7 @@ import {
   ForkTurnContext,
   ChatRowView,
   HighlightContext,
+  DelegatedAnswersContext,
   PermissionChecksContext,
   SendNowContext,
   WithdrawContext,
@@ -1165,6 +1166,7 @@ export function ChatConversation({
   const openSubagent = chat.agent === "claude" ? subagents.open : null;
 
   const checking = useMemo(() => new Set(view.checking), [view.checking]);
+  const answers = useMemo(() => delegatedAnswers(view.items), [view.items]);
   // A finished turn forks even while the agent runs a later one.
   const forkTurn = useMemo(
     // Turns are counted from the first: not before it is all here.
@@ -1237,6 +1239,7 @@ export function ChatConversation({
     <HighlightContext.Provider value={highlight}>
     <SubagentOpenContext.Provider value={openSubagent}>
     <PermissionChecksContext.Provider value={checking}>
+    <DelegatedAnswersContext.Provider value={answers}>
     <ForkTurnContext.Provider value={forkTurn}>
     <SendNowContext.Provider value={sendNow}>
     <WithdrawContext.Provider value={withdrawMessage}>
@@ -1501,6 +1504,7 @@ export function ChatConversation({
     </WithdrawContext.Provider>
     </SendNowContext.Provider>
     </ForkTurnContext.Provider>
+    </DelegatedAnswersContext.Provider>
     </PermissionChecksContext.Provider>
     </SubagentOpenContext.Provider>
     </HighlightContext.Provider>

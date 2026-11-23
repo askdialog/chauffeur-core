@@ -260,7 +260,14 @@ export class CodexEventMapper {
       default:
         break;
     }
-    const open = this.tools.get(item.id) ?? this.outlived.get(item.id);
+    const outlived = this.tools.has(item.id) ? undefined : this.outlived.get(item.id);
+    if (outlived?.name === DELEGATE_TOOL && item.type === "dynamicToolCall" && item.status === "failed") {
+      // Codex cancels the `delegate` calls its turn ended on ("cancelled before receiving a
+      // response"), right after `turn/completed`: the interim result the turn's end gave stands.
+      this.outlived.delete(item.id);
+      return [];
+    }
+    const open = this.tools.get(item.id) ?? outlived;
     const result = toolResult(item, open?.output ?? "");
     if (!result) {
       if (!IGNORED_ITEMS.has(item.type) && item.type !== "contextCompaction") return this.unexpected(`item/${item.type}`);
