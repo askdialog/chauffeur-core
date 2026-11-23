@@ -756,29 +756,21 @@ fn origin_is(clone: &Path, host: &str, full_name: &str) -> bool {
     false
 }
 
-/// The path a remote URL names on `host` (`o/n`, `team/sub/n`), without `.git`: over HTTPS, as
-/// `git@host:path`, or as `ssh://` with a port on a GitLab. None for another host.
+/// The path a remote URL names on `host` (`o/n`, `team/sub/n`), without `.git`: as
+/// `scheme://[user@]host[:port]/path` or `[user@]host:path`. The host is compared whole, in any
+/// case and without a port on either side (a GitLab served on `host:8443` is reached over SSH at
+/// `host`). None for another host.
 fn remote_path<'a>(url: &'a str, host: &str) -> Option<&'a str> {
     let url = url.trim().trim_end_matches('/');
     let url = url.strip_suffix(".git").unwrap_or(url);
-    if host.is_empty() {
-        return None;
-    }
-    let (_, path) = url.split_once(host)?;
-    // On a GitLab, an `ssh://` URL may name a port after the host (`host:2222/path`), which is
-    // not part of the path; `host:1234/path` without the scheme is a path, as on GitHub.
-    let path = match path.strip_prefix(':').map(|rest| rest.split_once('/')) {
-        Some(Some((port, rest)))
-            if host != "github.com"
-                && url.starts_with("ssh://")
-                && !port.is_empty()
-                && port.bytes().all(|b| b.is_ascii_digit()) =>
-        {
-            rest
-        }
-        _ => path,
+    let (authority, path) = match url.split_once("://") {
+        Some((_, rest)) => rest.split_once('/')?,
+        None => url.split_once(':')?,
     };
-    Some(path.trim_start_matches([':', '/']))
+    let without_port = |h: &'a str| h.split_once(':').map_or(h, |(name, _)| name);
+    let named = without_port(authority.rsplit_once('@').map_or(authority, |(_, h)| h));
+    let wanted = host.split_once(':').map_or(host, |(name, _)| name);
+    (!wanted.is_empty() && named.eq_ignore_ascii_case(wanted)).then(|| path.trim_start_matches('/'))
 }
 
 /// The repo a remote URL names on the installation's forge, as (owner, name): `o/n` on GitHub;
@@ -1473,12 +1465,30 @@ mod tests {
             assert_eq!(forge_repo(&gitlab, url), named(owner, name), "{url}");
             assert_eq!(forge_repo(&github, url), None, "{url}");
         }
+        // The host whole, in any case, a port on either side left out.
+        let on_a_port = UserSettings {
+            gitlab_host: "gitlab.example.com:8443".into(),
+            ..gitlab.clone()
+        };
+        for url in [
+            "git@GitLab.Example.com:team/web.git",
+            "ssh://git@gitlab.example.com:2222/team/web.git",
+            "https://oauth2:token@gitlab.example.com:8443/team/web",
+        ] {
+            assert_eq!(forge_repo(&gitlab, url), named("team", "web"), "{url}");
+            assert_eq!(forge_repo(&on_a_port, url), named("team", "web"), "{url}");
+        }
         for nothing in [
             "https://github.com/acme",
             "https://github.com/acme/web/extra",
             "https://gitlab.example.com/web.git",
             "https://gitlab.com/team/web.git",
             "https://gitlab.example.com/team/.hidden/web.git",
+            "https://staging-gitlab.example.com/team/web.git",
+            "https://gitlab.example.community/team/web.git",
+            "https://other.org/gitlab.example.com/team/web",
+            "https://other.org/github.com/acme/web",
+            "/code/web",
         ] {
             assert_eq!(forge_repo(&github, nothing), None, "{nothing}");
             assert_eq!(forge_repo(&gitlab, nothing), None, "{nothing}");

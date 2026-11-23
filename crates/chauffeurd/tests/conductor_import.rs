@@ -272,7 +272,8 @@ async fn on_a_gitlab_clones_are_matched_by_their_project_on_its_host() {
         .await
         .unwrap();
     let gamma = plan.repos.iter().find(|r| r.conductor_name == "gamma");
-    assert!(gamma.unwrap().skipped.is_some(), "{gamma:?}");
+    let skipped = gamma.and_then(|r| r.skipped.as_deref());
+    assert!(skipped.is_some_and(|s| s.contains("GitLab")), "{gamma:?}");
     // Conductor's record and an /add-dir clone, both read on the GitLab, named as the picker does.
     let linked = plan
         .workspaces
