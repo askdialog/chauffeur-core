@@ -82,7 +82,8 @@ fn planned() -> ClaudeCodeOutcome {
 pub enum ClaudeCodeOutcome {
     /// Will be imported (a dry run).
     Import,
-    /// Imported: its chat is in `lands_in`, a closed tab there for a history exploration.
+    /// Imported: a session's chat is in `lands_in` (a closed tab there for a history
+    /// exploration); a workspace was made (`workspace`).
     Imported,
     /// Imported by an earlier run: left as it is.
     AlreadyImported,
