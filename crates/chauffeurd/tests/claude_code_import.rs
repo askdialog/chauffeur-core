@@ -778,6 +778,146 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
     );
 }
 
+/// A GitLab installation (`gitlab.example.com`, main group `team`): `web` is `team/web` there,
+/// `api` `team/shop/api`, `docs` is on GitHub. A `glab` that knows one merged merge request, from
+/// web's `feat/squashed` at its tip, and logs what it is asked.
+fn on_gitlab() -> (Fixture, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let urls = [
+        ("web", "git@gitlab.example.com:team/web.git"),
+        ("api", "https://gitlab.example.com/team/shop/api.git"),
+        ("docs", "https://github.com/fixture/docs.git"),
+    ];
+    for (name, url) in urls {
+        let clone = clone_repo(&root, name, &[]);
+        git(&clone, &["remote", "set-url", "origin", url]);
+        let origin = root.join("origin").join(format!("{name}.git"));
+        git(
+            &clone,
+            &[
+                "config",
+                &format!("url.{}.insteadOf", origin.display()),
+                url,
+            ],
+        );
+    }
+    let web = root.join("clones/web");
+    let at = |name: &str, file: &str| {
+        git(&web, &["switch", "-q", "-c", name, "main"]);
+        let tip = commit(&web, file, "x\n");
+        git(&web, &["switch", "-q", "main"]);
+        tip
+    };
+    at("feat/live", "live.txt");
+    let squashed = at("feat/squashed", "squashed.txt");
+
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = root.join("glab.log");
+    let glab = bin.join("glab");
+    std::fs::write(
+        &glab,
+        format!(
+            "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$*\" in\n  *state=merged*target_branch=main*page=1*) echo '[{{\"iid\":7,\"state\":\"merged\",\"source_branch\":\"feat/squashed\",\"target_branch\":\"main\",\"sha\":\"{squashed}\"}}]' ;;\n  *) echo '[]' ;;\nesac\n",
+            log = log.display()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&glab, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let claude = root.join("claude");
+    let projects = claude.join("projects").join("-code");
+    std::fs::create_dir_all(&projects).unwrap();
+    for (id, folder, branch) in [
+        ("live", "web", "feat/live"),
+        ("squashed", "web", "feat/squashed"),
+        ("api", "api", "main"),
+        ("docs", "docs", "main"),
+    ] {
+        let clone = root.join("clones").join(folder);
+        let text = format!(
+            "{{\"type\":\"ai-title\",\"aiTitle\":\"{id}\"}}\n{}\n",
+            line(&clone, branch, &ago(3), &edit(&clone.join("src/a.ts")))
+        );
+        std::fs::write(projects.join(format!("{id}.jsonl")), text).unwrap();
+    }
+
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("settings.toml"),
+        "forge = \"gitlab\"\ngitlab_host = \"gitlab.example.com\"\ngitlab_group = \"team\"\ngithub_sources = false\nbranch_prefix = \"t\"\nclone_roots = []\nport_range_start = 46970\nlinear_enabled = false\n",
+    )
+    .unwrap();
+    let daemon = Daemon::open(Paths::new(
+        home,
+        root.join("workspaces"),
+        root.join("repos"),
+    ))
+    .unwrap();
+    let mut vars: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    let path = format!("{}:{}", bin.display(), vars["PATH"]);
+    vars.insert("PATH".into(), path);
+    vars.insert(
+        "CLAUDE_CONFIG_DIR".into(),
+        root.join("agents-claude").to_string_lossy().into_owned(),
+    );
+    daemon.shell_env.set_vars(vars);
+    (
+        Fixture {
+            _dir: dir,
+            root,
+            claude,
+            daemon,
+        },
+        log,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn on_a_gitlab_sessions_are_matched_by_project_and_squash_merges_read_from_its_merge_requests()
+ {
+    let (f, log) = on_gitlab();
+    let plan = plan(&f, None, false).await;
+    let session = |id: &str| {
+        plan.sessions
+            .iter()
+            .find(|s| s.id == id)
+            .unwrap_or_else(|| panic!("{id} in {:?}", plan.sessions))
+    };
+    // The main group's project named short, a subgroup's by its whole path, as the picker does.
+    assert_eq!(session("live").branches, [branch("web", "feat/live", true)]);
+    assert_eq!(
+        session("api").branches,
+        [branch("team/shop/api", "main", false)]
+    );
+    // Squash-merged: its merge request into main, from its tip.
+    assert_eq!(
+        session("squashed").branches,
+        [branch("web", "feat/squashed", false)]
+    );
+    // A clone on GitHub is none of this GitLab's projects.
+    let docs = session("docs");
+    assert_eq!(docs.outcome, ClaudeCodeOutcome::Skipped);
+    assert!(
+        docs.reason
+            .as_deref()
+            .unwrap()
+            .ends_with("clones/docs has no GitLab remote (gitlab.example.com)"),
+        "{docs:?}"
+    );
+    // The merge requests are read once, by pages, not branch by branch.
+    let asked = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        asked.lines().filter(|l| l.contains("state=merged")).count(),
+        1,
+        "{asked}"
+    );
+    assert!(!asked.contains("source_branch="), "{asked}");
+}
+
 async fn refusal(f: &Fixture, params: ClaudeCodeImportParams) -> String {
     chauffeurd::claudecode::import(
         &f.daemon,

@@ -47,7 +47,7 @@ pub enum ConductorClone {
     Shared,
     /// Chauffeur's own clone, another one: branches are fetched from Conductor's into it.
     Chauffeur,
-    /// Not imported (no GitHub remote, a clone that is gone): see `skipped`.
+    /// Not imported (no remote on the installation's forge, a clone that is gone): see `skipped`.
     None,
 }
 

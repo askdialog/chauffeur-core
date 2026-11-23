@@ -195,7 +195,11 @@ pub async fn import(
         };
         let Some(repo) = home.repo.clone() else {
             plan.outcome = ClaudeCodeOutcome::Skipped;
-            plan.reason = Some(format!("{} has no GitHub remote", home.clone.display()));
+            plan.reason = Some(format!(
+                "{} has no {}",
+                home.clone.display(),
+                crate::repos::forge_remote(&d.settings.get())
+            ));
             plans.push(plan);
             continue;
         };
@@ -652,7 +656,7 @@ struct Checkout {
     top: PathBuf,
     /// The repo's own checkout (the main worktree).
     clone: PathBuf,
-    /// Chauffeur's name of the repo; none without a GitHub remote.
+    /// Chauffeur's name of the repo; none without a remote on the installation's forge.
     repo: Option<String>,
     /// The branch checked out there now.
     branch: Option<String>,
@@ -681,10 +685,10 @@ struct Repos<'a> {
     /// Each clone's repo name.
     names: HashMap<PathBuf, String>,
     live: HashMap<(PathBuf, String), bool>,
-    /// Each clone's merged PRs (head, base) by branch, read once; none when GitHub could not say.
+    /// Each clone's merged PRs (head, base) by branch, read once; none when the forge could not say.
     merged: HashMap<PathBuf, Option<MergedPrs>>,
     refs: HashMap<PathBuf, Refs>,
-    /// Clones without a GitHub remote, warned about once.
+    /// Clones without a remote on the installation's forge, warned about once.
     unnamed: BTreeSet<PathBuf>,
     /// Chauffeur's workspaces folder, resolved as git names folders.
     workspaces: PathBuf,
@@ -747,7 +751,7 @@ impl<'a> Repos<'a> {
         } else {
             common
         };
-        let repo = match remote_of(&self.git, &clone, None).await {
+        let repo = match remote_of(self.d, &self.git, &clone, None).await {
             Some((owner, name)) => {
                 let name = reference(self.d, &owner, &name);
                 let clones = self.clones.entry(name.clone()).or_default();
@@ -760,8 +764,9 @@ impl<'a> Repos<'a> {
             None => {
                 if self.unnamed.insert(clone.clone()) {
                     self.warnings.push(format!(
-                        "{} has no GitHub remote: its sessions and branches are left out.",
-                        clone.display()
+                        "{} has no {}: its sessions and branches are left out.",
+                        clone.display(),
+                        crate::repos::forge_remote(&self.d.settings.get())
                     ));
                 }
                 None
@@ -1011,9 +1016,8 @@ impl<'a> Repos<'a> {
         true
     }
 
-    /// The (head, base) of the merged PRs from `branch`: on GitHub from the repo's recent merged
-    /// PRs, read once (`MERGED_PRS`); on GitLab, asked for that branch, `base` (the clone's default
-    /// branch) standing for a PR that names none.
+    /// The (head, base) of the merged PRs from `branch`, from the repo's recent merged PRs, read
+    /// once (`MERGED_PRS`; on GitLab, its merge requests into `base`, the clone's default branch).
     async fn merged_heads(
         &mut self,
         clone: &Path,
@@ -1021,22 +1025,22 @@ impl<'a> Repos<'a> {
         base: &str,
     ) -> Option<Vec<(String, String)>> {
         let forge = self.d.settings.get().forge;
-        if forge == chauffeur_protocol::client::Forge::Gitlab {
-            return self.merged_from(forge, clone, branch, Some(base)).await;
-        }
         if !self.merged.contains_key(clone) {
-            let heads = crate::prs::merged_heads(&self.d.shell_env, clone, MERGED_PRS).await;
+            let heads =
+                crate::prs::merged_heads(forge, &self.d.shell_env, clone, base, MERGED_PRS).await;
             self.merged.insert(clone.to_path_buf(), heads);
         }
         let heads = self.merged.get(clone)?.as_ref()?;
         if let Some(found) = heads.get(branch) {
             return Some(found.clone());
         }
-        // The list stopped at its limit: an older PR is asked for by its branch.
+        // The list stopped at its limit: an older PR is asked for by its branch (on GitLab, `base`
+        // standing for a merge request that names no target).
         if heads.values().map(Vec::len).sum::<usize>() < MERGED_PRS as usize {
             return Some(Vec::new());
         }
-        self.merged_from(forge, clone, branch, None).await
+        let named = (forge == chauffeur_protocol::client::Forge::Gitlab).then_some(base);
+        self.merged_from(forge, clone, branch, named).await
     }
 
     /// The merged PRs from `branch`, asked for by name: (head, base), `base` standing for one
