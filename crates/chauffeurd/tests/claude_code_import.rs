@@ -779,8 +779,8 @@ async fn a_dry_run_lists_the_window_s_sessions_their_branches_and_where_each_lan
 }
 
 /// A GitLab installation (`gitlab.example.com`, main group `team`): `web` is `team/web` there,
-/// `api` `team/shop/api`, `docs` is on GitHub. A `glab` that knows one merged merge request, from
-/// web's `feat/squashed` at its tip, and logs what it is asked.
+/// `api` `team/shop/api`, `docs` is on GitHub. A `glab` that logs what it is asked and knows 101
+/// merged merge requests into main, a full page then the one from web's `feat/squashed` at its tip.
 fn on_gitlab() -> (Fixture, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
@@ -819,7 +819,7 @@ fn on_gitlab() -> (Fixture, PathBuf) {
     std::fs::write(
         &glab,
         format!(
-            "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$*\" in\n  *state=merged*target_branch=main*page=1*) echo '[{{\"iid\":7,\"state\":\"merged\",\"source_branch\":\"feat/squashed\",\"target_branch\":\"main\",\"sha\":\"{squashed}\"}}]' ;;\n  *) echo '[]' ;;\nesac\n",
+            "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$*\" in\n  *state=merged*target_branch=main*page=1) printf '['; i=0; while [ $i -lt 99 ]; do printf '{{\"iid\":%s,\"state\":\"merged\",\"source_branch\":\"other-%s\",\"target_branch\":\"main\",\"sha\":\"x\"}},' $i $i; i=$((i+1)); done; echo '{{\"iid\":99,\"state\":\"merged\",\"source_branch\":\"other-99\",\"target_branch\":\"main\",\"sha\":\"x\"}}]' ;;\n  *state=merged*target_branch=main*page=2) echo '[{{\"iid\":100,\"state\":\"merged\",\"source_branch\":\"feat/squashed\",\"target_branch\":\"main\",\"sha\":\"{squashed}\"}}]' ;;\n  *) echo '[]' ;;\nesac\n",
             log = log.display()
         ),
     )
@@ -908,11 +908,11 @@ async fn on_a_gitlab_sessions_are_matched_by_project_and_squash_merges_read_from
             .ends_with("clones/docs has no GitLab remote (gitlab.example.com)"),
         "{docs:?}"
     );
-    // The merge requests are read once, by pages, not branch by branch.
+    // The merge requests are read once, by pages up to the first short one, not branch by branch.
     let asked = std::fs::read_to_string(&log).unwrap();
     assert_eq!(
         asked.lines().filter(|l| l.contains("state=merged")).count(),
-        1,
+        2,
         "{asked}"
     );
     assert!(!asked.contains("source_branch="), "{asked}");
