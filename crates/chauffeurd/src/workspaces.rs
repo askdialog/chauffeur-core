@@ -1913,8 +1913,8 @@ impl WorkspaceManager {
             }
         };
         self.progress(&row.id, format!("creating the {} worktree", repo.name));
-        let created_branch = !git.branch_exists(&repo.clone_path, branch).await;
-        git.worktree_add(&repo.clone_path, path, branch, &start)
+        let created_branch = git
+            .worktree_add(&repo.clone_path, path, branch, &start)
             .await
             .map_err(|e| Error::Internal(e.context(format!("worktree of {}", repo.name))))?;
         let base_commit = git.rev_parse(path, "HEAD").await.ok();
@@ -3454,9 +3454,10 @@ impl WorkspaceManager {
     /// saved a checkout's changes in (`--move-changes`), kept as long.
     pub async fn purge_expired_snapshots(&self) -> Result<usize> {
         let d = self.d();
-        let cutoff =
-            chrono::Utc::now() - chrono::Duration::days(d.settings.get().snapshot_retention_days);
-        let expired = d.store.expired_snapshots(&cutoff.to_rfc3339())?;
+        let cutoff = (chrono::Utc::now()
+            - chrono::Duration::days(d.settings.get().snapshot_retention_days))
+        .to_rfc3339();
+        let expired = d.store.expired_snapshots(&cutoff)?;
         let git = self.git();
         for worktree in &expired {
             if let Some(ref_name) = &worktree.snapshot_ref {
@@ -3466,8 +3467,7 @@ impl WorkspaceManager {
             }
             d.store.clear_snapshot_ref(&worktree.id)?;
         }
-        // The refs an import from Claude Code saved a checkout's changes in: the same retention.
-        let moved = crate::claudecode::moved::purge(&d, &git, &cutoff.to_rfc3339()).await?;
+        let moved = crate::claudecode::moved::purge(&d, &git, &cutoff).await?;
         Ok(expired.len() + moved)
     }
 

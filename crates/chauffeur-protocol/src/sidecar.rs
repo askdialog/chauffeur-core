@@ -697,7 +697,8 @@ pub struct AgentTitleResult {
     pub title: String,
 }
 
-/// A clone of one of a workspace's repos, and its worktree in the workspace.
+/// A folder an agent is kept from writing into: a clone of one of a workspace's repos, or a
+/// checkout an imported session wrote in, with the repo's worktree in the workspace to write instead.
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq, Eq)]
 #[ts(export)]
 pub struct SourceClone {
@@ -771,7 +772,8 @@ pub struct SessionStartParams {
     /// The clones of the workspace's repos, each with its worktree in the workspace, given to every
     /// chat: a write into one that the sidecar sees is refused (Claude's and Vibe's calls through the
     /// permissions it answers, Codex's shell commands through its hook), naming the worktree path to
-    /// write instead. What it does not see is listed in docs/adr/claude-code-import.md.
+    /// write instead; an imported chat's own checkouts follow the clones. What it does not see is
+    /// listed in docs/adr/claude-code-import.md.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<SourceClone>>", optional)]
     pub source_clones: Vec<SourceClone>,
