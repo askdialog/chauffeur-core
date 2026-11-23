@@ -795,14 +795,11 @@ async fn release(git: &Git, at: RepoBranch, holder: &Holder, kept: bool) -> Resu
 /// The folder in the clone's `.git` that keeps a worktree whose own folder is gone; none once
 /// pruned.
 async fn admin_dir(git: &Git, clone: &Path, folder: &Path) -> Result<Option<PathBuf>> {
-    let common = git
-        .run(
-            clone,
-            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        )
+    let worktrees = git
+        .common_dir(clone)
         .await
-        .map_err(Error::Internal)?;
-    let worktrees = PathBuf::from(common.trim()).join("worktrees");
+        .map_err(Error::Internal)?
+        .join("worktrees");
     let wanted = folder.join(".git");
     let Ok(entries) = std::fs::read_dir(&worktrees) else {
         return Ok(None);

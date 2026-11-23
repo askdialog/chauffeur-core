@@ -741,15 +741,7 @@ impl<'a> Repos<'a> {
         if top.starts_with(&self.workspaces) {
             return None;
         }
-        let common = self
-            .git
-            .run(
-                &top,
-                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            )
-            .await
-            .ok()?;
-        let common = PathBuf::from(common.trim());
+        let common = self.git.common_dir(&top).await.ok()?;
         let clone = if common.file_name().is_some_and(|n| n == ".git") {
             common.parent()?.to_path_buf()
         } else {

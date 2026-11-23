@@ -138,6 +138,16 @@ impl Git {
         Ok((!branch.is_empty()).then(|| branch.to_owned()))
     }
 
+    /// The repo's shared git folder (the main worktree's `.git`), as an absolute path.
+    pub async fn common_dir(&self, dir: &Path) -> anyhow::Result<PathBuf> {
+        self.run(
+            dir,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )
+        .await
+        .map(PathBuf::from)
+    }
+
     pub async fn ok(&self, dir: &Path, args: &[&str]) -> bool {
         self.run(dir, args).await.is_ok()
     }
