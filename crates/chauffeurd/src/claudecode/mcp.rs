@@ -54,7 +54,7 @@ fn local_servers(state: &Path) -> Option<BTreeMap<PathBuf, BTreeSet<String>>> {
             tracing::warn!(%error, state = %state.display(), "could not read Claude Code's state file")
         })
         .ok()?;
-    let mut servers = BTreeMap::new();
+    let mut servers: BTreeMap<PathBuf, BTreeSet<String>> = BTreeMap::new();
     for (folder, project) in json.get("projects")?.as_object()? {
         let names: BTreeSet<String> = project
             .get("mcpServers")
@@ -65,7 +65,7 @@ fn local_servers(state: &Path) -> Option<BTreeMap<PathBuf, BTreeSet<String>>> {
         if !names.is_empty() {
             servers
                 .entry(real(Path::new(folder)))
-                .or_insert_with(BTreeSet::new)
+                .or_default()
                 .extend(names);
         }
     }

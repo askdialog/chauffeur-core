@@ -1,6 +1,7 @@
 //! `chauffeur import conductor` (docs/adr/conductor-import.md): the daemon plans and imports; this
 //! prints the plan, lists the branches Conductor will release and asks before anything changes.
-//! `chauffeur import claude-code` (docs/adr/claude-code-import.md): the plan only, for now.
+//! `chauffeur import claude-code` (docs/adr/claude-code-import.md): the daemon plans and imports;
+//! this prints the plan, asks before any branch is released, and says what is left to clean.
 use crate::client::Client;
 use crate::render::sanitize_terminal;
 use anyhow::bail;

@@ -14,6 +14,8 @@ import { claudeProjectKey, isClaudeProjectKey } from "./context-bundle.ts";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CHUNK = 1024 * 1024;
 const refused = (why: string) => new Error(`The session could not be copied: ${why}`);
+/** A path's lstat, or null when nothing is there. */
+const lstatIfAny = (path: string) => lstat(path).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
 
 export async function copyClaudeSession(params: ContextCopyParams): Promise<ContextRestoreResult> {
   if (!isAbsolute(params.source_home) || !isAbsolute(params.claude_home) || resolve(params.claude_home) !== params.claude_home) {
@@ -48,7 +50,7 @@ async function sessionFiles(source: string, sessionId: string): Promise<string[]
   const paths = [main];
   async function scan(dir: string): Promise<void> {
     // The session's folder itself may be a link: refused as any inside it.
-    const stat = await lstat(join(source, dir)).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
+    const stat = await lstatIfAny(join(source, dir));
     if (!stat && dir === sessionId) return;
     if (!stat?.isDirectory()) throw refused(`${dir} is a link or not a folder`);
     const entries = await readdir(join(source, dir), { withFileTypes: true });
@@ -66,14 +68,15 @@ async function sessionFiles(source: string, sessionId: string): Promise<string[]
 /** One file streamed from `from` to `<target>/<path>`, its missing folders made. */
 async function copyFile(from: string, target: string, path: string, added: Added): Promise<void> {
   const destination = join(target, path);
+  const folder = dirname(destination);
   const missing: string[] = [];
-  for (let dir = dirname(destination); ; dir = dirname(dir)) {
-    const stat = await lstat(dir).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return null; throw error; });
+  for (let dir = folder; ; dir = dirname(dir)) {
+    const stat = await lstatIfAny(dir);
     if (stat) { if (!stat.isDirectory()) throw refused(`${dir} is not a folder`); break; }
     missing.unshift(dir);
   }
   for (const dir of missing) { await mkdir(dir, { mode: 0o700 }); added.push({ path: dir, folder: true }); }
-  if (await realpath(dirname(destination)) !== dirname(destination)) throw refused(`${dirname(destination)} goes through a link`);
+  if (await realpath(folder) !== folder) throw refused(`${folder} goes through a link`);
   const input = await open(from, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = await input.stat();
@@ -132,5 +135,5 @@ async function sameStart(input: FileHandle, output: FileHandle, size: number, pa
     at += length;
   }
   // A longer file there is the session continued from the copy: kept as it is.
-  return stat.size >= size ? size : stat.size;
+  return common;
 }

@@ -138,6 +138,16 @@ impl Git {
         Ok((!branch.is_empty()).then(|| branch.to_owned()))
     }
 
+    /// The repo's shared git folder (the main worktree's `.git`), as an absolute path.
+    pub async fn common_dir(&self, dir: &Path) -> anyhow::Result<PathBuf> {
+        self.run(
+            dir,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )
+        .await
+        .map(PathBuf::from)
+    }
+
     pub async fn ok(&self, dir: &Path, args: &[&str]) -> bool {
         self.run(dir, args).await.is_ok()
     }
@@ -241,14 +251,14 @@ impl Git {
     }
 
     /// Creates a worktree at `path`: on a new `branch` cut from `start`, or on the existing
-    /// `branch` when it already exists.
+    /// `branch` when it already exists. Returns whether it made `branch`.
     pub async fn worktree_add(
         &self,
         clone: &Path,
         path: &Path,
         branch: &str,
         start: &str,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let path_str = path.to_string_lossy();
         let existed = path.exists();
         let had_branch = self.branch_exists(clone, branch).await;
@@ -299,9 +309,10 @@ impl Git {
             }
             return Err(error);
         }
-        Ok(())
+        Ok(!had_branch)
     }
 
+    /// A worktree with no branch, checked out at `start` (an exploration's).
     pub async fn worktree_add_detached(
         &self,
         clone: &Path,

@@ -3,11 +3,11 @@
 //! copy, recorded so that no session is imported twice.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
-use chauffeur_protocol::claudecode::{ClaudeCodeOutcome, ClaudeCodeSessionPlan};
+use chauffeur_protocol::claudecode::{ClaudeCodeMoved, ClaudeCodeOutcome, ClaudeCodeSessionPlan};
 use chauffeur_protocol::model::AgentKind;
 use chauffeur_protocol::sidecar::{
     AgentSessionMessagesParams, AgentSessionMessagesResult, ContextCopyParams,
@@ -25,10 +25,7 @@ pub(super) struct Report<'a> {
     plans: &'a mut [ClaudeCodeSessionPlan],
     pub(super) warnings: &'a mut Vec<String>,
     /// The released checkouts moved out (`move_changes`), each with where its changes went.
-    pub(super) moved: Vec<(
-        std::path::PathBuf,
-        chauffeur_protocol::claudecode::ClaudeCodeMoved,
-    )>,
+    pub(super) moved: Vec<(PathBuf, ClaudeCodeMoved)>,
 }
 
 impl<'a> Report<'a> {
@@ -53,9 +50,7 @@ impl<'a> Report<'a> {
     pub(super) fn fail(&mut self, ids: &[String], reason: &str) {
         for id in ids {
             if let Some(&i) = self.index.get(id) {
-                self.plans[i].outcome = ClaudeCodeOutcome::Failed;
-                self.plans[i].reason = Some(reason.to_owned());
-                self.plans[i].lands_in = None;
+                mark_failed(&mut self.plans[i], reason.to_owned());
             }
         }
     }
@@ -88,14 +83,18 @@ impl<'a> Report<'a> {
                 Err(error) => {
                     self.warnings
                         .push(format!("“{}” could not be imported: {error}", plan.title));
-                    plan.outcome = ClaudeCodeOutcome::Failed;
-                    plan.reason = Some(error.to_string());
-                    // It landed nowhere.
-                    plan.lands_in = None;
+                    mark_failed(plan, error.to_string());
                 }
             }
         }
     }
+}
+
+/// The session failed, for `reason`: it landed nowhere.
+fn mark_failed(plan: &mut ClaudeCodeSessionPlan, reason: String) {
+    plan.outcome = ClaudeCodeOutcome::Failed;
+    plan.reason = Some(reason);
+    plan.lands_in = None;
 }
 
 /// `<prefix><session id>` → the id of the chat it was imported as: never imported twice.

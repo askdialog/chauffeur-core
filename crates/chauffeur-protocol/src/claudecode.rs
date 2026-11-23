@@ -1,6 +1,7 @@
 //! The import from Claude Code (`claudecode.import`, docs/adr/claude-code-import.md): which
-//! sessions it reads and where each lands. Sessions that left no live branch are imported into
-//! their repo's history exploration; the rest is only planned for now.
+//! sessions it reads and where each lands: a workspace on a live branch, a parent with its
+//! children, a workspace carrying a clone's uncommitted default-branch changes, or, for those that
+//! left no live branch, their repo's history exploration.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -79,9 +80,10 @@ fn planned() -> ClaudeCodeOutcome {
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum ClaudeCodeOutcome {
-    /// Will be imported (a dry run), or left for a later version (a session on a live branch).
+    /// Will be imported (a dry run).
     Import,
-    /// Imported: its chat is a closed tab of `lands_in`.
+    /// Imported: a session's chat is in `lands_in` (a closed tab there for a history
+    /// exploration); a workspace was made (`workspace`).
     Imported,
     /// Imported by an earlier run: left as it is.
     AlreadyImported,
@@ -147,9 +149,9 @@ pub struct ClaudeCodeWorkspacePlan {
     pub sessions: Vec<String>,
     /// Repos whose uncommitted default-branch changes it carries.
     pub changes_from: Vec<String>,
-    /// `import` in a plan; `imported` or `failed` once run, `reason` saying why it failed.
-    /// Workspaces of the kinds a later version imports stay `import`. (Defaults: a daemon from
-    /// before plans only.)
+    /// `import` in a plan; `imported` or `failed` once run, `reason` saying why it failed, or
+    /// `already_imported` for changes an earlier import carried. (Defaults: a daemon from before
+    /// plans only.)
     #[serde(default = "planned")]
     pub outcome: ClaudeCodeOutcome,
     #[serde(default)]

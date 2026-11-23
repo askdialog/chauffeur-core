@@ -51,8 +51,15 @@ export function readLine(line: string): List {
 }
 
 /** The text of a word, its variables and commands left out. */
-export function wordText(word: Word): string {
+function wordText(word: Word): string {
   return word.parts.map((part) => ("text" in part ? part.text : "")).join("");
+}
+
+/** Text added to a word: joined to the text before it unless either is a wildcard. */
+function addText(parts: Part[], value: string, glob = false): void {
+  const last = parts.at(-1);
+  if (last && "text" in last && !glob && !last.glob) last.text += value;
+  else parts.push({ text: value, glob });
 }
 
 const OPERATORS = ["&&", "||", ";;", "|&", ";", "|", "&", "\n"];
@@ -220,11 +227,6 @@ class Reader {
     const start = this.i;
     const parts: Part[] = [];
     this.lastWordQuoted = false;
-    const text = (value: string, glob = false) => {
-      const last = parts.at(-1);
-      if (last && "text" in last && !glob && !last.glob) last.text += value;
-      else parts.push({ text: value, glob });
-    };
     for (;;) {
       const c = this.peek();
       if (c === "" || c === " " || c === "\t" || c === "\r" || c === "\n" || c === ";" || c === "|" || c === "&" || c === ")") break;
@@ -250,21 +252,21 @@ class Reader {
           continue;
         }
         if (!test) break;
-        text(c);
+        addText(parts, c);
         this.i++;
         continue;
       }
       if (c === "\\") {
         const next = this.peek(1);
         this.i += 2;
-        if (next !== "\n") text(next);
+        if (next !== "\n") addText(parts, next);
         continue;
       }
       if (c === "'") {
         this.lastWordQuoted = true;
         const end = this.s.indexOf("'", this.i + 1);
         const stop = end < 0 ? this.s.length : end;
-        text(this.s.slice(this.i + 1, stop));
+        addText(parts, this.s.slice(this.i + 1, stop));
         this.i = stop + 1;
         continue;
       }
@@ -278,7 +280,7 @@ class Reader {
           this.i++;
         }
         this.i++;
-        text(value);
+        addText(parts, value);
         continue;
       }
       if (c === '"') {
@@ -301,7 +303,7 @@ class Reader {
         parts.push(user ? { unknown: true } : { variable: "HOME" });
         continue;
       }
-      text(c, "*?[{".includes(c));
+      addText(parts, c, "*?[{".includes(c));
       this.i++;
     }
     return this.i === start ? undefined : { parts };
@@ -309,11 +311,6 @@ class Reader {
 
   /** Inside double quotes (or a here-document's text, with no closing quote): variables and commands. */
   doubleQuoted(parts: Part[], closing: string): void {
-    const text = (value: string) => {
-      const last = parts.at(-1);
-      if (last && "text" in last && !last.glob) last.text += value;
-      else parts.push({ text: value, glob: false });
-    };
     while (this.i < this.s.length) {
       const c = this.peek();
       if (closing && c === closing) {
@@ -321,12 +318,12 @@ class Reader {
         return;
       }
       if (c === "\\" && "$`\"\\\n".includes(this.peek(1)) && this.peek(1) !== "") {
-        if (this.peek(1) !== "\n") text(this.peek(1));
+        if (this.peek(1) !== "\n") addText(parts, this.peek(1));
         this.i += 2;
       } else if (c === "$") this.dollar(parts);
       else if (c === "`") this.backtick(parts);
       else {
-        text(c);
+        addText(parts, c);
         this.i++;
       }
     }

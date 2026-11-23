@@ -647,7 +647,6 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         .prepare("SELECT 1 FROM pragma_table_info('worktrees') WHERE name='created_branch'")?
         .exists([])?
     {
-        // Whether the worktree's creation made its branch: a failed creation deletes only those.
         conn.execute_batch(
             "ALTER TABLE worktrees ADD COLUMN created_branch INTEGER NOT NULL DEFAULT 1",
         )?;
@@ -1862,9 +1861,10 @@ impl Store {
     }
 
     /// Inserts a chat imported from elsewhere with its conversation (each event at its time),
-    /// and records `record` with the chat's id, in one transaction: an import that fails halfway
-    /// leaves nothing, and a recorded one is never imported twice. Returns the events with their
-    /// sequence numbers; None when `record` is there already or the workspace is gone.
+    /// and records `record` with the chat's id and `origin` (a `kv` key and value), in one
+    /// transaction: an import that fails halfway leaves nothing, and a recorded one is never
+    /// imported twice. Returns the events with their sequence numbers; None when `record` is
+    /// there already or the workspace is gone.
     pub fn insert_imported_chat(
         &self,
         chat: &ChatInfo,

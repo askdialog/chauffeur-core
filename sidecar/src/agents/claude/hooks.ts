@@ -1,8 +1,9 @@
 // Programmatic SDK hooks: the `git worktree add` guard (and the read-only and write-folder guards
-// of explorations and design chats), and Claude's native worktree features (WorktreeCreate /
-// WorktreeRemove) routed to the daemon, which creates and tracks the worktrees.
+// of explorations and design chats), the clone guard (no write into the workspace's source
+// clones), and Claude's native worktree features (WorktreeCreate / WorktreeRemove) routed to the
+// daemon, which creates and tracks the worktrees.
 
-import type { HookCallback, HookCallbackMatcher, HookEvent } from "@anthropic-ai/claude-agent-sdk";
+import type { HookCallback, HookCallbackMatcher, HookEvent, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import {
   designGuardDenial,
   NO_PLANS_DENIAL,
@@ -107,14 +108,7 @@ export function guardWrites(folder: WriteFolder | undefined): HookCallback {
   return async (input) => {
     if (input.hook_event_name !== "PreToolUse") return {};
     const refusal = writeRefusal(folder, input.tool_name, input.tool_input, input.cwd);
-    if (refusal === undefined) return {};
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: refusal,
-      },
-    };
+    return refusal === undefined ? {} : denied(refusal);
   };
 }
 
@@ -134,23 +128,16 @@ export function writeRefusal(folder: WriteFolder | undefined, toolName: string, 
  */
 export function guardClones(clones: SourceClone[], cwd: string): HookCallback {
   const all = withRealPaths(clones);
-  const commandRefusal = (toolInput: unknown, from: string) => {
-    if (typeof toolInput !== "object" || toolInput === null) return undefined;
-    const command: unknown = Reflect.get(toolInput, "command");
-    return typeof command === "string" ? cloneCommandRefusal(command, from, all) : undefined;
-  };
   return async (input) => {
     if (input.hook_event_name !== "PreToolUse") return {};
     const from = typeof input.cwd === "string" && input.cwd ? input.cwd : cwd;
-    const refusal = input.tool_name === "Bash" ? commandRefusal(input.tool_input, from) : cloneWriteRefusal(input.tool_name, input.tool_input, from, all);
-    if (refusal === undefined) return {};
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: refusal,
-      },
-    };
+    let refusal: string | undefined;
+    if (input.tool_name !== "Bash") refusal = cloneWriteRefusal(input.tool_name, input.tool_input, from, all);
+    else {
+      const command = commandOf(input.tool_input);
+      refusal = command === undefined ? undefined : cloneCommandRefusal(command, from, all);
+    }
+    return refusal === undefined ? {} : denied(refusal);
   };
 }
 
@@ -169,14 +156,18 @@ export const askEachTime: HookCallback = async (input) => {
 function bashGuard(refused: (command: string) => boolean, reason: string): HookCallback {
   return async (input) => {
     if (input.hook_event_name !== "PreToolUse") return {};
-    const command = (input.tool_input as { command?: unknown } | null)?.command;
-    if (typeof command !== "string" || !refused(command)) return {};
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: reason,
-      },
-    };
+    const command = commandOf(input.tool_input);
+    if (command === undefined || !refused(command)) return {};
+    return denied(reason);
   };
+}
+
+function denied(reason: string): HookJSONOutput {
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } };
+}
+
+/** The shell command a Bash call's input carries. */
+function commandOf(toolInput: unknown): string | undefined {
+  const command: unknown = typeof toolInput === "object" && toolInput !== null ? Reflect.get(toolInput, "command") : undefined;
+  return typeof command === "string" ? command : undefined;
 }

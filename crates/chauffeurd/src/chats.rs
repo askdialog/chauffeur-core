@@ -1194,8 +1194,7 @@ impl ChatManager {
             source_clones: {
                 // An imported chat's: also the checkouts its session stood or wrote in.
                 let mut clones = source_clones(&d, &workspace_repos).await;
-                let own = crate::claudecode::resume::guarded(&d, &chat, &clones);
-                clones.extend(own);
+                clones.extend(crate::claudecode::resume::guarded(&d, &chat, &clones));
                 clones
             },
             resume_session_id: chat.agent_session_id.clone(),
@@ -3501,13 +3500,12 @@ impl ChatManager {
             forked_from_agent: None,
             brand: None,
         };
+        let origin = crate::claudecode::resume::origin_entry(&chat.id, origin)?;
         let inserted = d.events.store_and_announce(|| {
-            let origin = crate::claudecode::resume::origin_entry(&chat.id, origin)?;
             let inserted = d
                 .store
                 .insert_imported_chat(&chat, events, record, &origin)?;
-            let announced = inserted.clone().unwrap_or_default();
-            Ok((inserted.is_some(), announced))
+            Ok((inserted.is_some(), inserted.unwrap_or_default()))
         })?;
         if !inserted {
             return Ok(None);

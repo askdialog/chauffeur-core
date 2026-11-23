@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
+use crate::conductor::same_folder;
 use crate::worker_credentials::{private_dir_all, replace_private};
 use crate::{Daemon, Error, Result};
 
@@ -74,13 +75,12 @@ impl Locations {
     /// own folder, `~/.claude.json` for `~/.claude`, and inside any other (as `CLAUDE_CONFIG_DIR`
     /// puts it).
     pub(crate) fn state_for(&self, claude: &Path) -> PathBuf {
-        let same = |a: &Path, b: &Path| a == b || crate::conductor::same_folder(a, b);
         let older = claude.join(".config.json");
         if fs::metadata(&older).is_ok_and(|m| m.is_file() && m.len() > 0) {
             older
-        } else if same(claude, &self.config) {
+        } else if same_folder(claude, &self.config) {
             self.state.clone()
-        } else if same(claude, &self.home.join(".claude")) {
+        } else if same_folder(claude, &self.home.join(".claude")) {
             self.home.join(".claude.json")
         } else {
             claude.join(".claude.json")

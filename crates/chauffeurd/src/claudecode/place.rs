@@ -118,36 +118,30 @@ pub fn place(
         }
     }
     let branch_workspace = |branch: &str| ClaudeCodeWorkspacePlan {
-        name: branch.to_string(),
-        kind: ClaudeCodeWorkspaceKind::Branch,
         branch: Some(branch.to_string()),
-        repos: repos_of
-            .get(branch)
-            .into_iter()
-            .flatten()
-            .cloned()
-            .collect(),
         parent: owner.get(branch).cloned(),
         sessions: chats.get(branch).cloned().unwrap_or_default(),
-        changes_from: Vec::new(),
-        outcome: ClaudeCodeOutcome::Import,
-        reason: None,
-        workspace: None,
+        ..new_workspace(
+            branch.to_string(),
+            ClaudeCodeWorkspaceKind::Branch,
+            repos_of
+                .get(branch)
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect(),
+        )
     };
     // The most recent parent first, each followed by its children; then the other branches,
     // the most recently written first; then the changes.
     for (name, session) in parents.iter().rev() {
         plan.workspaces.push(ClaudeCodeWorkspacePlan {
-            name: name.clone(),
-            kind: ClaudeCodeWorkspaceKind::Parent,
-            branch: None,
-            repos: vec![session.repo.clone()],
-            parent: None,
             sessions: vec![session.id.clone()],
-            changes_from: Vec::new(),
-            outcome: ClaudeCodeOutcome::Import,
-            reason: None,
-            workspace: None,
+            ..new_workspace(
+                name.clone(),
+                ClaudeCodeWorkspaceKind::Parent,
+                vec![session.repo.clone()],
+            )
         });
         for branch in repos_of.keys().filter(|b| owner.get(*b) == Some(name)) {
             plan.workspaces.push(branch_workspace(branch));
@@ -172,16 +166,8 @@ pub fn place(
             None => {
                 let name = unique(&mut taken, &format!("{}-changes", slugify(repo, 40)), repo);
                 plan.workspaces.push(ClaudeCodeWorkspacePlan {
-                    name,
-                    kind: ClaudeCodeWorkspaceKind::Changes,
-                    branch: None,
-                    repos: vec![repo.clone()],
-                    parent: None,
-                    sessions: Vec::new(),
                     changes_from: vec![repo.clone()],
-                    outcome: ClaudeCodeOutcome::Import,
-                    reason: None,
-                    workspace: None,
+                    ..new_workspace(name, ClaudeCodeWorkspaceKind::Changes, vec![repo.clone()])
                 });
             }
         }
@@ -196,6 +182,26 @@ pub fn place(
         })
         .collect();
     plan
+}
+
+/// A workspace planned for import: its `name`, `kind` and `repos`, nothing else set.
+pub(super) fn new_workspace(
+    name: String,
+    kind: ClaudeCodeWorkspaceKind,
+    repos: Vec<String>,
+) -> ClaudeCodeWorkspacePlan {
+    ClaudeCodeWorkspacePlan {
+        name,
+        kind,
+        repos,
+        branch: None,
+        parent: None,
+        sessions: Vec::new(),
+        changes_from: Vec::new(),
+        outcome: ClaudeCodeOutcome::Import,
+        reason: None,
+        workspace: None,
+    }
 }
 
 /// `wanted`, or `session-<id>` when it is empty, with `-2`, `-3`… when another workspace has it.

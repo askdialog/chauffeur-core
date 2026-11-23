@@ -19,7 +19,7 @@ use chauffeur_protocol::model::WorkspaceState;
 
 use super::copy::Report;
 use super::sessions::Session;
-use super::{Holder, real};
+use super::{Holder, ready_workspace, runs_in};
 use crate::conductor::{self, Changes, same_folder};
 use crate::git::Git;
 use crate::repos::repo_folder;
@@ -51,26 +51,12 @@ impl RepoBranch {
 /// The workspace an earlier import made on `branch` of `repo`, while it is ready: the sessions
 /// found on that branch since go there.
 pub(super) fn recorded(d: &Daemon, repo: &str, branch: &str) -> Result<Option<WorkspaceRow>> {
-    let Some(id) = d.store.kv_get(&RepoBranch::new(repo, branch).record())? else {
-        return Ok(None);
-    };
-    Ok(d.store
-        .find_workspace(&id)?
-        .filter(|row| row.state == WorkspaceState::Ready))
+    ready_workspace(d, &RepoBranch::new(repo, branch).record())
 }
 
-/// The workspace an earlier import made on the branch, in any of its repos.
-/// The same branch in several repos is one workspace, across runs too: one made for the branch
-/// in another repo.
-pub(super) fn existing(
-    d: &Daemon,
-    workspace: &ClaudeCodeWorkspacePlan,
-    branch: &str,
-) -> Result<Option<WorkspaceRow>> {
-    existing_in(d, &workspace.repos, branch)
-}
-
-/// The workspace an earlier import made on `branch`, in one of `repos` or another.
+/// The workspace an earlier import made on `branch`, in one of `repos` or another. The same
+/// branch in several repos is one workspace, across runs too: one made for the branch in another
+/// repo.
 pub(super) fn existing_in(
     d: &Daemon,
     repos: &[String],
@@ -81,12 +67,7 @@ pub(super) fn existing_in(
             return Ok(Some(row));
         }
     }
-    let Some(id) = d.store.kv_get(&branch_record(branch))? else {
-        return Ok(None);
-    };
-    Ok(d.store
-        .find_workspace(&id)?
-        .filter(|row| row.state == WorkspaceState::Ready))
+    ready_workspace(d, &branch_record(branch))
 }
 
 /// `claudecode_branch_name:<branch>` → the id of the workspace an import made on it, in any repo.
@@ -320,12 +301,7 @@ const CHANGES: &str = "claudecode_changes:";
 
 /// The workspace an earlier import made carrying `repo`'s default-branch changes, while ready.
 pub(super) fn changes_workspace(d: &Daemon, repo: &str) -> Result<Option<WorkspaceRow>> {
-    let Some(id) = d.store.kv_get(&format!("{CHANGES}{repo}"))? else {
-        return Ok(None);
-    };
-    Ok(d.store
-        .find_workspace(&id)?
-        .filter(|row| row.state == WorkspaceState::Ready))
+    ready_workspace(d, &format!("{CHANGES}{repo}"))
 }
 
 /// A workspace on a new branch from the default branch of its repo, carrying the uncommitted
@@ -512,7 +488,7 @@ async fn make(
     found: &Found<'_>,
     report: &mut Report<'_>,
 ) -> Result<WorkspaceRow> {
-    let existing = existing(d, workspace, branch)?;
+    let existing = existing_in(d, &workspace.repos, branch)?;
     let missing = missing_repos(d, workspace, branch, existing.as_ref())?;
     if let Some(row) = &existing
         && missing.is_empty()
@@ -548,7 +524,15 @@ async fn make(
         .iter()
         .filter(|r| !r.kept && !added.contains(&r.at.repo))
     {
-        put_back(git, checkout).await;
+        conductor::put_back(
+            git,
+            &checkout.clone,
+            &checkout.folder,
+            checkout.admin.as_deref(),
+            &checkout.at.branch,
+            &checkout.head,
+        )
+        .await;
     }
     let (id, failed) = match (made, &existing) {
         (Ok(id), _) => (id, None),
@@ -664,13 +648,10 @@ async fn prepare(
         };
         let holders = source.map_or(&[][..], |s| &s.holders[..]);
         // A Claude Code session still running there would go on on a detached HEAD.
-        if let Some(holder) = holders.iter().find(|h| {
-            let folder = real(Path::new(&h.release.folder));
-            found
-                .running
-                .iter()
-                .any(|running| running.starts_with(&folder))
-        }) {
+        if let Some(holder) = holders
+            .iter()
+            .find(|h| runs_in(found.running, &h.release.folder))
+        {
             return Err(Error::Conflict(format!(
                 "a Claude Code session still runs in {}: close it, then run the import again",
                 holder.release.folder
@@ -776,23 +757,13 @@ async fn release(git: &Git, at: RepoBranch, holder: &Holder, kept: bool) -> Resu
         .await
         .map_err(Error::Internal)?;
     let admin = if holder.gone {
-        // Pruned since it was read (a rollback prunes its clone's worktrees): nothing holds the
-        // branch any more, nothing to release or put back.
-        let Some(admin) = admin_dir(git, &holder.clone, &folder).await? else {
-            return Ok(Released {
-                at,
-                folder,
-                clone: holder.clone.clone(),
-                head,
-                admin: None,
-                changes,
-                kept: true,
-            });
-        };
-        Some(admin)
+        admin_dir(git, &holder.clone, &folder).await?
     } else {
         None
     };
+    // Pruned since it was read (a rollback prunes its clone's worktrees): nothing holds the
+    // branch any more, nothing to release or put back.
+    let kept = kept || (holder.gone && admin.is_none());
     if !kept {
         let git_dir = admin.as_ref().map(|a| format!("--git-dir={}", a.display()));
         let message = "chauffeur: branch released by the import from Claude Code";
@@ -824,14 +795,11 @@ async fn release(git: &Git, at: RepoBranch, holder: &Holder, kept: bool) -> Resu
 /// The folder in the clone's `.git` that keeps a worktree whose own folder is gone; none once
 /// pruned.
 async fn admin_dir(git: &Git, clone: &Path, folder: &Path) -> Result<Option<PathBuf>> {
-    let common = git
-        .run(
-            clone,
-            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        )
+    let worktrees = git
+        .common_dir(clone)
         .await
-        .map_err(Error::Internal)?;
-    let worktrees = PathBuf::from(common.trim()).join("worktrees");
+        .map_err(Error::Internal)?
+        .join("worktrees");
     let wanted = folder.join(".git");
     let Ok(entries) = std::fs::read_dir(&worktrees) else {
         return Ok(None);
@@ -844,22 +812,4 @@ async fn admin_dir(git: &Git, clone: &Path, folder: &Path) -> Result<Option<Path
         }
     }
     Ok(None)
-}
-
-/// After a failed workspace: the branch checked out again where it was released.
-async fn put_back(git: &Git, checkout: &Released) {
-    let git_dir = checkout
-        .admin
-        .as_ref()
-        .map(|a| format!("--git-dir={}", a.display()));
-    let git_dir: Vec<&str> = git_dir.iter().map(String::as_str).collect();
-    conductor::put_back_head(
-        git,
-        &checkout.clone,
-        &checkout.folder,
-        &git_dir,
-        &checkout.at.branch,
-        &checkout.head,
-    )
-    .await;
 }

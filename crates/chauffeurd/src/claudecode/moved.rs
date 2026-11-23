@@ -45,7 +45,11 @@ pub(super) async fn move_out(
     row: &WorkspaceRow,
 ) -> anyhow::Result<Moved> {
     let folder = released.folder.as_path();
-    if let Some(reason) = unmovable(git, folder).await? {
+    let git_dir = PathBuf::from(
+        git.run(folder, &["rev-parse", "--absolute-git-dir"])
+            .await?,
+    );
+    if let Some(reason) = unmovable(git, folder, &git_dir).await? {
         return Ok(Moved::Left(reason));
     }
     let Some(target) = target(git, folder, base).await else {
@@ -62,15 +66,7 @@ pub(super) async fn move_out(
     }
     // Saved: whatever stops the cleaning now is said, the ref named.
     let no_recursion = ["-c", "submodule.recurse=false"];
-    let linked = git
-        .run(folder, &["rev-parse", "--absolute-git-dir"])
-        .await?
-        != git
-            .run(
-                folder,
-                &["rev-parse", "--path-format=absolute", "--git-common-dir"],
-            )
-            .await?;
+    let linked = git_dir.as_os_str() != git.common_dir(folder).await?.as_os_str();
     let mut stopped = None;
     for step in [
         &[&no_recursion[..], &["reset", "--hard", "-q"]].concat()[..],
@@ -102,11 +98,8 @@ pub(super) async fn move_out(
         }
     }
     // Where it is, as git says.
-    let back_on = match git
-        .run(folder, &["symbolic-ref", "-q", "--short", "HEAD"])
-        .await
-    {
-        Ok(branch) if !branch.is_empty() => branch,
+    let back_on = match git.current_branch(folder).await {
+        Ok(Some(branch)) => branch,
         _ => {
             let commit = git.run(folder, &["rev-parse", "--short", "HEAD"]).await?;
             format!("{commit}, detached")
@@ -123,8 +116,8 @@ pub(super) async fn move_out(
 
 /// Why `folder`'s changes cannot be saved whole, if so: files git is told to leave alone
 /// (`--assume-unchanged`, `--skip-worktree`), whose changes neither the copy nor the ref holds;
-/// a merge, rebase, cherry-pick or revert under way, which a reset would end.
-async fn unmovable(git: &Git, folder: &Path) -> anyhow::Result<Option<String>> {
+/// a merge, rebase, cherry-pick or revert under way (in its `git_dir`), which a reset would end.
+async fn unmovable(git: &Git, folder: &Path, git_dir: &Path) -> anyhow::Result<Option<String>> {
     let listed = git.run(folder, &["ls-files", "-v"]).await?;
     let hidden = listed
         .lines()
@@ -134,10 +127,6 @@ async fn unmovable(git: &Git, folder: &Path) -> anyhow::Result<Option<String>> {
             "some of its files are marked --assume-unchanged or --skip-worktree, whose changes git does not show".into(),
         ));
     }
-    let git_dir = PathBuf::from(
-        git.run(folder, &["rev-parse", "--absolute-git-dir"])
-            .await?,
-    );
     let under_way = [
         "MERGE_HEAD",
         "CHERRY_PICK_HEAD",
@@ -192,10 +181,15 @@ async fn free_reference(git: &Git, folder: &Path, row: &WorkspaceRow, repo: &str
 /// deletes others is kept.
 static LEDGER: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn remember(d: &Daemon, clone: &Path, reference: &str) -> Result<()> {
-    let _ledger = LEDGER
+/// [`LEDGER`], held even after a panic while it was: it guards no data.
+fn ledger() -> std::sync::MutexGuard<'static, ()> {
+    LEDGER
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn remember(d: &Daemon, clone: &Path, reference: &str) -> Result<()> {
+    let _ledger = ledger();
     let mut saved = read(d)?;
     saved.push(Saved {
         clone: clone.to_path_buf(),
@@ -220,9 +214,7 @@ fn write(d: &Daemon, saved: &[Saved]) -> Result<()> {
 /// again at the next purge, unless its clone is gone. How many went.
 pub async fn purge(d: &Daemon, git: &Git, cutoff: &str) -> Result<usize> {
     let expired: Vec<Saved> = {
-        let _ledger = LEDGER
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _ledger = ledger();
         read(d)?
             .into_iter()
             .filter(|s| s.at.as_str() < cutoff)
@@ -238,9 +230,7 @@ pub async fn purge(d: &Daemon, git: &Git, cutoff: &str) -> Result<usize> {
             }
         }
     }
-    let _ledger = LEDGER
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _ledger = ledger();
     let mut saved = read(d)?;
     saved.retain(|s| !gone.contains(&s.reference));
     write(d, &saved)?;
