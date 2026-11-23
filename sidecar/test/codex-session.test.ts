@@ -80,6 +80,18 @@ test("Codex stop waits for native exit even when close returns early, and can re
 });
 
 describe("starting", () => {
+  test.skipIf(Bun.which("git", { PATH: "/usr/bin" }) !== "/usr/bin/git")("supplies system Git to Codex Security when selected by the session", async () => {
+    const { session, server } = await started();
+    expect(server.options.env.CODEX_SECURITY_GIT).toBe("/usr/bin/git");
+    await session.stop();
+  });
+
+  test("preserves an explicit Codex Security Git selection", async () => {
+    const { session, server } = await started({ env: { CODEX_SECURITY_GIT: "/opt/tools/git" } });
+    expect(server.options.env.CODEX_SECURITY_GIT).toBe("/opt/tools/git");
+    await session.stop();
+  });
+
   test("spawns the app-server with the guard hook, trusts it, and opens a thread", async () => {
     const { server, host, result } = await started({ model: "gpt-6-luna", append_system_prompt: "Ticket XYZ-1", additional_directories: ["/extra"] });
     expect(result).toEqual({ agent_session_id: THREAD_ID });
