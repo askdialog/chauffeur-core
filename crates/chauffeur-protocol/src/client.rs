@@ -687,6 +687,13 @@ methods! {
         #[access(Any, phone)]
         #[relay(Act)]
         ChatInterrupt(ChatParams) -> ChatInfo,
+        /// Takes back a message sent while the agent works, before the agent read it: logged as
+        /// `user_message_withdrawn`, it never reaches the agent. `withdrawn` is false once the
+        /// agent has read it (or the agent cannot take it back: Codex reads a steer at once).
+        #[serde(rename = "chat.withdraw_message")]
+        #[access(Any, phone)]
+        #[relay(Act)]
+        ChatWithdrawMessage(WithdrawMessageParams) -> WithdrawMessageResult,
         #[serde(rename = "chat.respond")]
         #[access(Any, phone)]
         #[relay(Act)]
@@ -3190,6 +3197,21 @@ pub struct SubagentMessagesResult {
     /// `tool_result` events without `parent_tool_use_id` (a nested subagent's own tool calls are
     /// in its transcript, not here). The prompt it was given is the tool call's input.
     pub events: Vec<ChatEvent>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+#[ts(optional_fields)]
+pub struct WithdrawMessageParams {
+    pub chat: String,
+    /// From the message's `user_message` event.
+    pub message_id: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct WithdrawMessageResult {
+    pub withdrawn: bool,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]

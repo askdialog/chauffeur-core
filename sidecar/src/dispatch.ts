@@ -46,6 +46,10 @@ export function createDispatcher(
       await sessions.interrupt(string(object(params), "chat_id"));
       return {};
     },
+    "session.withdraw": async (params) => {
+      const p = object(params);
+      return { withdrawn: await sessions.withdraw(string(p, "chat_id"), string(p, "message_id")) };
+    },
     "session.respond": (params) => {
       const p = object(params);
       sessions.respond(string(p, "chat_id"), string(p, "request_id"), parseResponse(p.response));

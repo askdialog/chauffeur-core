@@ -111,10 +111,22 @@ Only files of that folder can be written; commits, pushes and worktrees are refu
 /// (its name and the path or command it named).
 /// Never a file's content, thinking or a tool's output, nor a subagent's work. When it is longer
 /// than `budget`, the first message (the ticket) is kept whole and the end fills the rest.
+/// A message the user took back (`user_message_withdrawn`) is left out: the agent never read it.
 pub fn conversation_text(events: &[ChatEvent], budget: usize) -> String {
+    let withdrawn: std::collections::HashSet<&str> = events
+        .iter()
+        .filter_map(|event| match event {
+            ChatEvent::UserMessageWithdrawn { message_id } => Some(message_id.as_str()),
+            _ => None,
+        })
+        .collect();
     let mut blocks: Vec<String> = Vec::new();
     for event in events {
         match event {
+            ChatEvent::UserMessage {
+                message_id: Some(id),
+                ..
+            } if withdrawn.contains(id.as_str()) => {}
             ChatEvent::UserMessage { text, .. } if !text.trim().is_empty() => {
                 blocks.push(format!("[Developer]\n{}", text.trim()));
             }
@@ -237,6 +249,29 @@ mod tests {
     fn only_claude_is_told_about_the_artifact_tool_codex_has_none() {
         assert!(system_prompt("/d", AgentKind::Claude).contains("Artifact tool"));
         assert!(!system_prompt("/d", AgentKind::Codex).contains("Artifact"));
+    }
+
+    #[test]
+    fn a_message_taken_back_is_left_out_of_the_conversation() {
+        let withdrawn = ChatEvent::UserMessage {
+            text: "Actually, never mind".into(),
+            queued: true,
+            attachments: None,
+            message_id: Some("w".into()),
+            suggested_by: None,
+            delegated_answer: None,
+        };
+        let events = vec![
+            user("Add a reconnect button"),
+            withdrawn,
+            ChatEvent::UserMessageWithdrawn {
+                message_id: "w".into(),
+            },
+            agent("Done"),
+        ];
+        let text = conversation_text(&events, 10_000);
+        assert!(text.contains("Add a reconnect button"));
+        assert!(!text.contains("never mind"));
     }
 
     #[test]

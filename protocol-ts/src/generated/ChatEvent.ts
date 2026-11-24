@@ -48,7 +48,7 @@ suggested_by?: CommentAuthor,
  * The delegated chat whose answer this is, sent by Chauffeur once the parent's turn had
  * ended before it (story 49): shown to people; the agent reads it in the text.
  */
-delegated_answer?: DelegatedAnswer, } | { "type": "user_message_delivered", message_id: string, } | { "type": "queue_changed", messages: Array<QueuedMessage>, } | { "type": "session_started", agent_session_id: string, model: string | null, } | { "type": "agent_changed", from: AgentKind, to: AgentKind, } | { "type": "turn_started" } | { "type": "text_delta", message_id: string, text: string, 
+delegated_answer?: DelegatedAnswer, } | { "type": "user_message_delivered", message_id: string, } | { "type": "user_message_withdrawn", message_id: string, } | { "type": "queue_changed", messages: Array<QueuedMessage>, } | { "type": "session_started", agent_session_id: string, model: string | null, } | { "type": "agent_changed", from: AgentKind, to: AgentKind, } | { "type": "turn_started" } | { "type": "text_delta", message_id: string, text: string, 
 /**
  * Set when a subagent writes it: see `assistant_text`.
  */

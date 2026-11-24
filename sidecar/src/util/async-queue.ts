@@ -29,6 +29,14 @@ export class AsyncQueue<T> implements AsyncIterable<T> {
     return true;
   }
 
+  /** Takes out the first item not read yet that matches; false when there is none. */
+  remove(matches: (item: T) => boolean): boolean {
+    const index = this.items.findIndex(matches);
+    if (index < 0) return false;
+    this.items.splice(index, 1);
+    return true;
+  }
+
   end(): void {
     if (this.ended) return;
     this.ended = true;

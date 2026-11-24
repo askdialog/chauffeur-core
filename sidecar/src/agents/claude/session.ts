@@ -61,7 +61,13 @@ export type QueryLike = AsyncIterable<SDKMessage> &
     | "stopTask"
     | "close"
   > &
-  Partial<Pick<Query, "mcpServerStatus" | "reconnectMcpServer">>;
+  Partial<Pick<Query, "mcpServerStatus" | "reconnectMcpServer">> & {
+    /**
+     * Drops a message from the CLI's queue by its uuid: false once the CLI took it in. The SDK
+     * has it, its types do not yet.
+     */
+    cancelAsyncMessage?(uuid: string): Promise<boolean>;
+  };
 
 export type QueryFn = (args: { prompt: AsyncIterable<SDKUserMessage>; options: Options }) => QueryLike;
 
@@ -131,6 +137,8 @@ export class ClaudeSession implements AgentSession {
    * as the next turn. The first reply after that point marks them read.
    */
   private undelivered: string[] = [];
+  /** The uuid each unread message went to the CLI with, to take it back (`withdraw`). */
+  private readonly uuids = new Map<string, { uuid: string; clear: boolean }>();
   private foldPoint = false;
   private interruptRequested = false;
   private failStart: ((error: unknown) => void) | undefined;
@@ -331,18 +339,43 @@ export class ClaudeSession implements AgentSession {
     if (this.state === "stopping" || this.state === "ended") {
       throw new RpcError(ErrorCode.NOT_FOUND, "the session is stopping");
     }
+    const uuid = randomUUID();
+    const clear = /^\/clear(\s|$)/.test(text.trim());
     if (messageId) {
       // Idle: the message starts a turn, so it is taken in at once.
-      if (this.busy) this.undelivered.push(messageId);
-      else this.emit({ type: "user_message_delivered", message_id: messageId });
+      if (this.busy) {
+        this.undelivered.push(messageId);
+        this.uuids.set(messageId, { uuid, clear });
+      } else this.emit({ type: "user_message_delivered", message_id: messageId });
     }
-    if (/^\/clear(\s|$)/.test(text.trim())) this.clearing = true;
+    if (clear) this.clearing = true;
     this.input.push({
       type: "user",
       message: { role: "user", content: userContent(text, attachments, this.params.cwd) },
       parent_tool_use_id: null,
-      uuid: randomUUID(),
+      uuid,
     });
+  }
+
+  async withdraw(messageId: string): Promise<boolean> {
+    const sent = this.uuids.get(messageId);
+    if (!sent || !this.undelivered.includes(messageId)) return false;
+    // Still in the input stream, or in the CLI's queue until it folds it into the turn.
+    let taken = this.input.remove((message) => message.uuid === sent.uuid);
+    if (!taken && this.query?.cancelAsyncMessage) {
+      try {
+        taken = await this.query.cancelAsyncMessage(sent.uuid);
+      } catch (error) {
+        throw new RpcError(ErrorCode.INTERNAL, `could not take the message back: ${errorMessage(error)}`);
+      }
+    }
+    if (!taken) return false;
+    this.uuids.delete(messageId);
+    this.undelivered = this.undelivered.filter((id) => id !== messageId);
+    if (this.undelivered.length === 0) this.foldPoint = false;
+    if (sent.clear) this.clearing = false;
+    this.emit({ type: "user_message_withdrawn", message_id: messageId });
+    return true;
   }
 
   idle(): boolean {
@@ -680,7 +713,10 @@ export class ClaudeSession implements AgentSession {
 
   private markDelivered(): void {
     this.foldPoint = false;
-    for (const id of this.undelivered.splice(0)) this.emit({ type: "user_message_delivered", message_id: id });
+    for (const id of this.undelivered.splice(0)) {
+      this.uuids.delete(id);
+      this.emit({ type: "user_message_delivered", message_id: id });
+    }
   }
 
   private async queryEnded(failure: unknown): Promise<void> {

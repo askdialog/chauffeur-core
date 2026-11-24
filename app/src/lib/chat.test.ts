@@ -444,6 +444,17 @@ describe("reduceChat", () => {
     expect(view.queue).toEqual([]);
   });
 
+  test("a message taken back before the agent read it leaves the chat's rows", () => {
+    let view = buildChatView([
+      p({ type: "user_message", text: "go", queued: false, message_id: "m0" }),
+      p({ type: "turn_started" }),
+      p({ type: "user_message", text: "oops", queued: true, message_id: "m1" }),
+    ]);
+    view = reduceChat(view, p({ type: "user_message_withdrawn", message_id: "m1" }));
+    expect(view.items.filter((i) => i.kind === "user").map((i) => (i as UserItem).withdrawn ?? false)).toEqual([false, true]);
+    expect(groupActivity(view.items).filter((row) => row.kind === "user").map((row) => (row as UserItem).text)).toEqual(["go"]);
+  });
+
   test("persisted events already applied are ignored; the input is never mutated", () => {
     const first = p({ type: "user_message", text: "once", queued: false });
     const view = reduceChat(emptyChatView, first);

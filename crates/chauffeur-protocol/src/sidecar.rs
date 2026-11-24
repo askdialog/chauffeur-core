@@ -27,6 +27,10 @@ methods! {
         SessionSend(SessionSendParams) -> Empty,
         #[serde(rename = "session.interrupt")]
         SessionInterrupt(SessionParams) -> Empty,
+        /// Takes back a message sent with an id that the agent has not read yet: the session
+        /// emits `user_message_withdrawn` and answers `withdrawn: true`; false once it was read.
+        #[serde(rename = "session.withdraw")]
+        SessionWithdraw(SessionWithdrawParams) -> SessionWithdrawResult,
         /// Answers a `permission_request` or `question` event the session emitted.
         #[serde(rename = "session.respond")]
         SessionRespond(SessionRespondParams) -> Empty,
@@ -878,6 +882,20 @@ pub struct SessionSendParams {
     /// `user_message_delivered` once the agent took it in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+#[ts(optional_fields)]
+pub struct SessionWithdrawParams {
+    pub chat_id: String,
+    pub message_id: String,
+}
+
+#[derive(Serialize, Deserialize, TS, Clone, Debug)]
+#[ts(export)]
+pub struct SessionWithdrawResult {
+    pub withdrawn: bool,
 }
 
 #[derive(Serialize, Deserialize, TS, Clone, Debug)]

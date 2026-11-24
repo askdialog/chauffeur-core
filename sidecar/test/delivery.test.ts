@@ -101,6 +101,47 @@ describe("Claude: when a message sent mid-turn is read", () => {
   });
 });
 
+const withdrawn = (host: FakeHost) =>
+  host.events.filter((e) => e.type === "user_message_withdrawn").map((e) => (e as { message_id: string }).message_id);
+
+describe("Claude: taking back a message sent mid-turn", () => {
+  test("not read yet: the CLI drops it from its queue, and it is never reported read", async () => {
+    const { session, host, query } = await claude();
+    session.send("go");
+    await query.waitForSent(1);
+    query.push(sdk.init(), sdk.toolUse("a1", "t1", "Bash", { command: "sleep 5" }));
+    await flush();
+    session.send("oops, not this", [], "m1");
+    await query.waitForSent(2);
+    expect(await session.withdraw("m1")).toBe(true);
+    expect(query.calls).toContain(`cancel:${query.sent[1]?.uuid}`);
+    expect(withdrawn(host)).toEqual(["m1"]);
+    query.push(sdk.toolResult("t1", "ok"), sdk.text("a2", "Done"));
+    await flush();
+    expect(delivered(host)).toEqual([]);
+    await session.stop();
+  });
+
+  test("once read, or once the CLI took it in, it stays", async () => {
+    const { session, host, query } = await claude();
+    session.send("go");
+    await query.waitForSent(1);
+    query.push(sdk.init(), sdk.toolUse("a1", "t1", "Bash", { command: "sleep 5" }));
+    await flush();
+    session.send("read already", [], "m1");
+    query.push(sdk.toolResult("t1", "ok"), sdk.text("a2", "Done"));
+    await flush();
+    expect(await session.withdraw("m1")).toBe(false);
+    expect(query.calls.some((call) => call.startsWith("cancel:"))).toBe(false);
+
+    session.send("folded meanwhile", [], "m2");
+    query.cancels = false;
+    expect(await session.withdraw("m2")).toBe(false);
+    expect(withdrawn(host)).toEqual([]);
+    await session.stop();
+  });
+});
+
 describe("Codex: when a message sent mid-turn is read", () => {
   test("once the steer is accepted, or the turn it starts", async () => {
     const host = new FakeHost();
@@ -121,6 +162,8 @@ describe("Codex: when a message sent mid-turn is read", () => {
     session.send("steer", [], "m2");
     await flush();
     expect(delivered(host)).toEqual(["m1", "m2"]);
+    // A steer is read at once: there is nothing to take back.
+    expect(await session.withdraw("m2")).toBe(false);
     await session.stop();
   });
 });

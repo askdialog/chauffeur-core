@@ -94,6 +94,12 @@ export interface AgentSession {
   send(text: string, attachments?: Attachment[], messageId?: string): void;
   /** Cancels pending requests and stops the current turn. */
   interrupt(): Promise<void>;
+  /**
+   * Takes back a message sent with an id that the agent has not read yet: emits
+   * `user_message_withdrawn` and resolves true. False once the agent read it, or when it never
+   * holds one unread (Codex steers a message into the turn at once).
+   */
+  withdraw(messageId: string): Promise<boolean>;
   /** Answers a `permission_request` or `question` the session emitted. */
   respond(requestId: string, response: RequestResponse): void;
   /**

@@ -249,6 +249,10 @@ export class SessionManager {
     return this.get(chatId).interrupt();
   }
 
+  withdraw(chatId: string, messageId: string): Promise<boolean> {
+    return this.get(chatId).withdraw(messageId);
+  }
+
   respond(chatId: string, requestId: string, response: RequestResponse): void {
     this.get(chatId).respond(requestId, response);
   }

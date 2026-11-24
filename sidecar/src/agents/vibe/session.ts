@@ -312,6 +312,15 @@ export class VibeSession implements AgentSession {
     return this.state === "running" && !this.busy && !this.prompting && this.queue.length === 0 && !this.requests.waiting();
   }
 
+  /** A message still waiting for the next prompt is taken out of it. */
+  async withdraw(messageId: string): Promise<boolean> {
+    const index = this.queue.findIndex((message) => message.id === messageId);
+    if (index < 0) return false;
+    this.queue.splice(index, 1);
+    this.emit({ type: "user_message_withdrawn", message_id: messageId });
+    return true;
+  }
+
   async interrupt(): Promise<void> {
     this.userInterrupted = true;
     this.requests.cancelAll();

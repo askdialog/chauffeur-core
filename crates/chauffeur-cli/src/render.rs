@@ -1075,6 +1075,9 @@ fn chat_event(event: &ChatEvent, chat_hint: &str) -> Option<String> {
         | ChatEvent::McpStatus { .. }
         | ChatEvent::AccountLost { .. }
         | ChatEvent::UserMessageDelivered { .. } => return None,
+        ChatEvent::UserMessageWithdrawn { .. } => {
+            "· message taken back before the agent read it".to_string()
+        }
         ChatEvent::QueueChanged { messages } => match messages.len() {
             0 => "· queue empty".to_string(),
             1 => "· 1 message queued for the end of the turn".to_string(),

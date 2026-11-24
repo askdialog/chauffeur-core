@@ -38,6 +38,8 @@ export type UserItem = Base & {
   queued: boolean;
   attachments: Attachment[];
   messageId: string | null;
+  /** Taken back by the user before the agent read it (`user_message_withdrawn`): not shown. */
+  withdrawn?: boolean;
   /** The guest of the workspace's share who suggested it (story 53); the agent never sees it. */
   suggestedBy?: CommentAuthor;
   /** The delegated chat whose answer Chauffeur sent, the parent's turn having ended before (story 49). */
@@ -326,6 +328,13 @@ function apply(current: ChatView, event: ChatEvent, envelope: EventEnvelope): Ch
       const index = findLast(view.items, (item) => item.kind === "user" && item.messageId === event.message_id);
       const item = index >= 0 ? (view.items[index] as UserItem) : null;
       return item?.queued ? replace(view, index, { ...item, queued: false }) : view;
+    }
+
+    case "user_message_withdrawn": {
+      // Kept, so that the items after it keep their places, but no longer shown.
+      const index = findLast(view.items, (item) => item.kind === "user" && item.messageId === event.message_id);
+      const item = index >= 0 ? (view.items[index] as UserItem) : null;
+      return item ? replace(view, index, { ...item, queued: false, withdrawn: true }) : view;
     }
 
     case "queue_changed":
@@ -1076,6 +1085,7 @@ export function groupActivity(items: ChatItem[]): ChatRow[] {
     run = [];
   };
   for (const item of items) {
+    if (item.kind === "user" && item.withdrawn) continue;
     if (isActivity(item)) {
       run.push(item);
     } else {

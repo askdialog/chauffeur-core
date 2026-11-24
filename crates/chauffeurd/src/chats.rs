@@ -8,7 +8,7 @@ use anyhow::Context;
 use chauffeur_protocol::client::{
     CommentAuthor, ConfigureChatParams, ContextDetail, ContextUsageResult, CreateChatParams,
     LoginSessionEnsureParams, LoginSessionInfo, QueueItem, ShellResult, SubagentMessagesParams,
-    SubagentMessagesResult,
+    SubagentMessagesResult, WithdrawMessageResult,
 };
 use chauffeur_protocol::events::{
     ChatEvent, CompactionBy, ContextCategoryKind, ContextCompaction, ContextUsage, DelegatedAnswer,
@@ -25,9 +25,10 @@ use chauffeur_protocol::sidecar::{
     AgentForkResult, AgentRetitleParams, AgentSubagentMessagesParams, AgentSubagentMessagesResult,
     AgentTitleParams, AgentTitleResult, DelegateTier, McpConnectResult, SessionConfigureParams,
     SessionContextUsageParams, SessionContextUsageResult, SessionMcpParams, SessionParams,
-    SessionRespondParams, SessionSendParams, SessionStartParams, SessionTaskParams, SidecarCall,
-    ToolAddRepoResult, ToolDelegateChildParams, ToolDelegateParams, ToolDelegateResult,
-    ToolDelegateStarted, ToolListReposResult, ToolRepo,
+    SessionRespondParams, SessionSendParams, SessionStartParams, SessionTaskParams,
+    SessionWithdrawParams, SessionWithdrawResult, SidecarCall, ToolAddRepoResult,
+    ToolDelegateChildParams, ToolDelegateParams, ToolDelegateResult, ToolDelegateStarted,
+    ToolListReposResult, ToolRepo,
 };
 
 use crate::events::Activity;
@@ -138,6 +139,9 @@ pub struct ChatManager {
     /// they worked): left open once they have answered. In memory: an answer is given within the
     /// daemon's run.
     taken_part: std::sync::Mutex<HashSet<String>>,
+    /// Messages logged but not handed to the agent yet, waiting for shell commands or an earlier
+    /// message: true once the user took one back (`withdraw_message`), and it is never handed over.
+    waiting: std::sync::Mutex<HashMap<String, bool>>,
 }
 
 /// A shell command of the user's that runs, and the message that hands it to the agent once it
@@ -213,6 +217,7 @@ impl ChatManager {
             shell_ended: tokio::sync::watch::Sender::new(0),
             deliveries: Default::default(),
             taken_part: Default::default(),
+            waiting: Default::default(),
         }
     }
 
@@ -775,12 +780,20 @@ impl ChatManager {
             return self.hand_over(&chat.id, message, admission).await;
         }
         let chat_id = chat.id.clone();
+        self.waiting
+            .lock()
+            .unwrap()
+            .insert(message.message_id.clone(), false);
         tokio::spawn(async move {
             let _handed = handed;
             if let Some(before) = before {
                 let _ = before.await;
             }
             d.chats.shells_ended(&message.message_id).await;
+            let withdrawn = d.chats.waiting.lock().unwrap().remove(&message.message_id);
+            if withdrawn == Some(true) {
+                return;
+            }
             if let Err(error) = d.chats.hand_over(&chat.id, message, admission).await {
                 tracing::warn!(%error, chat = chat.id, "could not hand a message to the agent");
                 d.chats.notice(
@@ -1287,6 +1300,43 @@ impl ChatManager {
                 .await?;
         }
         self.current(&chat.id)
+    }
+
+    /// Takes back a message sent while the agent works, before the agent read it: one still
+    /// waiting here for the user's shell commands is never handed over; one the agent holds is
+    /// taken back from it, where its agent can (`session.withdraw`). Either way the chat logs
+    /// `user_message_withdrawn`.
+    pub async fn withdraw_message(
+        &self,
+        key: &str,
+        message_id: &str,
+    ) -> Result<WithdrawMessageResult> {
+        let chat = self.resolve(key)?;
+        if let Some(withdrawn) = self.waiting.lock().unwrap().get_mut(message_id) {
+            *withdrawn = true;
+            self.d().events.chat(
+                &chat.workspace_id,
+                &chat.id,
+                ChatEvent::UserMessageWithdrawn {
+                    message_id: message_id.to_string(),
+                },
+            );
+            return Ok(WithdrawMessageResult { withdrawn: true });
+        }
+        if !self.is_live(&chat.id) {
+            return Ok(WithdrawMessageResult { withdrawn: false });
+        }
+        let value = self
+            .sidecar
+            .call(SidecarCall::SessionWithdraw(SessionWithdrawParams {
+                chat_id: chat.id.clone(),
+                message_id: message_id.to_string(),
+            }))
+            .await?;
+        let result = serde_json::from_value::<SessionWithdrawResult>(value)?;
+        Ok(WithdrawMessageResult {
+            withdrawn: result.withdrawn,
+        })
     }
 
     /// Stops one task of the agent (a background command, a subagent): its `task_ended` follows
