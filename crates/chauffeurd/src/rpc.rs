@@ -490,6 +490,12 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
             to_value(daemon.chats.queue_send(&params.chat, &params.id).await?)
         }
         ClientCall::ChatInterrupt(params) => to_value(daemon.chats.interrupt(&params.chat).await?),
+        ClientCall::ChatWithdrawMessage(params) => to_value(
+            daemon
+                .chats
+                .withdraw_message(&params.chat, &params.message_id)
+                .await?,
+        ),
         ClientCall::ChatStopTask(params) => to_value(
             daemon
                 .chats

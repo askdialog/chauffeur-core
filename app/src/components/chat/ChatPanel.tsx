@@ -30,7 +30,7 @@ import { type CSSProperties, memo, type ReactNode, useCallback, useEffect, useMe
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useShallow } from "zustand/react/shallow";
 import { remountLocation, firstItemKey, type ListLocation } from "@/lib/chatList";
-import { type ChatRow, type ChatView, emptyChatView, groupActivity, openRequests, type QuestionItem } from "@/lib/chat";
+import { type ChatRow, type ChatView, emptyChatView, groupActivity, openRequests, type QuestionItem, type UserItem } from "@/lib/chat";
 import { formatCost, relativeTime } from "@/lib/format";
 import {
   agentBusy,
@@ -98,6 +98,7 @@ import {
   HighlightContext,
   PermissionChecksContext,
   SendNowContext,
+  WithdrawContext,
   SubagentOpenContext,
   WorkspaceIdContext,
   WorkspacePathContext,
@@ -1055,6 +1056,26 @@ export function ChatConversation({
     }
   }, [chat.id]);
   const sendNow = useMemo(() => (readOnly || settingUp ? null : () => void interrupt()), [readOnly, settingUp, interrupt]);
+  const withdraw = useCallback(
+    async (item: UserItem) => {
+      if (!item.messageId) return;
+      try {
+        const { withdrawn } = await client.call("chat.withdraw_message", { chat: chat.id, message_id: item.messageId });
+        if (!withdrawn) {
+          toast("Too late: the agent has already read it");
+          return;
+        }
+        // Back to the composer, before what is being written there.
+        const draft = drafts.text(chat.id);
+        drafts.setText(chat.id, draft.trim() ? `${item.text}\n\n${draft}` : item.text);
+        if (item.attachments.length > 0) toast("Message taken back; its images were not put back in the composer");
+      } catch (error) {
+        toast(`Could not take the message back: ${errorMessage(error)}`, "error");
+      }
+    },
+    [chat.id],
+  );
+  const withdrawMessage = useMemo(() => (readOnly || settingUp ? null : (item: UserItem) => void withdraw(item)), [readOnly, settingUp, withdraw]);
 
   // Esc interrupts the working agent when no dialog is open.
   useEffect(() => {
@@ -1207,6 +1228,7 @@ export function ChatConversation({
     <PermissionChecksContext.Provider value={checking}>
     <ForkTurnContext.Provider value={forkTurn}>
     <SendNowContext.Provider value={sendNow}>
+    <WithdrawContext.Provider value={withdrawMessage}>
     <ShareCommentsContext.Provider value={owner.context}>
     <Deliverables key={chat.id} workspaceId={chat.workspace_id} chat={chat} revision={view.turns}>
     <div ref={root} className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -1465,6 +1487,7 @@ export function ChatConversation({
       </Modal>
     )}
     </ShareCommentsContext.Provider>
+    </WithdrawContext.Provider>
     </SendNowContext.Provider>
     </ForkTurnContext.Provider>
     </PermissionChecksContext.Provider>

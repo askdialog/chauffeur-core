@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { UserItem } from "@/lib/chat";
-import { ChatRowView, SendNowContext } from "./ChatItems";
+import { ChatRowView, SendNowContext, WithdrawContext } from "./ChatItems";
 
 const message = (queued: boolean): UserItem => ({
   kind: "user",
@@ -25,4 +25,17 @@ test("a message steering the turn offers to send it now where the chat can be in
   expect(render(message(true), () => {})).toContain('data-testid="send-now"');
   expect(render(message(true), null)).not.toContain('data-testid="send-now"');
   expect(render(message(false), () => {})).not.toContain('data-testid="send-now"');
+});
+
+test("a message steering the turn can be taken back where the chat can be written in", () => {
+  const withdrawable = (item: UserItem, withdraw: ((item: UserItem) => void) | null) =>
+    renderToStaticMarkup(
+      <WithdrawContext.Provider value={withdraw}>
+        <ChatRowView row={item} last working readOnly={false} respond={async () => {}} />
+      </WithdrawContext.Provider>,
+    );
+  expect(withdrawable(message(true), () => {})).toContain('data-testid="withdraw"');
+  expect(withdrawable(message(true), null)).not.toContain('data-testid="withdraw"');
+  expect(withdrawable(message(false), () => {})).not.toContain('data-testid="withdraw"');
+  expect(withdrawable({ ...message(true), messageId: null }, () => {})).not.toContain('data-testid="withdraw"');
 });

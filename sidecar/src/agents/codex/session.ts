@@ -325,6 +325,15 @@ export class CodexSession implements AgentSession {
     else call.abort.abort();
   }
 
+  /** Only a message still in the local queue (between turns, or behind a compaction) can be taken back: a steered one is read at once. */
+  async withdraw(messageId: string): Promise<boolean> {
+    const index = this.queue.findIndex((message) => message.id === messageId);
+    if (index < 0) return false;
+    this.queue.splice(index, 1);
+    this.emit({ type: "user_message_withdrawn", message_id: messageId });
+    return true;
+  }
+
   async interrupt(): Promise<void> {
     this.cancelRequests("interrupt");
     this.compaction?.abort.abort();

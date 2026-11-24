@@ -24,6 +24,10 @@ class FakeSession implements AgentSession {
   async interrupt(): Promise<void> {
     this.calls.push("interrupt");
   }
+  async withdraw(messageId: string): Promise<boolean> {
+    this.calls.push(`withdraw:${messageId}`);
+    return messageId === "unread";
+  }
   respond(requestId: string, response: RequestResponse): void {
     this.calls.push(`respond:${requestId}:${JSON.stringify(response)}`);
   }
@@ -309,6 +313,8 @@ describe("the sidecar over JSON-RPC", () => {
     expect((await call("session.respond", { chat_id: "c1", request_id: "r5", response: { type: "elicitation", action: "maybe" } }))?.error).toMatchObject({ code: -32602 });
     await call("session.configure", { chat_id: "c1", model: "opus", effort: null, permission_mode: "plan" });
     await call("session.interrupt", { chat_id: "c1" });
+    expect((await call("session.withdraw", { chat_id: "c1", message_id: "unread" }))?.result).toEqual({ withdrawn: true });
+    expect((await call("session.withdraw", { chat_id: "c1", message_id: "read" }))?.result).toEqual({ withdrawn: false });
     expect((await call("session.stop_task", { chat_id: "c1", task_id: "t1" }))?.result).toEqual({});
     expect((await call("session.stop_task", { chat_id: "c1" }))?.error).toMatchObject({ code: -32602 });
     await call("session.stop", { chat_id: "c1" });
@@ -320,6 +326,8 @@ describe("the sidecar over JSON-RPC", () => {
       'respond:r4:{"type":"elicitation","action":"cancel","content":null,"always":false}',
       'configure:{"model":"opus","permissionMode":"plan"}',
       "interrupt",
+      "withdraw:unread",
+      "withdraw:read",
       "stopTask:t1",
       "stop",
     ]);

@@ -323,6 +323,8 @@ import type { SessionStartParams } from "./SessionStartParams";
 import type { SessionStartResult } from "./SessionStartResult";
 import type { SessionStopResult } from "./SessionStopResult";
 import type { SessionTaskParams } from "./SessionTaskParams";
+import type { SessionWithdrawParams } from "./SessionWithdrawParams";
+import type { SessionWithdrawResult } from "./SessionWithdrawResult";
 import type { SetEnvParams } from "./SetEnvParams";
 import type { SetSectionParams } from "./SetSectionParams";
 import type { SetSectionReposParams } from "./SetSectionReposParams";
@@ -376,6 +378,8 @@ import type { UsageResult } from "./UsageResult";
 import type { VersionRestoreParams } from "./VersionRestoreParams";
 import type { WaitParams } from "./WaitParams";
 import type { WaitResult } from "./WaitResult";
+import type { WithdrawMessageParams } from "./WithdrawMessageParams";
+import type { WithdrawMessageResult } from "./WithdrawMessageResult";
 import type { WorkerClaudeConfigChunk } from "./WorkerClaudeConfigChunk";
 import type { WorkerClaudeConfigInstallParams } from "./WorkerClaudeConfigInstallParams";
 import type { WorkerClaudeConfigInstalled } from "./WorkerClaudeConfigInstalled";
@@ -400,7 +404,7 @@ import type { WorktreeCreateResult } from "./WorktreeCreateResult";
 import type { WorktreeObservedParams } from "./WorktreeObservedParams";
 import type { WorktreeRemoveParams } from "./WorktreeRemoveParams";
 
-export const PROTOCOL_VERSION = 27;
+export const PROTOCOL_VERSION = 28;
 export const MIN_PROTOCOL_VERSION = 1;
 export const PEER_PROTOCOL_VERSION = 4;
 
@@ -541,6 +545,7 @@ export type ClientMethods = {
   "chat.send": [SendParams, ChatInfo];
   "chat.send_confirmed": [SendParams, ChatInfo];
   "chat.interrupt": [ChatParams, ChatInfo];
+  "chat.withdraw_message": [WithdrawMessageParams, WithdrawMessageResult];
   "chat.respond": [RespondParams, ChatInfo];
   "chat.stop_task": [StopTaskParams, ChatInfo];
   "chat.shell": [ShellParams, ShellResult];
@@ -774,6 +779,7 @@ export type SidecarMethods = {
   "session.start": [SessionStartParams, SessionStartResult];
   "session.send": [SessionSendParams, Empty];
   "session.interrupt": [SessionParams, Empty];
+  "session.withdraw": [SessionWithdrawParams, SessionWithdrawResult];
   "session.respond": [SessionRespondParams, Empty];
   "session.configure": [SessionConfigureParams, Empty];
   "session.stop_task": [SessionTaskParams, Empty];
@@ -961,6 +967,7 @@ export const METHOD_NAMES = [
   "chat.send",
   "chat.send_confirmed",
   "chat.interrupt",
+  "chat.withdraw_message",
   "chat.respond",
   "chat.stop_task",
   "chat.shell",
@@ -1161,6 +1168,7 @@ export const PHONE_METHODS = [
   "chat.send",
   "chat.send_confirmed",
   "chat.interrupt",
+  "chat.withdraw_message",
   "chat.respond",
   "chat.configure",
   "chat.seen",

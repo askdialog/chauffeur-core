@@ -335,6 +335,11 @@ pub enum ChatEvent {
     UserMessageDelivered {
         message_id: String,
     },
+    /// The user took back a message sent while the agent was working, before the agent read it:
+    /// it never reached the agent.
+    UserMessageWithdrawn {
+        message_id: String,
+    },
     /// The chat's queue: messages held until the agent finishes its turn, then sent one by one.
     QueueChanged {
         messages: Vec<QueuedMessage>,

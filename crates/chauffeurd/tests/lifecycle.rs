@@ -2856,6 +2856,8 @@ while IFS= read -r line; do
     *'"method":"agent.fork"'*)
       sid=$(printf '%s' "$line" | sed -n 's/.*"session_id":"\([^"]*\)".*/\1/p')
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"session_id":"%s-fork"}}}}\n' "$id" "$sid" ;;
+    *'"method":"session.withdraw"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"withdrawn":true}}}}\n' "$id" ;;
     *'"method":"agent.subagent_messages"'*)
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"agent_id":null,"found":false,"events":[]}}}}\n' "$id" ;;
     *) [ -n "$id" ] && printf '{{"jsonrpc":"2.0","id":%s,"result":{{"closed":true}}}}\n' "$id" ;;
@@ -2891,6 +2893,52 @@ fn notices(d: &Daemon, chat_id: &str) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_steering_the_turn_is_taken_back_from_the_agent() {
+    let f = fixture(47381);
+    let d = &f.daemon;
+    let log = f.root.join("sidecar.log");
+    d.chats.sidecar.use_binary(fake_sidecar(&f.root, &log));
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            repos: vec!["repo-a".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let chat = d
+        .chats
+        .create(CreateChatParams {
+            workspace: ws.id.clone(),
+            agent: Some(AgentKind::Claude),
+            model: None,
+            effort: None,
+            fast: None,
+            permission_mode: None,
+            prompt: None,
+            images: None,
+            title: None,
+            kind: None,
+            source_chat: None,
+        })
+        .await
+        .unwrap();
+    // Not live: nothing to take back.
+    let result = d.chats.withdraw_message(&chat.id, "m1").await.unwrap();
+    assert!(!result.withdrawn);
+    d.chats.send(&chat.id, "go").await.unwrap();
+    let result = d.chats.withdraw_message(&chat.id, "m1").await.unwrap();
+    assert!(result.withdrawn);
+    let asked = std::fs::read_to_string(&log).unwrap().lines().any(|line| {
+        line.contains("session.withdraw")
+            && line.contains(&chat.id)
+            && line.contains(r#""message_id":"m1""#)
+    });
+    assert!(asked);
 }
 
 #[tokio::test(flavor = "multi_thread")]

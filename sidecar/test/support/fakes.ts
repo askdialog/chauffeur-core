@@ -214,6 +214,14 @@ export class FakeQuery implements QueryLike {
     return undefined;
   }
 
+  /** What `cancelAsyncMessage` answers: false once the CLI took the message in. */
+  cancels = true;
+
+  async cancelAsyncMessage(uuid: string): Promise<boolean> {
+    this.calls.push(`cancel:${uuid}`);
+    return this.cancels;
+  }
+
   async setModel(model?: string): Promise<void> {
     this.calls.push(`setModel:${model}`);
   }

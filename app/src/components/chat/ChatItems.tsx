@@ -119,6 +119,12 @@ export const ForkTurnContext = createContext<((turn: number) => void) | null>(nu
  */
 export const SendNowContext = createContext<(() => void) | null>(null);
 
+/**
+ * Takes back a message steering the turn before the agent reads it, its text going back to the
+ * composer; null where the chat cannot be written in.
+ */
+export const WithdrawContext = createContext<((item: UserItem) => void) | null>(null);
+
 /** Tool calls auto mode is checking before they run (`ChatView.checking`), by tool use id. */
 export const PermissionChecksContext = createContext<ReadonlySet<string>>(new Set());
 
@@ -304,6 +310,7 @@ function ActivityGroupView({
 function UserMessage({ item }: { item: UserItem }) {
   const highlighted = useContext(HighlightContext) === item.key;
   const sendNow = useContext(SendNowContext);
+  const withdraw = useContext(WithdrawContext);
   return (
     <div className="mt-4 flex justify-end">
       <div
@@ -332,6 +339,17 @@ function UserMessage({ item }: { item: UserItem }) {
                 data-testid="send-now"
               >
                 Send now
+              </Button>
+            )}
+            {withdraw && item.messageId && (
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => withdraw(item)}
+                title="Take this message back before the agent reads it: its text returns to the composer"
+                data-testid="withdraw"
+              >
+                Cancel
               </Button>
             )}
           </div>
