@@ -1083,7 +1083,7 @@ fn past_session(f: &Fixture, id: &str, at: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn sessions_left_in_history_are_copied_into_the_repos_exploration_the_latest_open_the_others_closed_once() {
+async fn sessions_left_in_history_are_copied_into_the_exploration_the_latest_open_once() {
     let _imports = IMPORTS.lock().await;
     let f = importing();
     let d = &f.daemon;
@@ -1149,7 +1149,11 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_the_late
         git(&f.root.join("origin/web.git"), &["rev-parse", "main"])
     );
     let chats = d.store.chats_of(&ws.id).unwrap();
-    assert_eq!(chats.len(), 3, "no blank chat beside the imported ones: {chats:?}");
+    assert_eq!(
+        chats.len(),
+        3,
+        "no blank chat beside the imported ones: {chats:?}"
+    );
     let history = chats
         .iter()
         .find(|c| c.agent_session_id.as_deref() == Some("history"))
