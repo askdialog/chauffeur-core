@@ -124,6 +124,15 @@ describe("the loadout", () => {
     expect(designChoice([saved[0]])).toEqual({ agent: "claude", model: null, effort: null, fast: false });
   });
 
+  test("a design chat from another agent's chat starts on that agent's first entry", () => {
+    const saved = [
+      { agent: "claude" as const, model: "opus", effort: "high", fast: false },
+      { agent: "codex" as const, model: "gpt-6-luna", fast: true },
+    ];
+    expect(designChoice(saved, "codex")).toEqual({ agent: "codex", model: "gpt-6-luna", effort: null, fast: true });
+    expect(designChoice(saved, "vibe")).toEqual({ agent: "vibe", model: null, effort: null, fast: false });
+  });
+
   test("an entry matches a chat on the resolved model, the shown effort and the speed", () => {
     const entry = { agent: "claude" as const, model: "opus", effort: "high", fast: false };
     expect(isEntry(CATALOG, entry, { agent: "claude", model: "claude-opus-5-5", effort: "high", fast: false })).toBe(true);
