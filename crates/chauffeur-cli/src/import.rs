@@ -491,7 +491,7 @@ fn render_claude_code(plan: &ClaudeCodeImportResult) -> String {
             (None, _) => String::new(),
         };
         out.push_str(&format!(
-            "\n  {} at {}   {} session(s), closed tabs resumable read-only{into}",
+            "\n  {} at {}   {} session(s), the latest an open tab, the others closed tabs (`chauffeur chats <workspace> --all`), resumable read-only{into}",
             h.repo,
             h.base,
             h.sessions.len()

@@ -1,5 +1,5 @@
-//! The sessions that left no live branch, imported: each a closed tab of its repo's history
-//! exploration (`copy`).
+//! The sessions that left no live branch, imported into their repo's history exploration
+//! (`copy`): the most recent of a new exploration an open tab, the others closed tabs.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use chauffeur_protocol::claudecode::ClaudeCodeHistoryPlan;
 use chauffeur_protocol::client::CreateWorkspaceParams;
 
-use super::copy::Report;
+use super::copy::{self, Report};
 use super::sessions::Session;
 use crate::store::WorkspaceRow;
 use crate::{Daemon, Result};
@@ -48,11 +48,42 @@ pub(super) async fn import(
             },
         };
         history.workspace = Some(workspace.slug.clone());
+        let opened = if d.store.chats_of(&workspace.id)?.is_empty() {
+            latest(d, &history.sessions, sessions)?
+        } else {
+            None
+        };
+        let (open, closed): (Vec<String>, Vec<String>) = history
+            .sessions
+            .iter()
+            .cloned()
+            .partition(|id| opened.as_ref() == Some(id));
+        // The open tab first: a workspace holding only closed tabs gets a blank one beside them.
         report
-            .import(d, claude, &workspace, &history.sessions, sessions, true)
+            .import(d, claude, &workspace, &open, sessions, false)
+            .await;
+        report
+            .import(d, claude, &workspace, &closed, sessions, true)
             .await;
     }
     Ok(())
+}
+
+/// The most recently active of `ids` that no earlier import has.
+fn latest(
+    d: &Daemon,
+    ids: &[String],
+    sessions: &HashMap<String, Session>,
+) -> Result<Option<String>> {
+    let mut best: Option<&Session> = None;
+    for session in ids.iter().filter_map(|id| sessions.get(id)) {
+        if copy::imported(d, &session.id)?.is_none()
+            && best.is_none_or(|best| session.last_active > best.last_active)
+        {
+            best = Some(session);
+        }
+    }
+    Ok(best.map(|session| session.id.clone()))
 }
 
 /// A new exploration of `repo`, at its base branch, recorded as its history.

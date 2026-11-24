@@ -1083,7 +1083,7 @@ fn past_session(f: &Fixture, id: &str, at: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_closed_tabs_once() {
+async fn sessions_left_in_history_are_copied_into_the_repos_exploration_the_latest_open_the_others_closed_once() {
     let _imports = IMPORTS.lock().await;
     let f = importing();
     let d = &f.daemon;
@@ -1149,16 +1149,13 @@ async fn sessions_left_in_history_are_copied_into_the_repos_exploration_as_close
         git(&f.root.join("origin/web.git"), &["rev-parse", "main"])
     );
     let chats = d.store.chats_of(&ws.id).unwrap();
-    let imported: Vec<_> = chats.iter().filter(|c| c.closed).collect();
-    assert_eq!(imported.len(), 3, "{chats:?}");
-    assert!(
-        chats.iter().any(|c| !c.closed),
-        "the exploration keeps a chat open"
-    );
-    let history = imported
+    assert_eq!(chats.len(), 3, "no blank chat beside the imported ones: {chats:?}");
+    let history = chats
         .iter()
         .find(|c| c.agent_session_id.as_deref() == Some("history"))
         .unwrap();
+    assert!(!history.closed, "the most recent session is the open tab");
+    assert_eq!(chats.iter().filter(|c| c.closed).count(), 2, "{chats:?}");
     assert_eq!(history.title.as_deref(), Some("Old work"));
     assert_eq!(
         history.permission_mode,
