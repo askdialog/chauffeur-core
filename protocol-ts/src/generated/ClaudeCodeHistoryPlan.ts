@@ -6,7 +6,7 @@ export type ClaudeCodeHistoryPlan = { repo: string,
  */
 base: string, 
 /**
- * Its sessions, closed tabs resumable read-only.
+ * Its sessions, resumable read-only: the latest an open tab, the others closed.
  */
 sessions: Array<string>, 
 /**

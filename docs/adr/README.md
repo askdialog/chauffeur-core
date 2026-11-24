@@ -196,4 +196,5 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Follow a participant on a shared design canvas](follow-design-view.md) | 2026-11-23 | accepted |
 | [An exploration's agent ensures a declared login through a tool, not the CLI](session-ensure-tool-in-explorations.md) | 2026-11-23 | accepted |
 | [A design chat started from a chat runs on that chat's agent](design-from-a-chat-keeps-its-agent.md) | 2026-11-24 | accepted |
+| [A history exploration opens its latest imported session](import-history-latest-session-open.md) | 2026-11-24 | accepted |
 | [A message steering the turn can be taken back until the agent reads it](take-back-a-steering-message.md) | 2026-11-24 | accepted |

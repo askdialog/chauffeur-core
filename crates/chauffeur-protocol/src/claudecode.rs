@@ -167,7 +167,7 @@ pub struct ClaudeCodeHistoryPlan {
     pub repo: String,
     /// The base branch it is checked out at.
     pub base: String,
-    /// Its sessions, closed tabs resumable read-only.
+    /// Its sessions, resumable read-only: the latest an open tab, the others closed.
     pub sessions: Vec<String>,
     /// The exploration they go to: one an earlier import made, while it is not archived, or the
     /// one made now; none when a dry run would make one.

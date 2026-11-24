@@ -1,5 +1,5 @@
-//! The sessions that left no live branch, imported: each a closed tab of its repo's history
-//! exploration (`copy`).
+//! The sessions that left no live branch, imported into their repo's history exploration
+//! (`copy`): the most recent of a new exploration an open tab, the others closed tabs.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use chauffeur_protocol::claudecode::ClaudeCodeHistoryPlan;
 use chauffeur_protocol::client::CreateWorkspaceParams;
 
-use super::copy::Report;
+use super::copy::{self, Report};
 use super::sessions::Session;
 use crate::store::WorkspaceRow;
 use crate::{Daemon, Result};
@@ -48,11 +48,42 @@ pub(super) async fn import(
             },
         };
         history.workspace = Some(workspace.slug.clone());
+        let mut closed = history.sessions.clone();
+        if d.store.chats_of(&workspace.id)?.is_empty() {
+            // The open tab first, the most recent session that imports: one that fails leaves
+            // it to the next. A workspace holding only closed tabs gets a blank one beside them.
+            for id in by_recency(d, &history.sessions, sessions)? {
+                closed.retain(|other| *other != id);
+                let open = [id];
+                if report
+                    .import(d, claude, &workspace, &open, sessions, false)
+                    .await
+                {
+                    break;
+                }
+            }
+        }
         report
-            .import(d, claude, &workspace, &history.sessions, sessions, true)
+            .import(d, claude, &workspace, &closed, sessions, true)
             .await;
     }
     Ok(())
+}
+
+/// Those of `ids` that no earlier import has, the most recently active first.
+fn by_recency(
+    d: &Daemon,
+    ids: &[String],
+    sessions: &HashMap<String, Session>,
+) -> Result<Vec<String>> {
+    let mut new = Vec::new();
+    for session in ids.iter().filter_map(|id| sessions.get(id)) {
+        if copy::imported(d, &session.id)?.is_none() {
+            new.push(session);
+        }
+    }
+    new.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+    Ok(new.into_iter().map(|session| session.id.clone()).collect())
 }
 
 /// A new exploration of `repo`, at its base branch, recorded as its history.
