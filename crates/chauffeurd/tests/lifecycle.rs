@@ -9799,6 +9799,54 @@ done
     script
 }
 
+/// A chat created with a model and no agent runs on the model's agent; a design chat thus never
+/// hands another agent's model to Claude Code, and a model of another agent than asked is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_chat_named_by_its_model_runs_on_that_models_agent() {
+    use chauffeur_protocol::model::ChatKind;
+    use chauffeurd::Error;
+    let f = fixture(49587);
+    let d = &f.daemon;
+    d.chats
+        .sidecar
+        .use_binary(catalog_sidecar(&f.root, 10, true));
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams {
+            name: Some("by-model".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .workspace;
+    let design = d
+        .chats
+        .create(CreateChatParams {
+            workspace: ws.id.clone(),
+            model: Some("gpt-6-luna".into()),
+            kind: Some(ChatKind::Design),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(design.agent, AgentKind::Codex);
+    assert_eq!(design.model.as_deref(), Some("gpt-6-luna"));
+    let mismatch = d
+        .chats
+        .create(CreateChatParams {
+            workspace: ws.id.clone(),
+            agent: Some(AgentKind::Claude),
+            model: Some("gpt-6-luna".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&mismatch, Error::BadRequest(why) if why.contains("gpt-6-luna is a model of Codex")),
+        "{mismatch:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_delegated_chat_runs_on_its_parents_agent_and_model_and_a_review_on_the_other_agent() {
     use chauffeur_protocol::sidecar::{DelegateTier, ToolDelegateParams};

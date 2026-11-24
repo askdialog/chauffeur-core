@@ -421,13 +421,36 @@ impl ChatManager {
             }
             None => None,
         };
-        // A design chat runs on Claude Code unless Codex is asked for.
+        // A model named without its agent picks the agent it belongs to; one of another agent than
+        // the one asked is refused, never handed to an agent that cannot run it. Listing the
+        // catalogs may start an agent: only when a model is named.
+        let named = params
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty());
+        let owner = match named {
+            Some(model) => model_owner(&d.models.list(&d, false).await, model),
+            None => None,
+        };
+        if let (Some(asked), Some(owner), Some(model)) = (params.agent, owner, named)
+            && asked != owner
+            && !crate::ollama::is_local(model)
+        {
+            return Err(Error::BadRequest(format!(
+                "{model} is a model of {}, not of {}",
+                agent_name(owner),
+                agent_name(asked)
+            )));
+        }
+        let asked = params.agent.or(owner);
+        // A design chat runs on Claude Code unless another agent is asked for.
         let default = if design {
-            agent_choice(&d, params.agent.unwrap_or(AgentKind::Claude))?
+            agent_choice(&d, asked.unwrap_or(AgentKind::Claude))?
         } else {
             default_choice(&d)?
         };
-        let agent = params.agent.unwrap_or(default.agent);
+        let agent = asked.unwrap_or(default.agent);
         let chosen = params.model.filter(|m| !m.is_empty());
         // The default model, with its effort and speed, belongs to the default agent.
         let (model, effort, fast) = match chosen {

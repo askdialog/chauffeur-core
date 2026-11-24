@@ -134,11 +134,11 @@ export function initialChoice(loadout: LoadoutEntry[]): ModelChoice {
   return first ? fromEntry(first) : { agent: "claude", model: null, effort: null, fast: false };
 }
 
-/** The choice a design chat starts with: the first Claude entry of the loadout (design chats run
- * on Claude Code only), else Claude Code's own default. */
-export function designChoice(loadout: LoadoutEntry[]): ModelChoice {
-  const first = loadout.find((entry) => entry.agent === "claude");
-  return first ? fromEntry(first) : { agent: "claude", model: null, effort: null, fast: false };
+/** The choice a design chat starts with: the first loadout entry of its agent (Claude Code unless
+ * it is designed from a chat of another agent), else that agent's own default. */
+export function designChoice(loadout: LoadoutEntry[], agent: AgentKind = "claude"): ModelChoice {
+  const first = loadout.find((entry) => entry.agent === agent);
+  return first ? fromEntry(first) : { agent, model: null, effort: null, fast: false };
 }
 
 export type SearchHit = { agent: AgentKind; model: AgentModel };

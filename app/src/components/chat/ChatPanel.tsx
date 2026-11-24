@@ -234,14 +234,15 @@ function WorkspaceChats({ workspace, session, setup = null, onCloseShortcut, inU
   const newDesignChat = async (source?: ChatInfo) => {
     setCreating(true);
     try {
-      // The user's first Claude favorite, with its effort and speed: a design chat starts on Claude
-      // Code, and its composer's model picker moves it to Codex.
+      // The user's first favorite of the source chat's agent, with its effort and speed: a design
+      // chat starts on that agent (Claude Code when blank), and its composer's model picker moves it.
       const { loadout, models } = useApp.getState();
-      const choice = designChoice(effectiveLoadout(loadout, models));
+      const choice = designChoice(effectiveLoadout(loadout, models), source?.agent);
       const created = await client.call("chat.create", {
         workspace: workspace.id,
         kind: "design",
         source_chat: source?.id,
+        agent: choice.agent,
         model: choice.model ?? undefined,
         effort: choice.effort ?? undefined,
         fast: choice.fast || undefined,

@@ -488,7 +488,7 @@ enum Command {
         #[arg(short, long = "image", visible_alias = "file")]
         images: Vec<PathBuf>,
         /// A design chat: its agent designs screens in its own folder of the notes and never
-        /// changes code (Claude Code unless `--agent codex`).
+        /// changes code (Claude Code unless `--agent codex` or `--agent vibe`).
         #[arg(long, conflicts_with = "permission_mode")]
         design: bool,
         /// The chat a design chat starts from: its design brief is written from it and printed
