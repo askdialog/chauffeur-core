@@ -48,20 +48,21 @@ pub(super) async fn import(
             },
         };
         history.workspace = Some(workspace.slug.clone());
-        let opened = if d.store.chats_of(&workspace.id)?.is_empty() {
-            latest(d, &history.sessions, sessions)?
-        } else {
-            None
-        };
-        let (open, closed): (Vec<String>, Vec<String>) = history
-            .sessions
-            .iter()
-            .cloned()
-            .partition(|id| opened.as_ref() == Some(id));
-        // The open tab first: a workspace holding only closed tabs gets a blank one beside them.
-        report
-            .import(d, claude, &workspace, &open, sessions, false)
-            .await;
+        let mut closed = history.sessions.clone();
+        if d.store.chats_of(&workspace.id)?.is_empty() {
+            // The open tab first, the most recent session that imports: one that fails leaves
+            // it to the next. A workspace holding only closed tabs gets a blank one beside them.
+            for id in by_recency(d, &history.sessions, sessions)? {
+                closed.retain(|other| *other != id);
+                let open = [id];
+                if report
+                    .import(d, claude, &workspace, &open, sessions, false)
+                    .await
+                {
+                    break;
+                }
+            }
+        }
         report
             .import(d, claude, &workspace, &closed, sessions, true)
             .await;
@@ -69,21 +70,20 @@ pub(super) async fn import(
     Ok(())
 }
 
-/// The most recently active of `ids` that no earlier import has.
-fn latest(
+/// Those of `ids` that no earlier import has, the most recently active first.
+fn by_recency(
     d: &Daemon,
     ids: &[String],
     sessions: &HashMap<String, Session>,
-) -> Result<Option<String>> {
-    let mut best: Option<&Session> = None;
+) -> Result<Vec<String>> {
+    let mut new = Vec::new();
     for session in ids.iter().filter_map(|id| sessions.get(id)) {
-        if copy::imported(d, &session.id)?.is_none()
-            && best.is_none_or(|best| session.last_active > best.last_active)
-        {
-            best = Some(session);
+        if copy::imported(d, &session.id)?.is_none() {
+            new.push(session);
         }
     }
-    Ok(best.map(|session| session.id.clone()))
+    new.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+    Ok(new.into_iter().map(|session| session.id.clone()).collect())
 }
 
 /// A new exploration of `repo`, at its base branch, recorded as its history.

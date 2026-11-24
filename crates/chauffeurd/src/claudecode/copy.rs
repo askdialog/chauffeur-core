@@ -56,7 +56,7 @@ impl<'a> Report<'a> {
     }
 
     /// Imports `ids` into `workspace` as chats, closed tabs with `closed`: a session that fails
-    /// is said, the others go on.
+    /// is said, the others go on. True when one of them became a new chat.
     pub(super) async fn import(
         &mut self,
         d: &Arc<Daemon>,
@@ -65,7 +65,8 @@ impl<'a> Report<'a> {
         ids: &[String],
         sessions: &HashMap<String, Session>,
         closed: bool,
-    ) {
+    ) -> bool {
+        let mut any = false;
         for id in ids {
             let (Some(&i), Some(session)) = (self.index.get(id), sessions.get(id)) else {
                 continue;
@@ -79,6 +80,7 @@ impl<'a> Report<'a> {
                         ClaudeCodeOutcome::AlreadyImported
                     };
                     plan.lands_in = Some(workspace.slug.clone());
+                    any |= imported;
                 }
                 Err(error) => {
                     self.warnings
@@ -87,6 +89,7 @@ impl<'a> Report<'a> {
                 }
             }
         }
+        any
     }
 }
 
