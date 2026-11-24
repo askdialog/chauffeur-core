@@ -23,7 +23,11 @@ import { fenceLanguage } from "@/lib/codeLanguages";
 import { codePreview } from "@/lib/codePreview";
 import { editedByUser, externalText } from "@/lib/composerText";
 
-export type ComposerEditorHandle = { focus: () => void };
+export type ComposerEditorHandle = {
+  focus: () => void;
+  /** Whether the caret (no selection) is on the first / last line of the text: ↑ and ↓ leave the editor there. */
+  edges: () => { top: boolean; bottom: boolean };
+};
 
 export function ComposerEditor({
   ref,
@@ -57,7 +61,19 @@ export function ComposerEditor({
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
     props.current.onKeyDown(event);
   };
-  useImperativeHandle(ref, () => ({ focus: () => view.current?.focus() }), []);
+  useImperativeHandle(
+    ref,
+    () => ({
+      focus: () => view.current?.focus(),
+      edges: () => {
+        const state = view.current?.state;
+        if (!state || !state.selection.main.empty) return { top: false, bottom: false };
+        const line = state.doc.lineAt(state.selection.main.head);
+        return { top: line.number === 1, bottom: line.number === state.doc.lines };
+      },
+    }),
+    [],
+  );
 
   useEffect(() => {
     if (!host.current) return;

@@ -118,6 +118,7 @@ import { ChildRequestsPanel, respondTo, useChildRequests } from "./ChildRequests
 import { QuestionPrompt } from "./QuestionPrompt";
 import { QueuePanel } from "./QueuePanel";
 import { TasksPanel } from "./TasksPanel";
+import { NO_RECALL, type Recall, recall, recallable } from "@/lib/promptHistory";
 import { useSlashMenu } from "./useSlashMenu";
 import { TimelineRail } from "./TimelineRail";
 import { ChatFind, textRanges } from "./ChatFind";
@@ -911,6 +912,10 @@ export function ChatConversation({
   const permissions = requests.filter((r) => r.kind === "permission" || r.kind === "elicitation" || r.kind === "session");
   // An AskUserQuestion call answered through its question is shown there only.
   const items = useMemo(() => view.items.filter((item) => !(item.kind === "tool" && item.asked)), [view.items]);
+  const pastMessages = useMemo(
+    () => view.items.flatMap((item) => (item.kind === "user" && item.depth === 0 && !item.suggestedBy && !item.delegatedAnswer ? [item.text] : [])),
+    [view.items],
+  );
   // Tool calls and thinking between two messages fold into one line, opened on demand.
   const rows = useMemo(() => groupActivity(items), [items]);
   // The comments of a shared workspace, under the agent's messages they are on: the guests' and
@@ -1414,6 +1419,7 @@ export function ChatConversation({
         <ComposerBox
           key={chat.id}
           draftKey={chat.id}
+          past={pastMessages}
           working={working && !settingUp}
           placeholder={
             working && !settingUp
@@ -1669,10 +1675,13 @@ const ComposerBox = memo(function ComposerBox({
   suggestion = null,
   shell: shellOffered = false,
   brief,
+  past = [],
   onSend,
   onInterrupt,
   controls,
 }: {
+  /** The messages already sent in this chat, oldest first: ↑ and ↓ recall them. */
+  past?: string[];
   /** What the user writes is kept under it while they look elsewhere: the chat, or the workspace's first chat. */
   draftKey: string;
   working: boolean;
@@ -1704,6 +1713,10 @@ const ComposerBox = memo(function ComposerBox({
   useEffect(() => drafts.setText(draftKey, text), [draftKey, text]);
   useEffect(() => drafts.subscribe(draftKey, setText), [draftKey]);
   useEffect(() => drafts.setFiles(draftKey, images), [draftKey, images]);
+  // Sent from this composer since it was shown: the chat's own messages (`past`) come after a reload.
+  const [sentHere, setSentHere] = useState<string[]>([]);
+  const history = useMemo(() => recallable(past.length > 0 ? past : sentHere), [past, sentHere]);
+  const recalled = useRef<{ state: Recall; text: string }>({ state: NO_RECALL, text: "" });
   const slash = useSlashMenu(text, commandsFor, (command) => {
     setText(`/${command.name} `);
     area.current?.focus();
@@ -1740,8 +1753,10 @@ const ComposerBox = memo(function ComposerBox({
     // must not show in both places meanwhile.
     const sent = attachments.detach();
     setText("");
+    recalled.current = { state: NO_RECALL, text: "" };
     try {
       await onSend(value, sent, mode);
+      setSentHere((all) => [...all, value]);
       attachments.release(sent);
     } catch {
       // The caller showed the error: the text and the images come back, before anything typed since.
@@ -1774,7 +1789,11 @@ const ComposerBox = memo(function ComposerBox({
           ref={area}
           value={text}
           disabled={disabled}
-          onChange={setText}
+          onChange={(next) => {
+            // Typing over a recalled message makes it the draft again.
+            if (next !== recalled.current.text) recalled.current = { state: NO_RECALL, text: "" };
+            setText(next);
+          }}
           onPaste={attachments.onPaste}
           onKeyDown={(e) => {
             const offer = suggestionKey(ghost, {
@@ -1793,6 +1812,20 @@ const ComposerBox = memo(function ComposerBox({
               return;
             }
             if (slash.onKeyDown(e)) return;
+            if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+              const up = e.key === "ArrowUp";
+              const edges = area.current?.edges();
+              // Only from the first line going up, the last going down: elsewhere the caret moves.
+              if (edges && (up ? edges.top : edges.bottom)) {
+                const next = recall(history, recalled.current.state, text, up ? "up" : "down");
+                if (next) {
+                  e.preventDefault();
+                  recalled.current = { state: next.state, text: next.text };
+                  setText(next.text);
+                  return;
+                }
+              }
+            }
             if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
               e.preventDefault();
               // ⌘⏎ while the agent works: wait for the end of its turn instead of steering it.
