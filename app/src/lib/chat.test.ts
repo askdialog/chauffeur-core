@@ -8,6 +8,8 @@ import {
   buildChatView,
   delegatedAgent,
   delegatedChat,
+  delegatedAnswers,
+  delegateState,
   DELEGATE_TOOL,
   groupActivity,
   interruptedMessage,
@@ -943,6 +945,32 @@ describe("delegated chats", () => {
     expect(delegatedAgent(vibe, null)).toBe("vibe");
     // A chat the input names but that is not this chat's delegated chat is not shown as one.
     expect(delegatedChat(more, "elsewhere", chats)).toBeNull();
+  });
+
+  test("a delegate card follows its delegated chat while it works, then its answer, whatever the call's result", () => {
+    const view = (results: ChatEvent[]) =>
+      buildChatView([delegateCall("exec-1", { agent: "claude", prompt: "Lot" }), ...results.map((event) => p(event))]);
+    const card = (results: ChatEvent[]) => view(results).items[0] as ToolItem;
+    const interim: ChatEvent = { type: "tool_result", tool_use_id: "exec-1", output: "[the delegated chat works on: its answer will come as a new message]", is_error: false };
+    const pending = card([]);
+    // The parent's turn ended first: an interim result, then (before the fix) Codex's cancelled call.
+    const detached = card([interim]);
+    const cancelled = card([interim, { type: "tool_result", tool_use_id: "exec-1", output: "", is_error: true }]);
+    expect(delegateState(pending, null, false)).toBe("working");
+    expect(delegateState(pending, { status: "needs_input" }, false)).toBe("waiting for you");
+    expect(delegateState(detached, { status: "working" }, false)).toBe("working");
+    expect(delegateState(detached, { status: "needs_input" }, false)).toBe("waiting for you");
+    expect(delegateState(cancelled, { status: "working" }, false)).toBe("working");
+    // Its answer came as a message: answered, the old cancelled cards too.
+    const late: ChatEvent = { type: "user_message", text: "Claude answered", queued: false, delegated_answer: { chat: "sub-a", agent: "claude" } };
+    const answers = delegatedAnswers(view([interim, { type: "tool_result", tool_use_id: "exec-1", output: "", is_error: true }, late]).items);
+    expect([...answers]).toEqual(["sub-a"]);
+    expect(delegateState(cancelled, { status: "idle" }, answers.has("sub-a"))).toBe("answered");
+    expect(delegateState(detached, { status: "closed" }, true)).toBe("answered");
+    // Otherwise the result says how the call ended.
+    expect(delegateState(detached, { status: "idle" }, false)).toBe("answered");
+    expect(delegateState(cancelled, { status: "idle" }, false)).toBe("stopped");
+    expect(delegateState(cancelled, null, false)).toBe("stopped");
   });
 });
 
