@@ -30,7 +30,7 @@ import { type CSSProperties, memo, type ReactNode, useCallback, useEffect, useMe
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { useShallow } from "zustand/react/shallow";
 import { remountLocation, firstItemKey, type ListLocation } from "@/lib/chatList";
-import { type ChatRow, type ChatView, emptyChatView, groupActivity, openRequests, type QuestionItem, type UserItem } from "@/lib/chat";
+import { type ChatRow, type ChatView, emptyChatView, groupActivity, interruptedMessage, openRequests, type QuestionItem, type UserItem } from "@/lib/chat";
 import { formatCost, relativeTime } from "@/lib/format";
 import {
   agentBusy,
@@ -119,7 +119,7 @@ import { ChildRequestsPanel, respondTo, useChildRequests } from "./ChildRequests
 import { QuestionPrompt } from "./QuestionPrompt";
 import { QueuePanel } from "./QueuePanel";
 import { TasksPanel } from "./TasksPanel";
-import { NO_RECALL, type Recall, recall, recallable } from "@/lib/promptHistory";
+import { isDoubleEsc, NO_RECALL, type Recall, recall, recallable } from "@/lib/promptHistory";
 import { useSlashMenu } from "./useSlashMenu";
 import { TimelineRail } from "./TimelineRail";
 import { ChatFind, textRanges } from "./ChatFind";
@@ -1051,10 +1051,21 @@ export function ChatConversation({
   const interrupt = useCallback(async () => {
     try {
       await client.call("chat.interrupt", { chat: chat.id });
+      return true;
     } catch (error) {
       toast(`Could not interrupt: ${errorMessage(error)}`, "error");
+      return false;
     }
   }, [chat.id]);
+  // Esc and Stop: the message the turn answered comes back to an empty composer, to edit and send
+  // again, as in Claude Code ("Send now" interrupts without it: its message runs next).
+  const latestItems = useRef(view.items);
+  latestItems.current = view.items;
+  const stop = useCallback(async () => {
+    const message = interruptedMessage(latestItems.current);
+    if (!(await interrupt()) || !message) return;
+    if (!drafts.text(chat.id).trim()) drafts.setText(chat.id, message);
+  }, [chat.id, interrupt]);
   const sendNow = useMemo(() => (readOnly || settingUp ? null : () => void interrupt()), [readOnly, settingUp, interrupt]);
   const withdraw = useCallback(
     async (item: UserItem) => {
@@ -1084,7 +1095,7 @@ export function ChatConversation({
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (document.querySelector("[role=dialog]")) return;
       event.preventDefault();
-      void interrupt();
+      void stop();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1459,7 +1470,7 @@ export function ChatConversation({
           brief={design ? chat.brief : undefined}
           suggestion={settingUp ? null : view.suggestion}
           onSend={send}
-          onInterrupt={interrupt}
+          onInterrupt={stop}
           controls={controls}
         />
       )}
@@ -1740,6 +1751,8 @@ const ComposerBox = memo(function ComposerBox({
   const [sentHere, setSentHere] = useState<string[]>([]);
   const history = useMemo(() => recallable(past.length > 0 ? past : sentHere), [past, sentHere]);
   const recalled = useRef<{ state: Recall; text: string }>({ state: NO_RECALL, text: "" });
+  // When Esc was last pressed in the composer with something in it, for the double Esc that empties it.
+  const lastEsc = useRef<number | null>(null);
   const slash = useSlashMenu(text, commandsFor, (command) => {
     setText(`/${command.name} `);
     area.current?.focus();
@@ -1855,7 +1868,19 @@ const ComposerBox = memo(function ComposerBox({
               void submit(hasMod(e) && working ? "queue" : "steer");
             } else if (e.key === "Escape" && working) {
               e.preventDefault();
+              lastEsc.current = null;
               onInterrupt();
+            } else if (e.key === "Escape" && !e.isComposing && (text !== "" || images.length > 0)) {
+              // Esc twice empties the composer, as in Claude Code. The first goes on to whatever
+              // else Esc closes (a subagent's panel…).
+              const now = Date.now();
+              if (isDoubleEsc(lastEsc.current, now)) {
+                e.preventDefault();
+                lastEsc.current = null;
+                setText("");
+                attachments.clear();
+                recalled.current = { state: NO_RECALL, text: "" };
+              } else lastEsc.current = now;
             }
           }}
           placeholder={ghost ? ghost.text : placeholder}

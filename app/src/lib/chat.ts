@@ -1000,6 +1000,22 @@ export function delegatedAgent(item: Pick<ToolItem, "input">, chat: ChatInfo | n
 }
 
 /** Open permission requests, questions and session requests, oldest first. */
+/**
+ * The message of the user that the turn under way answers, put back in an empty composer when the
+ * user interrupts it, as Claude Code does: the latest the agent read since the last turn ended. Not
+ * a message still waiting to be read (it runs next anyway), taken back, suggested by a guest or sent
+ * by Chauffeur; null when the turn started from none (a background subagent handing back).
+ */
+export function interruptedMessage(items: readonly ChatItem[]): string | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i];
+    if (item.kind === "turn") return null;
+    if (item.kind !== "user" || item.depth !== 0 || item.queued || item.withdrawn || item.suggestedBy || item.delegatedAnswer) continue;
+    return item.text.trim() || null;
+  }
+  return null;
+}
+
 export function openRequests(view: ChatView): Array<PermissionItem | QuestionItem | ElicitationItem | SessionRequestItem> {
   return view.items.filter(
     (item): item is PermissionItem | QuestionItem | ElicitationItem | SessionRequestItem =>

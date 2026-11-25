@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { NO_RECALL, recall, recallable } from "./promptHistory";
+import { DOUBLE_ESC_MS, isDoubleEsc, NO_RECALL, recall, recallable } from "./promptHistory";
 
 const history = recallable(["one", " two ", "two", "", "three"]);
 
@@ -28,4 +28,10 @@ test("down walks forward and ends on the draft", () => {
 
 test("nothing to recall from an empty history", () => {
   expect(recall([], NO_RECALL, "", "up")).toBeNull();
+});
+
+test("a second Esc soon after the first is a double Esc", () => {
+  expect(isDoubleEsc(null, 1000)).toBe(false);
+  expect(isDoubleEsc(1000, 1000 + DOUBLE_ESC_MS)).toBe(true);
+  expect(isDoubleEsc(1000, 1001 + DOUBLE_ESC_MS)).toBe(false);
 });
