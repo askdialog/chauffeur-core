@@ -452,9 +452,10 @@ impl RepoRegistry {
             return false;
         };
         let owner = owner.unwrap_or_else(|| main_owner(&settings));
-        self.existing_clone(reference).as_deref() == Some(clone)
-            || (!owner.is_empty()
-                && origin_is(clone, forge_host(&settings), &format!("{owner}/{name}")))
+        self.existing_clone(reference).is_some_and(|found| {
+            crate::conductor::same_folder(&found, clone) || same_origin(&found, clone)
+        }) || (!owner.is_empty()
+            && origin_is(clone, forge_host(&settings), &format!("{owner}/{name}")))
     }
 
     /// An existing local clone of `owner/name`, a repo outside the main organization: the one
@@ -733,9 +734,14 @@ pub fn is_gitlab_namespace(path: &str) -> bool {
 /// The clone's `origin` remote is the repo `full_name` on `host` (`https://github.com/o/n.git`,
 /// `git@github.com:o/n`, `ssh://git@gitlab.example.com:2222/team/sub/n.git`, any case).
 fn origin_is(clone: &Path, host: &str, full_name: &str) -> bool {
-    let Ok(config) = std::fs::read_to_string(clone.join(".git").join("config")) else {
-        return false;
-    };
+    origin_url(clone).is_some_and(|url| {
+        remote_path(&url, host).is_some_and(|path| path.eq_ignore_ascii_case(full_name))
+    })
+}
+
+/// The `origin` URL a clone's `.git/config` names, as written there.
+fn origin_url(clone: &Path) -> Option<String> {
+    let config = std::fs::read_to_string(clone.join(".git").join("config")).ok()?;
     let mut in_origin = false;
     for line in config.lines().map(str::trim) {
         if line.starts_with('[') {
@@ -751,9 +757,23 @@ fn origin_is(clone: &Path, host: &str, full_name: &str) -> bool {
         else {
             continue;
         };
-        return remote_path(url, host).is_some_and(|path| path.eq_ignore_ascii_case(full_name));
+        let url = url.trim();
+        return (!url.is_empty()).then(|| url.to_string());
     }
-    false
+    None
+}
+
+/// Two clones whose `origin` is the same URL (any case, `.git` and a final `/` aside): the same
+/// repo, even reached through an SSH alias (`git@github-work:o/n`) or outside the main organization.
+fn same_origin(a: &Path, b: &Path) -> bool {
+    let normal = |url: String| {
+        let url = url.trim_end_matches('/');
+        url.strip_suffix(".git").unwrap_or(url).to_ascii_lowercase()
+    };
+    match (origin_url(a), origin_url(b)) {
+        (Some(a), Some(b)) => normal(a) == normal(b),
+        _ => false,
+    }
 }
 
 /// The path a remote URL names on `host` (`o/n`, `team/sub/n`), without `.git`: as
@@ -1500,6 +1520,31 @@ mod tests {
         assert_eq!(repo_reference(&gitlab, "team/shop", "api"), "team/shop/api");
         assert_eq!(forge_remote(&github), "GitHub remote");
         assert_eq!(forge_remote(&gitlab), "GitLab remote (gitlab.example.com)");
+    }
+
+    /// A section names `epoia`; the workspace's clone is that repo though its origin is neither
+    /// on github.com nor in the main organization, or though its path goes through a link.
+    #[cfg(unix)]
+    #[test]
+    fn a_clone_matches_its_repo_by_origin_or_through_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let (registry, _) = registry(dir.path(), &[]);
+        let alias = "git@github-perso:someone/epoia.git";
+        git_repo(&dir.path().join("repos/epoia"), alias);
+        // Another clone of the same repo, by the same SSH alias.
+        let other = dir.path().join("code/epoia");
+        git_repo(&other, alias);
+        assert!(registry.clone_matches(&other, "epoia"));
+        // A clone of that name whose origin is another repo.
+        let fork = dir.path().join("forks/epoia");
+        git_repo(&fork, "git@github-perso:someone-else/epoia.git");
+        assert!(!registry.clone_matches(&fork, "epoia"));
+        // A clone without origin matches only itself, reached through a symbolic link too.
+        git_repo(&dir.path().join("repos/notes"), "");
+        git_repo(&dir.path().join("code/notes"), "");
+        assert!(!registry.clone_matches(&dir.path().join("code/notes"), "notes"));
+        std::os::unix::fs::symlink(dir.path().join("repos"), dir.path().join("link")).unwrap();
+        assert!(registry.clone_matches(&dir.path().join("link/notes"), "notes"));
     }
 
     #[test]
