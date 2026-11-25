@@ -10,6 +10,7 @@ import {
   delegatedChat,
   DELEGATE_TOOL,
   groupActivity,
+  interruptedMessage,
   emptyChatView,
   openRequests,
   type PermissionItem,
@@ -453,6 +454,24 @@ describe("reduceChat", () => {
     view = reduceChat(view, p({ type: "user_message_withdrawn", message_id: "m1" }));
     expect(view.items.filter((i) => i.kind === "user").map((i) => (i as UserItem).withdrawn ?? false)).toEqual([false, true]);
     expect(groupActivity(view.items).filter((row) => row.kind === "user").map((row) => (row as UserItem).text)).toEqual(["go"]);
+  });
+
+  test("interrupting a turn gives back the latest message the agent read in it", () => {
+    const ended = { type: "turn_ended", outcome: "success", duration_ms: 1, cost_usd: 0, context_tokens: null, error: null } as const;
+    const view = buildChatView([
+      p({ type: "user_message", text: "first", queued: false }),
+      p({ type: "turn_started" }),
+      p(ended),
+      p({ type: "user_message", text: "  fix the build  ", queued: false }),
+      p({ type: "turn_started" }),
+      p({ type: "assistant_text", message_id: "a1", text: "On it", parent_tool_use_id: null }),
+      p({ type: "user_message", text: "not read yet", queued: true }),
+    ]);
+    expect(interruptedMessage(view.items)).toBe("fix the build");
+    // A turn the user did not start (a background subagent handing back) gives nothing back.
+    const handback = buildChatView([p({ type: "user_message", text: "first", queued: false }), p({ type: "turn_started" }), p(ended), p({ type: "turn_started" })]);
+    expect(interruptedMessage(handback.items)).toBeNull();
+    expect(interruptedMessage([])).toBeNull();
   });
 
   test("persisted events already applied are ignored; the input is never mutated", () => {

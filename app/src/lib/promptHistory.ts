@@ -37,3 +37,11 @@ export function recall(
   const depth = state.depth - 1;
   return { text: depth === 0 ? state.draft : history[history.length - depth], state: { depth, draft: state.draft } };
 }
+
+/** Two Esc within this many milliseconds empty the composer, as in Claude Code. */
+export const DOUBLE_ESC_MS = 800;
+
+/** Whether an Esc pressed at `now` is the second of a double Esc, the first pressed at `last`. */
+export function isDoubleEsc(last: number | null, now: number): boolean {
+  return last !== null && now - last <= DOUBLE_ESC_MS;
+}
