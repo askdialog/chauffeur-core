@@ -83,6 +83,7 @@ pub mod ports;
 pub mod power;
 pub mod preferences;
 pub mod procs;
+pub mod prompts;
 pub mod prs;
 pub mod relay;
 pub mod relay_events;

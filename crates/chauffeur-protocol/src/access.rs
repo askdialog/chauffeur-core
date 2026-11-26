@@ -263,4 +263,16 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn saved_prompts_are_never_relayed_nor_offered_to_the_phone() {
+        for method in [
+            ClientMethod::PromptsList,
+            ClientMethod::PromptsSave,
+            ClientMethod::PromptsDelete,
+        ] {
+            assert_eq!(method.relay(), Relay::Local, "{method:?}");
+            assert!(!method.phone(), "{method:?}");
+        }
+    }
 }

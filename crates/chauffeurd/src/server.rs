@@ -2226,6 +2226,21 @@ mod tests {
                 "An agent may not call daemon.shutdown",
             ),
             (
+                "prompts.list",
+                json!({}),
+                "An agent may not call prompts.list",
+            ),
+            (
+                "prompts.save",
+                json!({"name":"n","text":"t"}),
+                "An agent may not call prompts.save",
+            ),
+            (
+                "prompts.delete",
+                json!({"name":"n"}),
+                "An agent may not call prompts.delete",
+            ),
+            (
                 "chat.shell",
                 json!({"chat":"c","command":"id"}),
                 "Shell commands run from the app's composer only",

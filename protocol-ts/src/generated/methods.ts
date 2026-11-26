@@ -259,6 +259,9 @@ import type { Previews } from "./Previews";
 import type { ProcessInfo } from "./ProcessInfo";
 import type { ProcessesResult } from "./ProcessesResult";
 import type { PromoteParams } from "./PromoteParams";
+import type { Prompt } from "./Prompt";
+import type { PromptParams } from "./PromptParams";
+import type { PromptSaveParams } from "./PromptSaveParams";
 import type { PushConfigureParams } from "./PushConfigureParams";
 import type { PushPreferences } from "./PushPreferences";
 import type { QueueResult } from "./QueueResult";
@@ -625,6 +628,9 @@ export type ClientMethods = {
   "brands.edit": [BrandParams, ChatInfo];
   "brands.delete": [BrandParams, BrandsResult];
   "brands.set_default": [BrandDefaultParams, BrandsResult];
+  "prompts.list": [EmptyParams, Array<Prompt>];
+  "prompts.save": [PromptSaveParams, Array<Prompt>];
+  "prompts.delete": [PromptParams, Array<Prompt>];
   "chat.set_brand": [ChatBrandParams, ChatInfo];
   "files.share_state": [FileCommentsParams, DesignShareState];
   "files.linked": [FileCommentsParams, FilesLinkedResult];
@@ -1049,6 +1055,9 @@ export const METHOD_NAMES = [
   "brands.edit",
   "brands.delete",
   "brands.set_default",
+  "prompts.list",
+  "prompts.save",
+  "prompts.delete",
   "chat.set_brand",
   "files.share_state",
   "files.linked",
