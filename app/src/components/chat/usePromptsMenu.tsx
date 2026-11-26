@@ -82,6 +82,7 @@ export function usePromptsMenu(insert: (text: string) => void, leave: () => void
   }, [open, hide]);
 
   const matches = prompts ? matchPrompts(prompts, filter) : [];
+  const selected = Math.min(active, matches.length - 1);
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     const { nativeEvent } = event;
     // The input method's key (WebKit may end composition before its confirming key, keyCode 229);
@@ -101,7 +102,7 @@ export function usePromptsMenu(insert: (text: string) => void, leave: () => void
       leave();
     } else if (action === "pick") {
       if (prompts?.length === 0) return toSettings();
-      const prompt = matches[Math.min(active, matches.length - 1)];
+      const prompt = matches[selected];
       if (prompt) pick(prompt);
     } else if (matches.length > 0) setActive((i) => stepMatch(i, matches.length, action === "down" ? 1 : -1));
   };
@@ -158,7 +159,7 @@ export function usePromptsMenu(insert: (text: string) => void, leave: () => void
             placeholder="Filter your prompts…"
             aria-label="Filter your prompts"
             aria-controls={listId}
-            aria-activedescendant={matches.length > 0 ? `${listId}-${Math.min(active, matches.length - 1)}` : undefined}
+            aria-activedescendant={matches.length > 0 ? `${listId}-${selected}` : undefined}
             value={filter}
             onChange={(event) => {
               setFilter(event.target.value);
