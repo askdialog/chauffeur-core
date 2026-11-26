@@ -198,7 +198,9 @@ pub fn save(daemon: &Daemon, params: &PromptSaveParams) -> Result<Vec<Prompt>> {
 pub fn delete(daemon: &Daemon, name: &str) -> Result<Vec<Prompt>> {
     let _writes = WRITES.lock().unwrap();
     if !list(daemon)?.iter().any(|p| p.name == name) {
-        return Err(Error::NotFound(format!("No prompt is named \"{name}\"")));
+        return Err(Error::NotFound(format!(
+            "No prompt is named \"{name}\" to delete: it was deleted or renamed meanwhile"
+        )));
     }
     std::fs::remove_file(file(&root(daemon), name))
         .with_context(|| format!("could not delete the prompt {name}"))?;
