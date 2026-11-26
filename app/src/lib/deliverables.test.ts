@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { deliverableDownloadUrl, parseDeliverable, versionPath } from "./deliverables";
+import { DOCUMENT_WIDTH, deliverableDownloadUrl, fitScale, parseDeliverable, versionPath } from "./deliverables";
 
 const path = ".chauffeur/artifacts/data-loop/index.html";
 test("a document keeps its source identity and only distinct exports", () => {
@@ -34,4 +34,12 @@ test("an earlier version lies in its deliverable folder's .versions", () => {
   expect(versionPath(".chauffeur/artifacts/report/index.html", 3)).toBe(".chauffeur/artifacts/report/.versions/3/index.html");
   expect(versionPath(".chauffeur/artifacts/report/pdf/report.pdf", 1)).toBe(".chauffeur/artifacts/report/.versions/1/pdf/report.pdf");
   expect(versionPath(".chauffeur/artifacts/alone.html", 1)).toBeNull();
+});
+
+test("an HTML document in a narrow pane is laid out at a laptop's width and scaled down, never up", () => {
+  expect(fitScale(640, true)).toBe(640 / DOCUMENT_WIDTH);
+  expect(fitScale(DOCUMENT_WIDTH, true)).toBe(1);
+  expect(fitScale(1600, true)).toBe(1);
+  expect(fitScale(640, false)).toBe(1);
+  expect(fitScale(0, true)).toBe(1);
 });
