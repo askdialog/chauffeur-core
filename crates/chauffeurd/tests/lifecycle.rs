@@ -3499,6 +3499,7 @@ async fn a_reactivated_exploration_s_chats_are_told_once_what_moved_since_the_ar
                 context_tokens: None,
                 error: error.map(str::to_string),
                 fork_point: None,
+                remedy: None,
             },
         );
     };
@@ -3735,6 +3736,7 @@ async fn a_chat_opened_while_a_workspace_or_an_exploration_is_restored_starts_on
                 context_tokens: None,
                 error: None,
                 fork_point: None,
+                remedy: None,
             },
         );
         eventually("the message sent meanwhile to reach the agent", || {
@@ -4898,6 +4900,7 @@ async fn a_chat_works_while_its_agent_runs_a_turn_not_while_only_a_background_su
         context_tokens: None,
         error: None,
         fork_point: None,
+        remedy: None,
     };
     let request = |id: &str| ChatEvent::PermissionRequest {
         request_id: id.into(),
@@ -5106,6 +5109,7 @@ async fn a_turn_cut_by_a_restart_resumes_on_its_own_once() {
             context_tokens: None,
             error: None,
             fork_point: None,
+            remedy: None,
         },
     );
     d.chats.on_event(&chat.id, ChatEvent::TurnStarted);
@@ -5242,6 +5246,7 @@ async fn a_turn_that_failed_on_the_network_resumes_when_the_user_is_back_once() 
                 context_tokens: None,
                 error: Some(error.into()),
                 fork_point: None,
+                remedy: None,
             },
         );
     };
@@ -5481,6 +5486,7 @@ done
             context_tokens: None,
             error: None,
             fork_point: None,
+            remedy: None,
         },
     );
 
@@ -5896,6 +5902,7 @@ async fn keep_awake_follows_the_agents_and_lid_closed_installs_its_rule_once() {
         context_tokens: None,
         error: None,
         fork_point: None,
+        remedy: None,
     };
     d.chats.on_event(&chat.id, turn_ended);
     assert!(!gather(d).busy());
@@ -7220,6 +7227,7 @@ async fn chats_are_renamed_closed_reopened_and_deleted() {
             context_tokens: None,
             error: None,
             fork_point: None,
+            remedy: None,
         },
     );
     assert_eq!(
@@ -7792,6 +7800,7 @@ async fn a_variable_exported_since_the_daemon_started_reaches_the_agents_on_relo
             context_tokens: None,
             error: None,
             fork_point: None,
+            remedy: None,
         },
     );
     d.chats.send(&working.id, "again").await.unwrap();
@@ -8721,6 +8730,7 @@ async fn a_chat_is_forked_into_a_new_tab_with_its_conversation() {
         context_tokens: None,
         error: None,
         fork_point: None,
+        remedy: None,
     };
 
     let source = d
@@ -8960,6 +8970,7 @@ async fn a_chat_is_forked_from_one_of_its_turns() {
                 session_id: session_id.into(),
                 up_to: up_to.into(),
             }),
+            remedy: None,
         };
     let said = |text: &str| ChatEvent::AssistantText {
         message_id: format!("m-{text}"),
@@ -9159,6 +9170,7 @@ async fn a_confirmed_provider_switch_keeps_the_chat_and_hands_over_context_in_bo
                     session_id: session.into(),
                     up_to: "u1".into(),
                 }),
+                remedy: None,
             },
         );
     };
@@ -9337,6 +9349,7 @@ async fn a_chat_forked_into_the_other_agent_hands_it_the_conversation_as_text() 
                 session_id: "s-a".into(),
                 up_to: "u1".into(),
             }),
+            remedy: None,
         },
     );
 
@@ -9422,6 +9435,7 @@ async fn a_chat_forked_into_the_other_agent_hands_it_the_conversation_as_text() 
             context_tokens: None,
             error: None,
             fork_point: None,
+            remedy: None,
         },
     );
     d.chats.send(&fork.id, "And the reset page").await.unwrap();
@@ -9484,6 +9498,7 @@ async fn an_agent_delegates_a_task_to_a_subagent_chat_and_gets_its_answer() {
         context_tokens: None,
         error: None,
         fork_point: None,
+        remedy: None,
     };
 
     // A delegated chat of the agent asked, in the parent's mode, linked to the parent's tool call.
@@ -9720,6 +9735,7 @@ async fn a_delegated_chat_answers_once_its_background_subagents_are_done() {
         context_tokens: None,
         error: None,
         fork_point: None,
+        remedy: None,
     };
     let waiting = {
         let d = d.clone();
@@ -10173,6 +10189,7 @@ async fn a_delegated_chat_left_by_its_parents_turn_works_on_and_its_answer_comes
             context_tokens: None,
             error: None,
             fork_point: None,
+            remedy: None,
         },
     );
     let parent_messages = || -> Vec<(String, Option<DelegatedAnswer>)> {
@@ -10218,6 +10235,7 @@ async fn a_delegated_chat_left_by_its_parents_turn_works_on_and_its_answer_comes
             context_tokens: None,
             error: None,
             fork_point: None,
+            remedy: None,
         },
     );
     eventually("the answer came to the parent", || {
@@ -10293,6 +10311,7 @@ async fn a_delegated_chat_closes_once_answered_unless_the_user_took_part_in_it()
         context_tokens: None,
         error: None,
         fork_point: None,
+        remedy: None,
     };
     // Delegates a task, lets `meanwhile` happen while it works, ends its turn with `outcome`, and
     // says whether the delegated chat is closed once the parent has its answer.
@@ -10510,6 +10529,7 @@ async fn a_workspace_is_named_again_from_its_conversation_at_its_third_message_t
                     context_tokens: None,
                     error: None,
                     fork_point: None,
+                    remedy: None,
                 },
             );
         }
@@ -21187,6 +21207,7 @@ async fn weekly_reviews_wait_for_daily_reports_retry_once_and_carry_history() {
             context_tokens: None,
             error: None,
             fork_point: None,
+            remedy: None,
         },
     );
     d.events.chat(
@@ -21343,6 +21364,7 @@ async fn catch_up_runs_sundays_synthesis_before_monday_and_does_not_wait_for_una
                 context_tokens: None,
                 error: None,
                 fork_point: None,
+                remedy: None,
             },
         );
     };

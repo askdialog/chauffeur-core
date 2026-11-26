@@ -302,6 +302,15 @@ pub struct DelegatedAnswer {
     pub title: Option<String>,
 }
 
+/// What the user can do about a failed turn (`turn_ended`'s `remedy`).
+#[derive(Serialize, Deserialize, TS, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TurnRemedy {
+    /// Update the Codex CLI (`codex.update`), then resend the message.
+    UpdateCodex,
+}
+
 /// What happens in a chat, independent of the agent behind it.
 #[derive(Serialize, Deserialize, TS, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -496,6 +505,11 @@ pub enum ChatEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         fork_point: Option<ForkPoint>,
+        /// What the user can do about a failed turn, offered beside its error: Codex lacks the
+        /// chat's model in its catalog, which a newer Codex may offer. Absent from most turns.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        remedy: Option<TurnRemedy>,
     },
     StatusChanged {
         status: ChatStatus,

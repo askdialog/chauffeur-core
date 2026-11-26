@@ -11,6 +11,7 @@ import { GitlabSetup } from "./GitlabSetup";
 import { forgeName, forgeWords } from "@/lib/forge";
 import { refreshGitlab, useForge } from "@/state/gitlab";
 import { LocalModelsSettings } from "./LocalModelsSettings";
+import { CodexCliSettings } from "./CodexUpdate";
 import { TransferSettings } from "./TransferSettings";
 import { WorkerSettings } from "./WorkerSettings";
 import { SlackSettings } from "./SlackSettings";
@@ -739,6 +740,7 @@ function Agents({ settings, update, busy }: SectionProps) {
         onChange={(on) => void update({ prompt_suggestions: on })}
         testId="prompt-suggestions"
       />
+      <CodexCliSettings />
     </>
   );
 }

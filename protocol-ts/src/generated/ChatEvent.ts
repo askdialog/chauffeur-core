@@ -21,6 +21,7 @@ import type { Suggestion } from "./Suggestion";
 import type { TaskKind } from "./TaskKind";
 import type { TaskStatus } from "./TaskStatus";
 import type { TurnOutcome } from "./TurnOutcome";
+import type { TurnRemedy } from "./TurnRemedy";
 import type { JsonValue } from "./serde_json/JsonValue";
 
 /**
@@ -126,7 +127,12 @@ context_tokens: number | null, error: string | null,
  * to (`chat.fork` with `turn`): set on a turn that ended successfully, absent from older
  * events.
  */
-fork_point?: ForkPoint, } | { "type": "status_changed", status: ChatStatus, } | { "type": "notice", level: NoticeLevel, message: string, 
+fork_point?: ForkPoint, 
+/**
+ * What the user can do about a failed turn, offered beside its error: Codex lacks the
+ * chat's model in its catalog, which a newer Codex may offer. Absent from most turns.
+ */
+remedy?: TurnRemedy, } | { "type": "status_changed", status: ChatStatus, } | { "type": "notice", level: NoticeLevel, message: string, 
 /**
  * A short label shown beside the message: the category of a call auto mode blocked
  * (`Credential materialization`). Absent from most notices, and from older events.

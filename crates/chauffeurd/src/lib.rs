@@ -37,6 +37,7 @@ mod cloud_workspace_profile;
 pub mod cloud_workspace_restore;
 mod cloud_workspace_return;
 pub mod cloud_workspace_snapshot;
+pub mod codex_cli;
 pub mod comments;
 pub mod conductor;
 pub mod daily_review;
@@ -183,6 +184,8 @@ pub struct Daemon {
     pub news: news::News,
     pub jev: jev::Jev,
     pub models: models::ModelCatalog,
+    /// The Codex CLI chats run, and its update from the app.
+    pub codex_cli: codex_cli::CodexCli,
     /// Ollama, which serves the local models (story 52).
     pub ollama: ollama::Ollama,
     /// GitHub through `gh`, Chauffeur's own when the user has none.
@@ -268,6 +271,7 @@ impl Daemon {
             news: news::News::new(),
             jev: jev::Jev::new(secrets::Secrets::for_paths(&paths)),
             models: models::ModelCatalog::default(),
+            codex_cli: codex_cli::CodexCli::default(),
             ollama: ollama::Ollama::new(weak.clone()),
             github: github::Github::new(weak.clone()),
             gitlab: gitlab::Gitlab::new(weak.clone()),

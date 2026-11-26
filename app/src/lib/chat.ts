@@ -19,6 +19,7 @@ import type {
   TaskKind,
   TaskStatus,
   TurnOutcome,
+  TurnRemedy,
 } from "@chauffeur/protocol";
 import { withoutPrivate } from "./files";
 import { AGENT_NAMES } from "./models";
@@ -152,6 +153,8 @@ export type TurnItem = Base & {
   /** Tokens in the context window after the turn. */
   contextTokens: number | null;
   error: string | null;
+  /** What the user can do about the failure, offered beside it. */
+  remedy: TurnRemedy | null;
   /** The agent said where it ended in its session: a fork can start from there. */
   forkable: boolean;
 };
@@ -657,6 +660,7 @@ function apply(current: ChatView, event: ChatEvent, envelope: EventEnvelope): Ch
             tokens: turnTokens,
             contextTokens: event.context_tokens,
             error: event.error,
+            remedy: event.remedy ?? null,
             forkable: event.outcome === "success" && event.fork_point != null,
           },
         ],

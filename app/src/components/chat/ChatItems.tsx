@@ -75,6 +75,7 @@ import { saveFiles } from "../saveFiles";
 import { canDownload, type Download as DownloadFile } from "@/lib/downloads";
 import { Badge, Button, cx, IconButton, Spinner } from "../ui";
 import { AgentIcon } from "../AgentIcon";
+import { UpdateCodexRemedy } from "../CodexUpdate";
 import { AGENT_SHORT_NAMES } from "@/lib/models";
 
 export type Respond = (requestId: string, response: RequestResponse) => Promise<void>;
@@ -1179,6 +1180,7 @@ function TurnSummary({ item }: { item: TurnItem }) {
         )}
       </div>
       {item.error && <div className="mt-1 text-center text-[12px] text-danger selectable">{item.error}</div>}
+      {item.remedy === "update_codex" && <UpdateCodexRemedy />}
     </div>
   );
 }

@@ -29,6 +29,11 @@ impl ModelCatalog {
         vec![claude, codex, vibe]
     }
 
+    /// Drops `agent`'s cached catalog: its CLI changed, and its next listing asks it again.
+    pub async fn forget(&self, agent: AgentKind) {
+        self.cache.lock().await.remove(&agent);
+    }
+
     async fn agent(&self, daemon: &Arc<Daemon>, agent: AgentKind, refresh: bool) -> AgentModels {
         if !refresh
             && let Some((at, models)) = self.cache.lock().await.get(&agent)
