@@ -287,6 +287,23 @@ describe("starting", () => {
     expect(host.events[0]).toMatchObject({ type: "session_started", agent_session_id: "thread-old" });
   });
 
+  test("a thread that never had a turn, which Codex cannot resume, is replaced by a new one", async () => {
+    const prepare = (s: FakeAppServer) => {
+      s.handlers["thread/resume"] = () => Promise.reject(new Error("no rollout found for thread id thread-old"));
+    };
+    const { server, result, host } = await started({ resume_session_id: "thread-old" }, { prepare });
+    expect(server.sent("thread/start")).toHaveLength(1);
+    expect(result.agent_session_id).not.toBe("thread-old");
+    expect(host.events[0]).toMatchObject({ type: "session_started", agent_session_id: result.agent_session_id });
+  });
+
+  test("any other failure to resume a thread fails the start", async () => {
+    const prepare = (s: FakeAppServer) => {
+      s.handlers["thread/resume"] = () => Promise.reject(new Error("thread is busy"));
+    };
+    await expect(started({ resume_session_id: "thread-old" }, { prepare })).rejects.toThrow("thread is busy");
+  });
+
   test("warns when the guard hook cannot be trusted", async () => {
     const { server, host } = await started({}, { prepare: (s) => (s.handlers["hooks/list"] = () => ({ data: [] })) });
     expect(server.sent("thread/start")[0].config).toEqual({});
@@ -495,7 +512,8 @@ describe("turns and messages", () => {
     session.send("go", [], "first");
     await Bun.sleep(25);
     expect(server.sent("turn/start")).toEqual([]);
-    expect(host.events.at(-1)).toMatchObject({ type: "turn_ended", outcome: "error", error: expect.stringContaining("gpt-6.2-sol") });
+    expect(host.events.at(-1)).toMatchObject({ type: "turn_ended", outcome: "error", error: expect.stringContaining("could not confirm gpt-6.2-sol") });
+    expect(host.events.at(-1)).not.toHaveProperty("remedy");
 
     server.handlers["model/list"] = () => ({ data: [{ model: "gpt-6.2-sol" }], nextCursor: null });
     session.send("go", [], "retry");
@@ -510,7 +528,13 @@ describe("turns and messages", () => {
   test("a missing model can be retried with a different model and a fresh catalog", async () => {
     const { host, server, session } = await started({ model: "gpt-6.2-sol", prompt: "go" });
     await flush();
-    expect(host.events.at(-1)).toMatchObject({ type: "turn_ended", outcome: "error" });
+    // A newer Codex may offer it: the chat offers to update Codex.
+    expect(host.events.at(-1)).toMatchObject({
+      type: "turn_ended",
+      outcome: "error",
+      error: expect.stringContaining("gpt-6.2-sol is not in this Codex's model catalog"),
+      remedy: "update_codex",
+    });
     expect(server.sent("turn/start")).toEqual([]);
     server.models = [{ model: "gpt-6-luna" }];
     await session.configure({ model: "gpt-6-luna" });

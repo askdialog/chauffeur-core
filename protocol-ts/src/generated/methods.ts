@@ -79,6 +79,7 @@ import type { CloudTransferSetupParams } from "./CloudTransferSetupParams";
 import type { CloudTransferStartParams } from "./CloudTransferStartParams";
 import type { CloudTransferState } from "./CloudTransferState";
 import type { CloudTransferStatus } from "./CloudTransferStatus";
+import type { CodexCliStatus } from "./CodexCliStatus";
 import type { CommandsForReposParams } from "./CommandsForReposParams";
 import type { CommandsListParams } from "./CommandsListParams";
 import type { CommandsListResult } from "./CommandsListResult";
@@ -687,6 +688,8 @@ export type ClientMethods = {
   "ollama.install": [EmptyParams, EmptyParams];
   "ollama.pull": [OllamaModelParams, EmptyParams];
   "ollama.delete": [OllamaModelParams, EmptyParams];
+  "codex.status": [EmptyParams, CodexCliStatus];
+  "codex.update": [EmptyParams, CodexCliStatus];
   "github.status": [EmptyParams, GithubStatus];
   "github.connect": [EmptyParams, EmptyParams];
   "github.cancel": [EmptyParams, EmptyParams];
@@ -1109,6 +1112,8 @@ export const METHOD_NAMES = [
   "ollama.install",
   "ollama.pull",
   "ollama.delete",
+  "codex.status",
+  "codex.update",
   "github.status",
   "github.connect",
   "github.cancel",

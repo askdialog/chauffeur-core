@@ -69,6 +69,7 @@ export type {
   TaskKind,
   TaskStatus,
   TurnOutcome,
+  TurnRemedy,
   WorktreeCreateParams,
   WorktreeCreateResult,
   WorktreeRemoveParams,

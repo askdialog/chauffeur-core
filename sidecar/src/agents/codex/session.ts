@@ -30,6 +30,7 @@ import {
   type RequestResponse,
   type SessionStartParams,
   type SessionStartResult,
+  type TurnRemedy,
 } from "../../protocol.ts";
 import { RpcError, type RpcId } from "../../rpc/peer.ts";
 import { CODEX_APP_SERVER_VERSION, SIDECAR_VERSION } from "../../version.ts";
@@ -529,12 +530,28 @@ export class CodexSession implements AgentSession {
     const tools = { delegate: this.params.delegate, sessionEnsure: this.params.read_only };
     this.threadSettings = { ...common, dynamicTools: design ? [] : codexChauffeurTools(tools) };
     const response = this.params.resume_session_id
-      ? await server.request("thread/resume", { threadId: this.params.resume_session_id, excludeTurns: true, ...common } satisfies ThreadResumeParams)
+      ? await this.resumeThread(server, this.params.resume_session_id, common)
       : await server.request("thread/start", this.threadSettings);
     this.threadId = response.thread.id;
     await this.loadSkills(server);
     // A local model keeps its `ollama/` id: Codex reports Ollama's name alone.
     return { model: this.mapper.local && this.params.model ? this.params.model : response.model };
+  }
+
+  /**
+   * Resumes the chat's thread. Codex writes a thread down only at its first turn: one whose first
+   * turn never started (its model missing from an outdated Codex's catalog, then Codex updated)
+   * has nothing to resume, and a new thread carries on in its place, nothing lost.
+   */
+  private async resumeThread(server: AppServer, threadId: string, common: Omit<ThreadResumeParams, "threadId" | "excludeTurns">) {
+    const fresh = this.threadSettings;
+    try {
+      return await server.request("thread/resume", { threadId, excludeTurns: true, ...common } satisfies ThreadResumeParams);
+    } catch (error) {
+      if (!fresh || !/no rollout found/i.test(errorMessage(error))) throw error;
+      this.host.log.info(`thread ${threadId} never had a turn: a new thread replaces it`);
+      return await server.request("thread/start", fresh);
+    }
   }
 
   /**
@@ -598,11 +615,15 @@ export class CodexSession implements AgentSession {
       this.modelCatalogWait = wait;
       try {
         await this.confirmModel(server, model, wait.signal);
-      } catch {
+      } catch (error) {
         if (this.state === "running") {
-          this.endTurnLocally(wait.signal.aborted ? "interrupted" : "error", wait.signal.aborted
-            ? null
-            : `Codex could not confirm ${model} in its model catalog. Resend your message to retry, or select another model before resending.`);
+          if (wait.signal.aborted) this.endTurnLocally("interrupted", null);
+          // OpenAI offers a new model only to a Codex recent enough for it.
+          else if (error instanceof ModelMissing) {
+            this.endTurnLocally("error", `${model} is not in this Codex's model catalog: a newer Codex may offer it. Update Codex, then resend your message, or select another model before resending.`, false, "update_codex");
+          } else {
+            this.endTurnLocally("error", `Codex could not confirm ${model} in its model catalog. Resend your message to retry, or select another model before resending.`);
+          }
         }
         return;
       } finally {
@@ -672,7 +693,7 @@ export class CodexSession implements AgentSession {
     try {
       const models = await untilAborted(catalog, AbortSignal.any([signal, deadline]));
       if (models?.some((entry) => entry.model === model || entry.id === model)) return;
-      throw new Error("model missing from catalog");
+      throw models ? new ModelMissing() : new Error("Codex's model catalog could not be read");
     } catch (error) {
       // A retry must be able to look again if Codex never answered the first request.
       if (!signal.aborted) this.modelCatalog = undefined;
@@ -1119,11 +1140,11 @@ export class CodexSession implements AgentSession {
     this.emit({ type: "turn_started" });
   }
 
-  private endTurnLocally(outcome: "error" | "interrupted", error: string | null, force = false): void {
+  private endTurnLocally(outcome: "error" | "interrupted", error: string | null, force = false, remedy?: TurnRemedy): void {
     this.busy = false;
     this.activeTurnId = null;
     this.turnStarting = false;
-    const event: ChatEvent = { type: "turn_ended", outcome, duration_ms: null, cost_usd: null, context_tokens: null, error };
+    const event: ChatEvent = { type: "turn_ended", outcome, duration_ms: null, cost_usd: null, context_tokens: null, error, ...(remedy ? { remedy } : {}) };
     if (force) this.host.emit(event);
     else this.emit(event);
   }
@@ -1146,6 +1167,13 @@ function ofAnotherThread(message: ServerNotification, threadId: string): boolean
   if (message.method === "serverRequest/resolved") return false;
   const params = message.params as { threadId?: unknown };
   return typeof params.threadId === "string" && params.threadId !== threadId;
+}
+
+/** Codex's catalog was read and lacks the chat's model. */
+class ModelMissing extends Error {
+  constructor() {
+    super("model missing from Codex's catalog");
+  }
 }
 
 /** `promise`, or a rejection as soon as `signal` aborts (an interrupt, a stop). */

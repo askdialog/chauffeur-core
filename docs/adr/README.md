@@ -199,3 +199,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [A history exploration opens its latest imported session](import-history-latest-session-open.md) | 2026-11-24 | accepted |
 | [A message steering the turn can be taken back until the agent reads it](take-back-a-steering-message.md) | 2026-11-24 | accepted |
 | [Esc gives the interrupted message back to the composer, and Esc twice empties it](esc-gives-back-the-message-and-double-esc-empties.md) | 2026-11-25 | accepted |
+| [Codex is updated from Chauffeur, in Settings › Agents and beside the error it causes](update-codex-from-chauffeur.md) | 2026-11-26 | accepted |

@@ -2902,6 +2902,25 @@ impl ChatManager {
         }
     }
 
+    /// `agent`'s CLI was updated: its chats' sessions, running the old one, close as soon as they
+    /// are idle (now, or at their next message once idle), and the next message resumes each with
+    /// the new CLI, the conversation kept. A working agent is never interrupted.
+    pub async fn agent_updated(&self, agent: AgentKind) {
+        let live: Vec<String> = self.live.lock().unwrap().iter().cloned().collect();
+        for id in live {
+            let Ok(chat) = self.current(&id) else {
+                continue;
+            };
+            if chat.agent != agent {
+                continue;
+            }
+            self.stale_briefing.lock().unwrap().insert(id.clone());
+            if chat.status == ChatStatus::Idle {
+                self.close_for_briefing(&id, false).await;
+            }
+        }
+    }
+
     /// The variables the broken MCP servers of the running chats lack, by name.
     pub fn missing_env(&self) -> std::collections::BTreeSet<String> {
         let live = self.live.lock().unwrap().clone();

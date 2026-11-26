@@ -1423,6 +1423,20 @@ methods! {
         #[access(Any)]
         #[relay(Local)]
         OllamaDelete(OllamaModelParams) -> EmptyParams,
+        /// The Codex CLI chats run: where, its version, the latest one published, and an update
+        /// under way or the last one that failed. Reads the latest version at most hourly.
+        #[serde(rename = "codex.status")]
+        #[access(Any)]
+        #[relay(Local)]
+        CodexStatus(EmptyParams) -> CodexCliStatus,
+        /// Runs `codex update` in the background, which updates Codex the way it was installed
+        /// (npm, Homebrew, its installer); returns at once, `codex.status` follows it. Once done,
+        /// the Codex chats' sessions close as soon as they are idle, their next message running
+        /// the new Codex. Refused while one runs, or when Codex is not installed.
+        #[serde(rename = "codex.update")]
+        #[access(User)]
+        #[relay(Local)]
+        CodexUpdate(EmptyParams) -> CodexCliStatus,
         /// GitHub as Chauffeur reaches it: git found or not, `gh` found or not, the account it is
         /// signed in to and that account's organizations, and a connection under way.
         #[serde(rename = "github.status")]
@@ -4726,6 +4740,22 @@ pub struct RemotePushParams {
 pub struct OllamaModelParams {
     /// As Ollama names it, e.g. `qwen3.8` or `glm-4.7-flash:q8_0`.
     pub model: String,
+}
+
+/// The Codex CLI chats run (`codex.status`).
+#[derive(Serialize, Deserialize, TS, Clone, Debug, Default, PartialEq)]
+#[ts(export)]
+pub struct CodexCliStatus {
+    /// The `codex` executable chats run; none when Codex is not installed.
+    pub path: Option<String>,
+    /// Its version, as `codex --version` gives it (`0.167.0`); none when it did not say.
+    pub version: Option<String>,
+    /// The latest version published (npm's `@openai/codex`); none when it could not be read.
+    pub latest: Option<String>,
+    /// `codex update` runs now.
+    pub updating: bool,
+    /// Why the last update failed, with the end of its output; none after a success.
+    pub error: Option<String>,
 }
 
 /// Ollama, which serves the local models (`ollama.status`).
