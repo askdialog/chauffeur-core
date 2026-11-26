@@ -984,22 +984,12 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::UpdateStatus(_) => to_value(daemon.updates.status()),
         ClientCall::UpdateCheck(_) => to_value(daemon.updates.check_now(daemon).await),
         ClientCall::UpdateInstall(_) => to_value(daemon.updates.install(daemon)?),
-        ClientCall::OllamaStatus(_) => to_value(daemon.ollama.status().await),
-        // Boxed, as the import above: their futures, inlined, would grow `handle`'s frame.
-        ClientCall::CodexStatus(_) => to_value(Box::pin(daemon.codex_cli.status(daemon)).await),
-        ClientCall::CodexUpdate(_) => to_value(Box::pin(daemon.codex_cli.update(daemon)).await?),
-        ClientCall::OllamaInstall(_) => {
-            daemon.ollama.install()?;
-            to_value(EmptyParams {})
-        }
-        ClientCall::OllamaPull(params) => {
-            daemon.ollama.pull(&params.model)?;
-            to_value(EmptyParams {})
-        }
-        ClientCall::OllamaDelete(params) => {
-            daemon.ollama.delete(&params.model).await?;
-            to_value(EmptyParams {})
-        }
+        call @ (ClientCall::OllamaStatus(_)
+        | ClientCall::OllamaInstall(_)
+        | ClientCall::OllamaPull(_)
+        | ClientCall::OllamaDelete(_)
+        | ClientCall::CodexStatus(_)
+        | ClientCall::CodexUpdate(_)) => handle_local_tools(daemon, call).await,
         ClientCall::GithubStatus(_) => to_value(daemon.github.status().await),
         ClientCall::GithubConnect(_) => {
             daemon.github.connect()?;
@@ -1123,6 +1113,35 @@ fn handle_deliverables(
                     .set_brand(&params.chat, params.brand.as_deref())?,
             ),
             _ => unreachable!("only deliverable calls reach this handler"),
+        }
+    })
+}
+
+/// Ollama and the Codex CLI: out of `handle_other`, whose poll frame is at the edge of a worker's
+/// stack when a transfer reenters it (each arm left there grows it in a debug build).
+#[inline(never)]
+fn handle_local_tools(
+    daemon: &Arc<Daemon>,
+    call: ClientCall,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Value>> + Send + '_>> {
+    Box::pin(async move {
+        match call {
+            ClientCall::OllamaStatus(_) => to_value(daemon.ollama.status().await),
+            ClientCall::OllamaInstall(_) => {
+                daemon.ollama.install()?;
+                to_value(EmptyParams {})
+            }
+            ClientCall::OllamaPull(params) => {
+                daemon.ollama.pull(&params.model)?;
+                to_value(EmptyParams {})
+            }
+            ClientCall::OllamaDelete(params) => {
+                daemon.ollama.delete(&params.model).await?;
+                to_value(EmptyParams {})
+            }
+            ClientCall::CodexStatus(_) => to_value(daemon.codex_cli.status(daemon).await),
+            ClientCall::CodexUpdate(_) => to_value(daemon.codex_cli.update(daemon).await?),
+            _ => unreachable!("only Ollama and Codex CLI calls reach this handler"),
         }
     })
 }
