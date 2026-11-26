@@ -122,12 +122,14 @@ import { QueuePanel } from "./QueuePanel";
 import { TasksPanel } from "./TasksPanel";
 import { isDoubleEsc, NO_RECALL, type Recall, recall, recallable } from "@/lib/promptHistory";
 import { useSlashMenu } from "./useSlashMenu";
+import { usePromptsMenu } from "./usePromptsMenu";
 import { TimelineRail } from "./TimelineRail";
 import { ChatFind, textRanges } from "./ChatFind";
 import { hasMod, kbd, stepTab } from "../../lib/keys";
 import { chatJump, onceIn, tabKey } from "../../lib/shortcuts";
 import { dismissedSuggestions, shownSuggestion, type Suggestion, suggestionKey } from "@/lib/suggestions";
 import { hasSlackMessageLink } from "@/lib/connectors";
+import { opensPrompts } from "@/lib/prompts";
 
 type ChatPanelProps = {
   workspace: WorkspaceInfo;
@@ -1702,7 +1704,7 @@ function WorkingFooter({
   );
 }
 
-const ComposerBox = memo(function ComposerBox({
+export const ComposerBox = memo(function ComposerBox({
   draftKey,
   working,
   disabled,
@@ -1761,6 +1763,10 @@ const ComposerBox = memo(function ComposerBox({
     setText(`/${command.name} `);
     area.current?.focus();
   });
+  const prompts = usePromptsMenu(
+    (prompt) => area.current?.insert(prompt),
+    () => area.current?.focus(),
+  );
   // Set aside (Esc, or taken with Tab), for this chat, until the next one arrives. Typing only hides
   // it: it shows again once the composer is empty.
   const [dismissed, setDismissed] = useState(() => dismissedSuggestions.get(draftKey));
@@ -1824,6 +1830,7 @@ const ComposerBox = memo(function ComposerBox({
           </div>
         )}
         {slash.menu}
+        {prompts.menu}
         <ImageStrip images={images} reading={reading} onRemove={attachments.remove} className="px-2.5 pt-2.5" />
         <ComposerEditor
           ref={area}
@@ -1836,6 +1843,12 @@ const ComposerBox = memo(function ComposerBox({
           }}
           onPaste={attachments.onPaste}
           onKeyDown={(e) => {
+            if (opensPrompts(e)) {
+              e.preventDefault();
+              slash.close();
+              prompts.show();
+              return;
+            }
             const offer = suggestionKey(ghost, {
               key: e.key,
               shiftKey: e.shiftKey,

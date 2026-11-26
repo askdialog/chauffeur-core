@@ -27,6 +27,8 @@ export type ComposerEditorHandle = {
   focus: () => void;
   /** Whether the caret (no selection) is on the first / last line of the text: ↑ and ↓ leave the editor there. */
   edges: () => { top: boolean; bottom: boolean };
+  /** Types `text` at the caret, over the selection if any, the caret after it, and focuses the editor. */
+  insert: (text: string) => void;
 };
 
 export function ComposerEditor({
@@ -70,6 +72,13 @@ export function ComposerEditor({
         if (!state || !state.selection.main.empty) return { top: false, bottom: false };
         const line = state.doc.lineAt(state.selection.main.head);
         return { top: line.number === 1, bottom: line.number === state.doc.lines };
+      },
+      insert: (text) => {
+        const current = view.current;
+        if (!current) return;
+        // As typed: it reaches `onChange` and the undo history.
+        current.dispatch(current.state.replaceSelection(text), { userEvent: "input", scrollIntoView: true });
+        current.focus();
       },
     }),
     [],
