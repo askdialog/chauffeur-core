@@ -2,6 +2,7 @@
 //! `<CHAUFFEUR_HOME>/prompts/`, holding its text. Read on every call, with no cache, so a file
 //! edited by hand shows the next time a client lists them.
 
+use std::io::Write;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -39,8 +40,12 @@ pub fn list(daemon: &Daemon) -> Result<Vec<Prompt>> {
                 .into());
         }
     };
+    // An entry the folder fails to give is an error: save and delete decide on the whole list.
+    let entries = entries
+        .collect::<std::io::Result<Vec<_>>>()
+        .context("could not read the prompts folder")?;
     let mut prompts: Vec<Prompt> = entries
-        .flatten()
+        .into_iter()
         .filter(|entry| entry.file_type().is_ok_and(|t| t.is_file()))
         .filter_map(|entry| {
             let name = entry
@@ -155,9 +160,15 @@ pub fn save(daemon: &Daemon, params: &PromptSaveParams) -> Result<Vec<Prompt>> {
         ));
     }
     std::fs::create_dir_all(&root).context("could not create the prompts folder")?;
-    let tmp = root.join(format!(".{name}{EXTENSION}.tmp"));
-    std::fs::write(&tmp, &params.text)
-        .and_then(|()| std::fs::rename(&tmp, &target))
+    // A new file of a random name (`O_EXCL`): never a link someone left at a name known ahead,
+    // and a file a crash left behind never blocks the next save. Not `.md`, so never listed.
+    let tmp = tempfile::Builder::new()
+        .prefix(".")
+        .suffix(".tmp")
+        .tempfile_in(&root)
+        .and_then(|mut tmp| tmp.write_all(params.text.as_bytes()).map(|()| tmp))
+        .with_context(|| format!("could not write the prompt {name}"))?;
+    tmp.persist(&target)
         .with_context(|| format!("could not write the prompt {name}"))?;
     if let Some(previous) = previous {
         let old = file(&root, previous);

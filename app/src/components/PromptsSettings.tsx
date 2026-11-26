@@ -94,7 +94,8 @@ function PromptEditor({ prompt, onSaved, onDiscard }: {
         return;
       }
       const list = await client.call("prompts.save", { name, text, previous: prompt?.name });
-      // The daemon drops a trailing newline: the editor shows the text as it now reads.
+      // The daemon drops a trailing newline: the editor shows the text as it now reads. The fields
+      // stay read-only meanwhile, so nothing typed during the save is replaced.
       setText(list.find((p) => p.name === name)?.text ?? text);
       onSaved(list, name);
     } catch (failure) {
@@ -117,11 +118,11 @@ function PromptEditor({ prompt, onSaved, onDiscard }: {
   return (
     <li className="flex flex-col gap-2 rounded-md border border-line p-3" data-testid="prompt" data-prompt={prompt?.name ?? ""}>
       <Field label="Name">
-        <input className={inputClass} value={name} onChange={(event) => { setName(event.target.value); if (error?.name) setError(null); }} placeholder="Carry on" autoFocus={!prompt} data-testid="prompt-name" />
+        <input className={inputClass} value={name} onChange={(event) => { setName(event.target.value); if (error?.name) setError(null); }} placeholder="Carry on" autoFocus={!prompt} readOnly={busy} data-testid="prompt-name" />
         {error?.name && <p role="alert" className="mt-1 text-[11.5px] text-danger selectable" data-testid="prompt-name-error">{error.message}</p>}
       </Field>
       <Field label="Text">
-        <textarea className={`${inputClass} h-auto resize-y py-1.5`} rows={Math.min(10, Math.max(3, text.split("\n").length))} value={text} onChange={(event) => setText(event.target.value)} placeholder="Agreed, carry on." data-testid="prompt-text" />
+        <textarea className={`${inputClass} h-auto resize-y py-1.5`} rows={Math.min(10, Math.max(3, text.split("\n").length))} value={text} onChange={(event) => setText(event.target.value)} placeholder="Agreed, carry on." readOnly={busy} data-testid="prompt-text" />
       </Field>
       <div className="flex items-center justify-end gap-2">
         {error && !error.name && <p role="alert" className="mr-auto text-[11.5px] text-danger selectable" data-testid="prompt-save-error">{error.message}</p>}

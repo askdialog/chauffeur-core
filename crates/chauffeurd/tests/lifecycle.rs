@@ -23363,7 +23363,18 @@ async fn saved_prompts_are_files_of_the_prompts_folder_that_the_user_names_and_e
         "Yes, go ahead"
     );
     // Saving the same name replaces its text; lists sort by name ignoring case.
+    // A link planted where a save could put its temporary file is never written through, and
+    // a file left there never stops a save.
+    let outside = f.daemon.paths.home.join("outside.txt");
+    std::fs::write(&outside, "untouched").unwrap();
+    std::os::unix::fs::symlink(&outside, folder.join(".yes.md.tmp")).unwrap();
     save("yes", "Yes, carry on").await.unwrap();
+    assert_eq!(std::fs::read_to_string(&outside).unwrap(), "untouched");
+    assert_eq!(
+        std::fs::read_to_string(folder.join("yes.md")).unwrap(),
+        "Yes, carry on"
+    );
+    std::fs::remove_file(folder.join(".yes.md.tmp")).unwrap();
     save(
         "Compact",
         "Compact the conversation:\n- keep the decisions\n",

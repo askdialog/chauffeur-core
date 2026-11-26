@@ -146,3 +146,31 @@ domTest("openSettings with the prompts section opens Settings › Prompts", file
     call.mockRestore();
   }
 });
+
+domTest("a prompt's fields stay read-only while its save is on its way, so nothing typed then is replaced", file, async ({ render, click, fill, until }) => {
+  const { client } = await import("@/state/app");
+  const { deferred } = await import("@/test/dom");
+  const { PromptsSettings } = await import("./PromptsSettings");
+  const reply = deferred<Prompt[]>();
+  const call = spyOn(client, "call").mockImplementation(async (method) => {
+    if (method === "prompts.list") return [{ name: "yes", text: "Yes" }];
+    if (method === "prompts.save") return reply.promise;
+    throw new Error(`Unexpected RPC: ${method}`);
+  });
+  const field = (testId: string) => within(0, testId) as HTMLInputElement | HTMLTextAreaElement | null;
+  try {
+    await render(<PromptsSettings />);
+    await until(() => names().length === 1);
+    expect(field("prompt-text")?.readOnly).toBe(false);
+    await fill('[data-testid="prompt-text"]', "Yes, go ahead");
+    await click('[data-testid="prompt-save"]');
+    expect(field("prompt-name")?.readOnly).toBe(true);
+    expect(field("prompt-text")?.readOnly).toBe(true);
+    reply.resolve([{ name: "yes", text: "Yes, go ahead" }]);
+    await until(() => field("prompt-text")?.readOnly === false);
+    expect(field("prompt-text")?.value).toBe("Yes, go ahead");
+  } finally {
+    await render(null);
+    call.mockRestore();
+  }
+});
