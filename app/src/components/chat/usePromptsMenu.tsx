@@ -3,13 +3,15 @@
 // to the composer, never sending it.
 
 import type { Prompt } from "@chauffeur/protocol";
-import { useEffect, useRef, useState } from "react";
-import { hasMod } from "@/lib/keys";
-import { matchPrompts } from "@/lib/prompts";
+import { Search } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { stepMatch } from "@/lib/chatFind";
+import { menuKey } from "@/lib/composerMenu";
+import { matchPrompts, opensPrompts } from "@/lib/prompts";
 import { errorMessage } from "@/lib/rpc";
 import { client, openSettings } from "@/state/app";
-import { Spinner } from "../ui";
-import { ComposerMenu, stepActive } from "./ComposerMenu";
+import { Kbd, Spinner } from "@/components/ui";
+import { ComposerMenu } from "./ComposerMenu";
 
 /**
  * The prompts menu: `show` opens it and reads the prompts again. ↑↓ move, ↵ or Tab insert the
@@ -22,18 +24,16 @@ export function usePromptsMenu(insert: (text: string) => void, leave: () => void
   const [filter, setFilter] = useState("");
   const [active, setActive] = useState(0);
   const panel = useRef<HTMLDivElement>(null);
+  const listId = useId();
   // The latest opening: a list read for an earlier one is not shown.
   const opening = useRef(0);
   const latestLeave = useRef(leave);
   latestLeave.current = leave;
 
-  const show = () => {
+  const load = () => {
     const id = ++opening.current;
-    setOpen(true);
     setPrompts(null);
     setError(null);
-    setFilter("");
-    setActive(0);
     client
       .call("prompts.list", {})
       .then((list) => {
@@ -43,14 +43,16 @@ export function usePromptsMenu(insert: (text: string) => void, leave: () => void
         if (id === opening.current) setError(errorMessage(failure));
       });
   };
-  const hide = () => {
+  const show = () => {
+    setOpen(true);
+    setFilter("");
+    setActive(0);
+    load();
+  };
+  const hide = useCallback(() => {
     opening.current += 1;
     setOpen(false);
-  };
-  const close = () => {
-    hide();
-    leave();
-  };
+  }, []);
   const pick = (prompt: Prompt) => {
     hide();
     insert(prompt.text);
@@ -65,9 +67,8 @@ export function usePromptsMenu(insert: (text: string) => void, leave: () => void
   useEffect(() => {
     if (!open) return;
     const onDown = (event: MouseEvent) => {
-      if (panel.current?.contains(event.target as Node)) return;
-      opening.current += 1;
-      setOpen(false);
+      if (event.target instanceof Node && panel.current?.contains(event.target)) return;
+      hide();
       setTimeout(() => {
         const focus = document.activeElement;
         // The filter field, gone with the menu, is no text field any more.
@@ -77,33 +78,51 @@ export function usePromptsMenu(insert: (text: string) => void, leave: () => void
     };
     document.addEventListener("mousedown", onDown, true);
     return () => document.removeEventListener("mousedown", onDown, true);
-  }, [open]);
+  }, [open, hide]);
 
   const matches = prompts ? matchPrompts(prompts, filter) : [];
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.nativeEvent.isComposing) return;
-    if (event.key === "Escape") {
-      // Not for the chat too: it would interrupt the agent.
-      event.preventDefault();
+    const { nativeEvent } = event;
+    // The input method's key (WebKit may end composition before its confirming key, keyCode 229);
+    // nor for the chat, whose Esc would interrupt the agent.
+    if (nativeEvent.isComposing || nativeEvent.keyCode === 229) return event.stopPropagation();
+    // Taken already: a subagent's panel closing on Esc.
+    if (nativeEvent.defaultPrevented) return;
+    // The focus stays in the menu.
+    if (opensPrompts(event)) return event.preventDefault();
+    const action = menuKey(event);
+    if (!action) return;
+    event.preventDefault();
+    if (action === "close") {
+      // Nor for the chat: it would interrupt the agent.
       event.stopPropagation();
-      close();
-    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-      event.preventDefault();
-      const step = event.key === "ArrowDown" ? 1 : -1;
-      if (matches.length > 0) setActive((i) => stepActive(i, step, matches.length));
-    } else if ((event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) || (event.key === "Enter" && !event.shiftKey && !hasMod(event))) {
-      // ⇧Tab included: the focus stays in the menu.
-      event.preventDefault();
-      if (event.key === "Tab" && event.shiftKey) return;
+      hide();
+      leave();
+    } else if (action === "pick") {
       if (prompts?.length === 0) return toSettings();
       const prompt = matches[Math.min(active, matches.length - 1)];
       if (prompt) pick(prompt);
-    }
+    } else if (matches.length > 0) setActive((i) => stepMatch(i, matches.length, action === "down" ? 1 : -1));
   };
 
   let message: React.ReactNode;
-  if (error) message = `Could not read your prompts: ${error}`;
-  else if (!prompts) {
+  if (error) {
+    message = (
+      <span className="flex items-center gap-2" role="alert">
+        <span className="selectable">Could not read your prompts: {error}</span>
+        <button
+          type="button"
+          className="rounded px-1.5 py-0.5 text-[12px] text-accent hover:bg-hover"
+          // Keep the focus in the filter field, which holds the menu's keys.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={load}
+          data-testid="prompts-menu-retry"
+        >
+          Retry
+        </button>
+      </span>
+    );
+  } else if (!prompts) {
     message = (
       <>
         <Spinner /> Reading your prompts…
@@ -111,15 +130,15 @@ export function usePromptsMenu(insert: (text: string) => void, leave: () => void
     );
   } else if (prompts.length === 0) {
     message = (
-      <span className="flex w-full items-center justify-between gap-2" data-testid="prompts-menu-empty">
+      <span className="flex items-center gap-2" data-testid="prompts-menu-empty">
         No prompt saved yet.
         <button
           type="button"
-          className="rounded px-1.5 py-0.5 text-[12px] text-accent hover:bg-hover"
+          className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[12px] text-accent hover:bg-hover"
           onClick={toSettings}
           data-testid="prompts-menu-settings"
         >
-          Open Settings › Prompts
+          Open Settings › Prompts <Kbd>↵</Kbd>
         </button>
       </span>
     );
@@ -128,21 +147,27 @@ export function usePromptsMenu(insert: (text: string) => void, leave: () => void
   const menu = open ? (
     <ComposerMenu
       ref={panel}
+      id={listId}
       testId="prompts-menu"
       header={
-        <input
-          className="w-full shrink-0 border-b border-line bg-transparent px-3 py-1.5 text-[12.5px] text-fg outline-none placeholder:text-faint"
-          placeholder="Filter your prompts…"
-          aria-label="Filter your prompts"
-          value={filter}
-          onChange={(event) => {
-            setFilter(event.target.value);
-            setActive(0);
-          }}
-          onKeyDown={onKeyDown}
-          autoFocus
-          data-testid="prompts-filter"
-        />
+        <div className="flex h-[34px] shrink-0 items-center gap-[7px] border-b border-line px-3">
+          <Search size={13} className="shrink-0 text-faint" />
+          <input
+            className="h-full min-w-0 flex-1 bg-transparent text-[12.5px] text-fg placeholder:text-faint focus:outline-none"
+            placeholder="Filter your prompts…"
+            aria-label="Filter your prompts"
+            aria-controls={listId}
+            aria-activedescendant={matches.length > 0 ? `${listId}-${Math.min(active, matches.length - 1)}` : undefined}
+            value={filter}
+            onChange={(event) => {
+              setFilter(event.target.value);
+              setActive(0);
+            }}
+            onKeyDown={onKeyDown}
+            autoFocus
+            data-testid="prompts-filter"
+          />
+        </div>
       }
       items={matches}
       keyOf={(prompt) => prompt.name}

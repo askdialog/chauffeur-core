@@ -2,10 +2,11 @@
 // a row without taking the focus from where the menu's owner keeps it.
 
 import { type ReactNode, type Ref, useEffect, useRef } from "react";
-import { cx } from "../ui";
+import { cx } from "@/components/ui";
 
 export function ComposerMenu<T>({
   ref,
+  id,
   testId,
   header,
   items,
@@ -17,6 +18,8 @@ export function ComposerMenu<T>({
   children: row,
 }: {
   ref?: Ref<HTMLDivElement>;
+  /** The listbox's id, and its rows' (`<id>-<index>`), for a filter field's `aria-activedescendant`. */
+  id?: string;
   testId: string;
   /** Above the rows, out of their scrolling: a filter field. */
   header?: ReactNode;
@@ -42,13 +45,14 @@ export function ComposerMenu<T>({
       className="absolute right-0 bottom-full left-0 z-20 mb-1.5 flex max-h-[280px] flex-col overflow-hidden rounded-lg border border-line-strong bg-raised shadow-xl"
     >
       {header}
-      <div ref={list} role="listbox" className="min-h-0 overflow-y-auto py-1">
+      <div ref={list} id={id} role="listbox" className="min-h-0 overflow-y-auto py-1">
         {items.length === 0 ? (
           <div className="flex items-center gap-2 px-3 py-1.5 text-[12px] text-faint">{message}</div>
         ) : (
           items.map((item, index) => (
             <button
               key={keyOf(item)}
+              id={id && `${id}-${index}`}
               type="button"
               role="option"
               aria-selected={index === active}
@@ -71,9 +75,4 @@ export function ComposerMenu<T>({
       </div>
     </div>
   );
-}
-
-/** The row ↓ (`step` 1) or ↑ (-1) moves to among `count`, wrapping around. */
-export function stepActive(active: number, step: 1 | -1, count: number): number {
-  return (active + step + count) % count;
 }

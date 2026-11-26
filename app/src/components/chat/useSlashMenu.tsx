@@ -3,10 +3,11 @@
 import type { SlashCommand } from "@chauffeur/protocol";
 import { useEffect, useMemo, useState } from "react";
 import { matchCommands, slashQuery } from "@/lib/commands";
-import { hasMod } from "@/lib/keys";
+import { stepMatch } from "@/lib/chatFind";
+import { menuKey } from "@/lib/composerMenu";
 import { type CommandsSource, commandsKey, loadCommands, useApp } from "@/state/app";
-import { Spinner } from "../ui";
-import { ComposerMenu, stepActive } from "./ComposerMenu";
+import { Spinner } from "@/components/ui";
+import { ComposerMenu } from "./ComposerMenu";
 
 /** What the menu reads of a key press: a DOM event or React's. */
 type SlashKeyEvent = Pick<
@@ -49,25 +50,19 @@ export function useSlashMenu(
 
   const onKeyDown = (e: SlashKeyEvent): boolean => {
     if (!open || e.isComposing) return false;
-    if (e.key === "Escape") {
+    const action = menuKey(e);
+    if (action === "close") {
       e.preventDefault();
       setDismissed(text);
       return true;
     }
-    if (matches.length === 0) return false;
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      const step = e.key === "ArrowDown" ? 1 : -1;
-      setActive((i) => stepActive(i, step, matches.length));
-      return true;
-    }
-    if ((e.key === "Tab" && !e.ctrlKey && !e.shiftKey) || (e.key === "Enter" && !e.shiftKey && !hasMod(e))) {
-      e.preventDefault();
+    if (!action || matches.length === 0) return false;
+    e.preventDefault();
+    if (action === "pick") {
       const command = matches[Math.min(active, matches.length - 1)];
       if (command) pick(command);
-      return true;
-    }
-    return false;
+    } else setActive((i) => stepMatch(i, matches.length, action === "down" ? 1 : -1));
+    return true;
   };
 
   let message: React.ReactNode = null;

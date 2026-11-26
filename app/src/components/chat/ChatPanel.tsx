@@ -1881,6 +1881,8 @@ export const ComposerBox = memo(function ComposerBox({
             }
             if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
               e.preventDefault();
+              // A held ↵ sends once: its repeats would send what a menu just inserted with it.
+              if (e.repeat) return;
               // ⌘⏎ while the agent works: wait for the end of its turn instead of steering it.
               void submit(hasMod(e) && working ? "queue" : "steer");
             } else if (e.key === "Escape" && working) {

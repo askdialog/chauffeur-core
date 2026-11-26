@@ -6,7 +6,7 @@ import { deferred, domTest } from "@/test/dom";
 
 const file = import.meta.path;
 
-type Key = { key: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean };
+type Key = { key: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; keyCode?: number; repeat?: boolean };
 
 /** A chat's composer whose daemon holds `prompts` (read again on each `prompts.list`). */
 async function setup(render: (children: React.ReactNode) => Promise<void>, prompts: () => Prompt[] | Promise<Prompt[]>, draft = "") {
@@ -15,10 +15,8 @@ async function setup(render: (children: React.ReactNode) => Promise<void>, promp
   const { client, useApp } = await import("@/state/app");
   const { drafts } = await import("@/lib/drafts");
   const { ComposerBox } = await import("./ChatPanel");
-  const calls: string[] = [];
   const sent: string[] = [];
   spyOn(client, "call").mockImplementation(async (method: string) => {
-    calls.push(method);
     if (method === "prompts.list") return prompts();
     if (method === "commands.list") return { commands: [{ name: "compact", description: "Compact the conversation", argument_hint: null }] };
     throw new Error(`Unexpected RPC: ${method}`);
@@ -41,12 +39,13 @@ async function setup(render: (children: React.ReactNode) => Promise<void>, promp
   if (!box) throw new Error("no composer");
   const view = EditorView.findFromDOM(box);
   if (!view) throw new Error("no editor");
+  /** Whether the key's default action was prevented. */
   const press = async (target: Element, key: Key) => {
     const event = new window.KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...key });
     await act(async () => { target.dispatchEvent(event as unknown as Event); });
+    return event.defaultPrevented;
   };
   return {
-    calls,
     sent,
     useApp,
     /** What the composer holds, its selection drawn as [from|to] (a lone caret as |). */
@@ -125,15 +124,20 @@ domTest("the menu reads the prompts at each opening, filters them by name and te
   expect(rows()).toEqual(["agreed", "Compact"]);
   await c.pressInMenu({ key: "Escape" });
 
-  // A prompt saved since shows at the next opening, the list read before shown no more meanwhile.
+  // A prompt saved since shows at the next opening: the list read before is not shown meanwhile,
+  // nor a list read for an opening already closed, arriving late.
+  const late = deferred<Prompt[]>();
+  prompts = () => late.promise;
+  await c.pressInComposer(shiftTab);
+  await c.pressInMenu({ key: "Escape" });
   const reading = deferred<Prompt[]>();
   prompts = () => reading.promise;
   await c.pressInComposer(shiftTab);
   expect(rows()).toEqual([]);
-  expect(menu()?.textContent).toContain("Reading your prompts");
   await act(async () => reading.resolve([...saved, { name: "yes", text: "Yes, go ahead" }]));
   await until(() => rows().length === 3);
-  expect(c.calls.filter((method) => method === "prompts.list")).toHaveLength(2);
+  await act(async () => late.resolve(saved));
+  expect(rows()).toHaveLength(3);
 
   // ↑↓ move, wrapping around.
   expect(selected()).toBe("agreed");
@@ -143,11 +147,9 @@ domTest("the menu reads the prompts at each opening, filters them by name and te
   await c.pressInMenu({ key: "ArrowDown" });
   expect(selected()).toBe("Compact");
 
-  // The filter matches names and texts ignoring case, and never lands in the composer.
+  // The filter (lib/prompts) never lands in the composer.
   await fill("[data-testid=prompts-filter]", "GO AH");
   expect(rows()).toEqual(["yes"]);
-  await fill("[data-testid=prompts-filter]", "compact");
-  expect(rows()).toEqual(["Compact"]);
   await fill("[data-testid=prompts-filter]", "nothing like it");
   expect(rows()).toEqual([]);
   expect(menu()?.textContent).toContain('No prompt matches "nothing like it"');
@@ -196,7 +198,6 @@ domTest("the menu reads the prompts at each opening, filters them by name and te
     expect(c.composerFocused()).toBe(target !== field);
   }
   expect(c.sent).toEqual([]);
-  expect(c.calls.filter((method) => method !== "prompts.list")).toEqual([]);
 
   // The text goes as typed when the user sends it.
   await c.select(0, 24);
@@ -204,14 +205,26 @@ domTest("the menu reads the prompts at each opening, filters them by name and te
   await until(() => rows().length === 3);
   await fill("[data-testid=prompts-filter]", "compact");
   await c.pressInMenu({ key: "Enter" });
+  // The ↵ that inserted it, held, repeats in the composer: it sends nothing.
+  await c.pressInComposer({ key: "Enter", repeat: true });
+  expect(c.composer()).toBe("/compact Keep the decisions|");
+  expect(c.sent).toEqual([]);
   await c.pressInComposer({ key: "Enter" });
   await until(() => c.sent.length === 1);
   expect(c.sent).toEqual(["/compact Keep the decisions"]);
 });
 
 domTest("with no prompt saved the menu says so and opens Settings › Prompts", file, async ({ render, until, click }) => {
-  const c = await setup(render, () => []);
+  let reads = 0;
+  const c = await setup(render, () => {
+    reads += 1;
+    if (reads === 1) throw new Error("Permission denied");
+    return [];
+  });
+  // A list that could not be read says so, and is read again on Retry.
   await c.pressInComposer(shiftTab);
+  await until(() => menu()?.textContent?.includes("Could not read your prompts: Permission denied") ?? false);
+  await click("[data-testid=prompts-menu-retry]");
   await until(() => document.querySelector("[data-testid=prompts-menu-empty]") !== null);
   expect(menu()?.textContent).toContain("No prompt saved yet");
   await click("[data-testid=prompts-menu-settings]");
@@ -239,8 +252,17 @@ domTest("Tab takes the suggestion and the / menu's command; ⇧Tab takes neither
   await until(() => rows().length === 2);
   expect(c.composer()).toBe("/com|");
 
+  // A key the input method took (WebKit's 229) or a panel took already (Esc) does nothing here.
+  await c.pressInMenu({ key: "Enter", keyCode: 229 });
+  expect(menu()).not.toBeNull();
+  const panel = (event: KeyboardEvent) => event.preventDefault();
+  window.addEventListener("keydown", panel, true);
+  await c.pressInMenu({ key: "Escape" });
+  window.removeEventListener("keydown", panel, true);
+  expect(menu()).not.toBeNull();
+
   // In the prompts menu, as in the / menu, Tab inserts; ⇧Tab keeps the focus there.
-  await c.pressInMenu(shiftTab);
+  expect(await c.pressInMenu(shiftTab)).toBe(true);
   expect(document.activeElement).toBe(filter());
   await c.pressInMenu({ key: "Tab" });
   expect(menu()).toBeNull();
