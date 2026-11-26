@@ -1,7 +1,7 @@
 import type { ChatInfo, DeliverableVersion, FileContent } from "@chauffeur/protocol";
-import { Download, FileText, History, Maximize2, Minimize2, RefreshCw, Share2, X } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
-import { deliverableDownloadUrl, deliverableFormat, type Deliverable, versionPath } from "@/lib/deliverables";
+import { Download, FileText, History, Maximize2, Minimize2, RefreshCw, Share2, X, ZoomIn, ZoomOut } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { deliverableDownloadUrl, deliverableFormat, type Deliverable, fitScale, versionPath } from "@/lib/deliverables";
 import { openExternal } from "@/lib/native";
 import { errorMessage } from "@/lib/rpc";
 import { client, toast, useApp } from "@/state/app";
@@ -67,6 +67,7 @@ function DeliverableReader({ workspaceId, document, revision, expanded, onExpand
   const [reload, setReload] = useState(0);
   const [downloading, setDownloading] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [fit, setFit] = useState(true);
   const share = useFileShare(workspaceId, chosen);
   const connection = useApp((s) => s.connection.status);
   useEffect(() => {
@@ -99,6 +100,7 @@ function DeliverableReader({ workspaceId, document, revision, expanded, onExpand
             options={[{ value: "current", label: "Current version" }, ...versions.map((v) => ({ value: String(v.n), label: `Version ${v.n}`, description: `${v.by === "agent" ? "By the agent" : v.by === "hand" ? "By hand" : "Restored"} · ${new Date(v.at).toLocaleString()}` }))]}
             onChange={(value) => setVersion(value === "current" ? null : Number(value))} />
         )}
+        {!pdf && <IconButton title={fit ? "Actual size" : "Fit to width"} onClick={() => setFit(!fit)}>{fit ? <ZoomIn size={14} /> : <ZoomOut size={14} />}</IconButton>}
         <IconButton title="Reload document" onClick={() => setReload(reload + 1)}><RefreshCw size={14} /></IconButton>
         <IconButton title={expanded ? "Show conversation" : "Expand document"} onClick={onExpand}>{expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</IconButton>
         <IconButton title="Close preview" onClick={onClose}><X size={15} /></IconButton>
@@ -130,9 +132,33 @@ function DeliverableReader({ workspaceId, document, revision, expanded, onExpand
       {error ? <EmptyState title="Could not open this document"><p>{error}</p><Button onClick={() => setReload(reload + 1)}>Try again</Button></EmptyState>
         : !content ? <div className="flex flex-1 items-center justify-center gap-2 text-[12px] text-muted" role="status"><Spinner size={14} /> Loading document…</div>
         : !url ? <EmptyState title="Preview unavailable">Ask the agent to regenerate this HTML or PDF document.</EmptyState>
-        : <iframe key={`${path}:${content.version}`} src={url} title={document.title} className="min-h-0 w-full flex-1 border-0 bg-white"
-            sandbox={pdf ? undefined : "allow-scripts"} referrerPolicy="no-referrer" />}
+        : pdf ? <iframe key={`${path}:${content.version}`} src={url} title={document.title} className="min-h-0 w-full flex-1 border-0 bg-white" referrerPolicy="no-referrer" />
+        : <HtmlFrame key={`${path}:${content.version}`} url={url} title={document.title} fit={fit} />}
       <footer className="shrink-0 border-t border-line px-3 py-2 text-[11px] text-muted">Ask for changes in this conversation. The preview refreshes after each turn.</footer>
     </section>
+  );
+}
+
+/** A pane narrower than a browser window would lay a document out for a phone or cut its wide parts:
+ * it is laid out at a laptop's width and scaled down to the pane, as a thumbnail of the whole page. */
+function HtmlFrame({ url, title, fit }: { url: string; title: string; fit: boolean }) {
+  const box = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const element = box.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry) setSize({ width: entry.contentRect.width, height: entry.contentRect.height });
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  const scale = fitScale(size.width, fit);
+  return (
+    <div ref={box} className="relative min-h-0 w-full flex-1 overflow-hidden bg-white">
+      <iframe src={url} title={title} className="absolute left-0 top-0 origin-top-left border-0 bg-white"
+        style={{ width: size.width / scale, height: size.height / scale, transform: scale === 1 ? undefined : `scale(${scale})` }}
+        sandbox="allow-scripts" referrerPolicy="no-referrer" data-scale={scale} />
+    </div>
   );
 }

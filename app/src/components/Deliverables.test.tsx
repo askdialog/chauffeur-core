@@ -6,7 +6,7 @@ import type { DesignShareState, FileContent } from "@chauffeur/protocol";
 
 test("a document opens beside its chat, switches format, refreshes without resetting unchanged content and closes", async () => {
   const browser = new Window();
-  const globals = { window: browser, document: browser.document, localStorage: browser.localStorage, IS_REACT_ACT_ENVIRONMENT: true };
+  const globals = { window: browser, document: browser.document, localStorage: browser.localStorage, ResizeObserver: browser.ResizeObserver, IS_REACT_ACT_ENVIRONMENT: true };
   const previous = new Map(Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { configurable: true, value });
   const { Deliverables } = await import("./Deliverables");

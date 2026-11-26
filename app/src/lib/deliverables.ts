@@ -55,3 +55,11 @@ export function versionPath(path: string, n: number): string | null {
   const match = /^(\.chauffeur\/artifacts\/[^/]+)\/(.+)$/.exec(path);
   return match ? `${match[1]}/.versions/${n}/${match[2]}` : null;
 }
+
+/** The width an HTML document is laid out at before it is fitted: a laptop's browser window. */
+export const DOCUMENT_WIDTH = 1280;
+
+/** How much an HTML document laid out at `DOCUMENT_WIDTH` shrinks to fit a pane `width` wide; never enlarged. */
+export function fitScale(width: number, fit: boolean): number {
+  return fit && width > 0 && width < DOCUMENT_WIDTH ? width / DOCUMENT_WIDTH : 1;
+}
