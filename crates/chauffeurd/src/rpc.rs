@@ -985,8 +985,9 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::UpdateCheck(_) => to_value(daemon.updates.check_now(daemon).await),
         ClientCall::UpdateInstall(_) => to_value(daemon.updates.install(daemon)?),
         ClientCall::OllamaStatus(_) => to_value(daemon.ollama.status().await),
-        ClientCall::CodexStatus(_) => to_value(daemon.codex_cli.status(daemon).await),
-        ClientCall::CodexUpdate(_) => to_value(daemon.codex_cli.update(daemon).await?),
+        // Boxed, as the import above: their futures, inlined, would grow `handle`'s frame.
+        ClientCall::CodexStatus(_) => to_value(Box::pin(daemon.codex_cli.status(daemon)).await),
+        ClientCall::CodexUpdate(_) => to_value(Box::pin(daemon.codex_cli.update(daemon)).await?),
         ClientCall::OllamaInstall(_) => {
             daemon.ollama.install()?;
             to_value(EmptyParams {})
