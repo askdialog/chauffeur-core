@@ -2,9 +2,11 @@
 //! `<CHAUFFEUR_HOME>/prompts/`, holding its text. Read on every call, with no cache, so a file
 //! edited by hand shows the next time a client lists them.
 
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use anyhow::Context;
 use chauffeur_protocol::prompts::{Prompt, PromptSaveParams};
 
 use crate::{Daemon, Error, Result};
@@ -24,12 +26,20 @@ fn file(root: &Path, name: &str) -> PathBuf {
     root.join(format!("{name}{EXTENSION}"))
 }
 
-/// The prompts, sorted by name ignoring case. Files that are not `.md`, not UTF-8 or not plain
-/// files (folders, symlinks) are left out; a missing folder lists nothing.
+/// The prompts, sorted by name ignoring case. Files that are not `.md`, not UTF-8, not plain
+/// files (folders, symlinks) or named as no prompt can be are left out; a missing folder lists
+/// nothing.
 pub fn list(daemon: &Daemon) -> Result<Vec<Prompt>> {
-    let mut prompts: Vec<Prompt> = std::fs::read_dir(root(daemon))
-        .into_iter()
-        .flatten()
+    let entries = match std::fs::read_dir(root(daemon)) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(anyhow::Error::from(error)
+                .context("could not read the prompts folder")
+                .into());
+        }
+    };
+    let mut prompts: Vec<Prompt> = entries
         .flatten()
         .filter(|entry| entry.file_type().is_ok_and(|t| t.is_file()))
         .filter_map(|entry| {
@@ -37,7 +47,7 @@ pub fn list(daemon: &Daemon) -> Result<Vec<Prompt>> {
                 .file_name()
                 .to_str()?
                 .strip_suffix(EXTENSION)
-                .filter(|name| !name.is_empty())?
+                .filter(|name| refusal(name).is_none())?
                 .to_string();
             let text = std::fs::read_to_string(entry.path()).ok()?;
             // An editor ends a file with a newline the user never typed in the prompt.
@@ -61,14 +71,18 @@ pub fn list(daemon: &Daemon) -> Result<Vec<Prompt>> {
 /// Why `name` cannot name a prompt, if it cannot.
 fn refusal(name: &str) -> Option<String> {
     if name.trim().is_empty() {
-        Some("A prompt needs a name".into())
+        Some("A prompt needs a name: type one".into())
     } else if name.contains('/') {
-        Some(format!("A prompt's name cannot contain \"/\": {name}"))
+        Some(format!(
+            "A prompt's name cannot contain \"/\": {name}. Choose a name without it"
+        ))
     } else if name.starts_with('.') {
-        Some(format!("A prompt's name cannot start with \".\": {name}"))
+        Some(format!(
+            "A prompt's name cannot start with \".\": {name}. Choose a name without it"
+        ))
     } else if name.len() > MAX_NAME_BYTES {
         Some(format!(
-            "A prompt's name is at most {MAX_NAME_BYTES} bytes; this one has {}",
+            "A prompt's name is at most {MAX_NAME_BYTES} bytes and this one has {}: shorten it",
             name.len()
         ))
     } else {
@@ -80,9 +94,18 @@ fn name_error(error: fn(String, serde_json::Value) -> Error, message: String) ->
     error(message, serde_json::json!({ "field": "name" }))
 }
 
+/// Whether two paths name one file: on a file system that ignores case and Unicode normalization
+/// (macOS), two spellings of a name do.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::symlink_metadata(a), std::fs::symlink_metadata(b)) {
+        (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+        _ => false,
+    }
+}
+
 /// Writes `params.text` to the prompt `params.name`, replacing the text of the prompt with that
-/// exact name; with `previous`, renames that prompt. Refuses a name another prompt has, ignoring
-/// case, since macOS's file system ignores it.
+/// exact name; with `previous`, renames that prompt, which must exist. Refuses a name another
+/// prompt has, ignoring case, or a file of the folder that is not a prompt has.
 pub fn save(daemon: &Daemon, params: &PromptSaveParams) -> Result<Vec<Prompt>> {
     let name = params.name.as_str();
     if let Some(message) = refusal(name) {
@@ -90,16 +113,29 @@ pub fn save(daemon: &Daemon, params: &PromptSaveParams) -> Result<Vec<Prompt>> {
     }
     let _writes = WRITES.lock().unwrap();
     let existing = list(daemon)?;
-    // Only a listed prompt is renamed: `previous` never reaches a file outside the folder.
     let previous = params
         .previous
         .as_deref()
-        .filter(|previous| *previous != name && existing.iter().any(|p| p.name == *previous));
-    let own = previous.unwrap_or(name);
-    if let Some(other) = existing
-        .iter()
-        .find(|p| p.name != own && p.name.to_lowercase() == name.to_lowercase())
+        .filter(|previous| *previous != name);
+    // Only a listed prompt is renamed: `previous` never reaches a file outside the folder, and a
+    // prompt deleted meanwhile does not turn the rename into an overwrite of another.
+    if let Some(previous) = previous
+        && !existing.iter().any(|p| p.name == previous)
     {
+        return Err(Error::NotFound(format!(
+            "No prompt is named \"{previous}\" to rename: it was deleted or renamed meanwhile"
+        )));
+    }
+    let root = root(daemon);
+    let target = file(&root, name);
+    let own = previous.unwrap_or(name);
+    let own_file = file(&root, own);
+    let own_listed = existing.iter().any(|p| p.name == own);
+    if let Some(other) = existing.iter().find(|p| {
+        p.name != own
+            && (p.name.to_lowercase() == name.to_lowercase()
+                || same_file(&file(&root, &p.name), &target))
+    }) {
         return Err(name_error(
             Error::ConflictWith,
             format!(
@@ -108,23 +144,31 @@ pub fn save(daemon: &Daemon, params: &PromptSaveParams) -> Result<Vec<Prompt>> {
             ),
         ));
     }
-    let root = root(daemon);
-    std::fs::create_dir_all(&root)?;
-    let target = file(&root, name);
-    if let Some(previous) = previous
-        && previous.to_lowercase() == name.to_lowercase()
+    if std::fs::symlink_metadata(&target).is_ok() && !(own_listed && same_file(&own_file, &target))
     {
-        // A change of case only: on a file system that ignores case, the new file would be the
-        // old one, and removing the old one would remove it. Renaming changes the case in place.
-        std::fs::rename(file(&root, previous), &target)?;
+        return Err(name_error(
+            Error::ConflictWith,
+            format!(
+                "The prompts folder holds a {name}.md that is not a prompt (a folder, a link, or \
+                 not UTF-8): choose another name"
+            ),
+        ));
     }
+    std::fs::create_dir_all(&root).context("could not create the prompts folder")?;
     let tmp = root.join(format!(".{name}{EXTENSION}.tmp"));
-    std::fs::write(&tmp, &params.text)?;
-    std::fs::rename(&tmp, &target)?;
-    if let Some(previous) = previous
-        && previous.to_lowercase() != name.to_lowercase()
-    {
-        std::fs::remove_file(file(&root, previous))?;
+    std::fs::write(&tmp, &params.text)
+        .and_then(|()| std::fs::rename(&tmp, &target))
+        .with_context(|| format!("could not write the prompt {name}"))?;
+    if let Some(previous) = previous {
+        let old = file(&root, previous);
+        // Another spelling of the same name (its case, its accents' encoding) names the file just
+        // written on macOS: renaming takes the new spelling, removing would remove the prompt.
+        if same_file(&old, &target) {
+            std::fs::rename(&old, &target)
+        } else {
+            std::fs::remove_file(&old)
+        }
+        .with_context(|| format!("could not remove the prompt's previous name, {previous}"))?;
     }
     list(daemon)
 }
@@ -135,6 +179,7 @@ pub fn delete(daemon: &Daemon, name: &str) -> Result<Vec<Prompt>> {
     if !list(daemon)?.iter().any(|p| p.name == name) {
         return Err(Error::NotFound(format!("No prompt is named \"{name}\"")));
     }
-    std::fs::remove_file(file(&root(daemon), name))?;
+    std::fs::remove_file(file(&root(daemon), name))
+        .with_context(|| format!("could not delete the prompt {name}"))?;
     list(daemon)
 }

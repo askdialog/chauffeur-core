@@ -23329,8 +23329,10 @@ async fn saved_prompts_are_files_of_the_prompts_folder_that_the_user_names_and_e
             serde_json::from_value(serde_json::json!({ "method": method, "params": params }))
                 .unwrap();
         let daemon = f.daemon.clone();
+        // Boxed: each call's future would otherwise sit in this test's frame, past the test
+        // thread's stack in a debug build.
         async move {
-            chauffeurd::rpc::handle(&daemon, call)
+            Box::pin(chauffeurd::rpc::handle(&daemon, call))
                 .await
                 .map(|list| serde_json::from_value::<Vec<Prompt>>(list).unwrap())
         }
@@ -23450,6 +23452,7 @@ async fn saved_prompts_are_files_of_the_prompts_folder_that_the_user_names_and_e
     std::fs::write(folder.join("by hand.md"), "Written by hand\n\n").unwrap();
     std::fs::write(folder.join("notes.txt"), "not a prompt").unwrap();
     std::fs::write(folder.join(".md"), "no name").unwrap();
+    std::fs::write(folder.join(".hidden.md"), "no prompt's name").unwrap();
     std::fs::write(folder.join("latin1.md"), [0x63, 0x61, 0x66, 0xe9]).unwrap();
     std::fs::create_dir(folder.join("folder.md")).unwrap();
     std::os::unix::fs::symlink(folder.join("go.md"), folder.join("link.md")).unwrap();
@@ -23463,6 +23466,69 @@ async fn saved_prompts_are_files_of_the_prompts_folder_that_the_user_names_and_e
             prompt("go", "Go"),
         ]
     );
+    // A save never replaces a file of the folder that is not a prompt.
+    for name in ["latin1", "folder", "link"] {
+        let refused = save(name, "t").await.unwrap_err();
+        assert!(
+            matches!(&refused, Error::ConflictWith(m, data)
+                if m.contains("not a prompt") && data["field"] == "name"),
+            "{name}: {refused:?}"
+        );
+    }
+    assert_eq!(
+        std::fs::read(folder.join("latin1.md")).unwrap(),
+        [0x63, 0x61, 0x66, 0xe9]
+    );
+    assert!(folder.join("link.md").is_symlink());
+
+    // Another spelling of a name, its accent decomposed as some tools write it, is renamed, never
+    // lost: on macOS both spellings name one file.
+    let (decomposed, composed) = ("cafe\u{301}", "caf\u{e9}");
+    std::fs::write(folder.join(format!("{decomposed}.md")), "Coffee").unwrap();
+    if cfg!(target_os = "macos") {
+        let refused = save(composed, "t").await.unwrap_err();
+        assert!(
+            matches!(&refused, Error::ConflictWith(m, _) if m.contains("already named")),
+            "{refused:?}"
+        );
+    }
+    let respelled = call(
+        "prompts.save",
+        serde_json::json!({ "name": composed, "text": "Café", "previous": decomposed }),
+    )
+    .await
+    .unwrap();
+    assert!(
+        respelled.contains(&prompt(composed, "Café")),
+        "{respelled:?}"
+    );
+    assert!(
+        !respelled.iter().any(|p| p.name == decomposed),
+        "{respelled:?}"
+    );
+    call("prompts.delete", serde_json::json!({ "name": composed }))
+        .await
+        .unwrap();
+
+    // `previous` renames a listed prompt only: never a file outside the folder, and a prompt gone
+    // meanwhile does not turn the rename into an overwrite of another.
+    std::fs::write(f.daemon.paths.home.join("outside.md"), "kept").unwrap();
+    for previous in ["../outside", "gone"] {
+        let refused = call(
+            "prompts.save",
+            serde_json::json!({ "name": "agreed", "text": "t", "previous": previous }),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&refused, Error::NotFound(m) if m.contains(previous)),
+            "{previous}: {refused:?}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(folder.join("agreed.md")).unwrap(),
+        "Agreed"
+    );
 
     // Delete removes the file; an unknown name, or a file that is not a prompt, is an error.
     let left = call("prompts.delete", serde_json::json!({ "name": "go" }))
@@ -23470,18 +23536,6 @@ async fn saved_prompts_are_files_of_the_prompts_folder_that_the_user_names_and_e
         .unwrap();
     assert!(!left.iter().any(|p| p.name == "go"), "{left:?}");
     assert!(!folder.join("go.md").exists());
-    std::fs::write(f.daemon.paths.home.join("outside.md"), "kept").unwrap();
-    // `previous` renames a listed prompt only, never a file outside the folder.
-    call(
-        "prompts.save",
-        serde_json::json!({ "name": "inside", "text": "t", "previous": "../outside" }),
-    )
-    .await
-    .unwrap();
-    assert!(f.daemon.paths.home.join("outside.md").exists());
-    call("prompts.delete", serde_json::json!({ "name": "inside" }))
-        .await
-        .unwrap();
     for name in ["go", "notes", "folder", "link", "../outside"] {
         let refused = call("prompts.delete", serde_json::json!({ "name": name }))
             .await
@@ -23493,4 +23547,13 @@ async fn saved_prompts_are_files_of_the_prompts_folder_that_the_user_names_and_e
     }
     assert!(folder.join("folder.md").is_dir());
     assert!(f.daemon.paths.home.join("outside.md").exists());
+
+    // A folder that cannot be read is an error, never an empty list.
+    std::fs::remove_dir_all(&folder).unwrap();
+    std::fs::write(&folder, "a file where the folder goes").unwrap();
+    let unreadable = call("prompts.list", serde_json::json!({})).await;
+    assert!(
+        matches!(&unreadable, Err(Error::Internal(e)) if e.to_string().contains("prompts folder")),
+        "{unreadable:?}"
+    );
 }

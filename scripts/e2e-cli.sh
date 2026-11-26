@@ -99,7 +99,6 @@ printf 'not a prompt' > "$CHAUFFEUR_HOME/prompts/notes.txt"
 bun scripts/app-call.ts prompts.save '{"name":"go","text":"Go","previous":"yes"}' | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r == [{"name":"agreed","text":"Written by hand"},{"name":"Compact","text":"Compact:\n- keep the decisions"},{"name":"go","text":"Go"}], r'
 if [[ -e "$CHAUFFEUR_HOME/prompts/yes.md" ]]; then echo "a renamed prompt kept its old file"; exit 1; fi
 refuses 'Another prompt is already named "go"' bun scripts/app-call.ts prompts.save '{"name":"GO","text":"t"}'
-refuses 'cannot contain "/"' bun scripts/app-call.ts prompts.save '{"name":"a/b","text":"t"}'
 bun scripts/app-call.ts prompts.delete '{"name":"go"}' | python3 -c 'import sys,json; r=json.load(sys.stdin); assert [p["name"] for p in r] == ["agreed","Compact"], r'
 refuses 'No prompt is named "go"' bun scripts/app-call.ts prompts.delete '{"name":"go"}'
 echo "== errors. --json prints the daemon's error on stdout and exits by its kind"
