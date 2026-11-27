@@ -1,7 +1,7 @@
 import type { ChatInfo, DeliverableVersion, FileContent } from "@chauffeur/protocol";
 import { Download, FileText, History, Maximize2, Minimize2, RefreshCw, Share2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { deliverableDownloadUrl, deliverableFormat, type Deliverable, fitScale, versionPath } from "@/lib/deliverables";
+import { deliverableDownloadUrl, deliverableFormat, type Deliverable, type FitMode, fitScale, fittedUrl, versionPath, zoomReport } from "@/lib/deliverables";
 import { openExternal } from "@/lib/native";
 import { errorMessage } from "@/lib/rpc";
 import { client, toast, useApp } from "@/state/app";
@@ -67,7 +67,8 @@ function DeliverableReader({ workspaceId, document, revision, expanded, onExpand
   const [reload, setReload] = useState(0);
   const [downloading, setDownloading] = useState(false);
   const [sharing, setSharing] = useState(false);
-  const [fit, setFit] = useState(true);
+  // The reader's zoom on top of the fit (1: fitted), and the scale the page reports it shows at.
+  const [zoom, setZoom] = useState({ zoom: 1, scale: 1 });
   const share = useFileShare(workspaceId, chosen);
   const connection = useApp((s) => s.connection.status);
   useEffect(() => {
@@ -100,7 +101,15 @@ function DeliverableReader({ workspaceId, document, revision, expanded, onExpand
             options={[{ value: "current", label: "Current version" }, ...versions.map((v) => ({ value: String(v.n), label: `Version ${v.n}`, description: `${v.by === "agent" ? "By the agent" : v.by === "hand" ? "By hand" : "Restored"} · ${new Date(v.at).toLocaleString()}` }))]}
             onChange={(value) => setVersion(value === "current" ? null : Number(value))} />
         )}
-        {!pdf && <IconButton title={fit ? "Actual size" : "Fit to width"} onClick={() => setFit(!fit)}>{fit ? <ZoomIn size={14} /> : <ZoomOut size={14} />}</IconButton>}
+        {!pdf && content && url && (
+          <div className="flex items-center" data-testid="document-zoom">
+            <IconButton title="Zoom out" onClick={() => setZoom({ ...zoom, zoom: zoom.zoom / ZOOM_STEP })}><ZoomOut size={14} /></IconButton>
+            {/* Fitted, it switches to actual size; zoomed, back to the fit. The scale grows with the zoom. */}
+            <IconButton className="w-auto min-w-[44px] px-1 text-[11px] tabular-nums" title={zoom.zoom === 1 ? "Actual size" : expanded ? "Fit to page" : "Fit to width"}
+              onClick={() => setZoom({ ...zoom, zoom: zoom.zoom === 1 ? 1 / zoom.scale : 1 })}>{Math.round(zoom.scale * 100)}%</IconButton>
+            <IconButton title="Zoom in" onClick={() => setZoom({ ...zoom, zoom: zoom.zoom * ZOOM_STEP })}><ZoomIn size={14} /></IconButton>
+          </div>
+        )}
         <IconButton title="Reload document" onClick={() => setReload(reload + 1)}><RefreshCw size={14} /></IconButton>
         <IconButton title={expanded ? "Show conversation" : "Expand document"} onClick={onExpand}>{expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}</IconButton>
         <IconButton title="Close preview" onClick={onClose}><X size={15} /></IconButton>
@@ -133,16 +142,26 @@ function DeliverableReader({ workspaceId, document, revision, expanded, onExpand
         : !content ? <div className="flex flex-1 items-center justify-center gap-2 text-[12px] text-muted" role="status"><Spinner size={14} /> Loading document…</div>
         : !url ? <EmptyState title="Preview unavailable">Ask the agent to regenerate this HTML or PDF document.</EmptyState>
         : pdf ? <iframe key={`${path}:${content.version}`} src={url} title={document.title} className="min-h-0 w-full flex-1 border-0 bg-white" referrerPolicy="no-referrer" />
-        : <HtmlFrame key={`${path}:${content.version}`} url={url} title={document.title} fit={fit} />}
+        : <HtmlFrame key={`${path}:${content.version}`} url={url} title={document.title} fit={expanded ? "page" : "width"} zoom={zoom.zoom} onZoomed={setZoom} />}
       <footer className="shrink-0 border-t border-line px-3 py-2 text-[11px] text-muted">Ask for changes in this conversation. The preview refreshes after each turn.</footer>
     </section>
   );
 }
 
+const ZOOM_STEP = 1.25;
+
 /** A pane narrower than a browser window would lay a document out for a phone or cut its wide parts:
- * it is laid out at a laptop's width and scaled down to the pane, as a thumbnail of the whole page. */
-function HtmlFrame({ url, title, fit }: { url: string; title: string; fit: boolean }) {
+ * it is laid out at a laptop's width and scaled down to the pane, as a thumbnail of the whole page.
+ * The daemon's script (`?fit=1`) then shrinks what still overflows (its width beside the chat, the
+ * whole page when the document is expanded) and zooms on top, from the reader's buttons or a pinch
+ * in the page. */
+function HtmlFrame({ url, title, fit, zoom, onZoomed }: {
+  url: string; title: string; fit: FitMode; zoom: number; onZoomed: (zoom: { zoom: number; scale: number }) => void;
+}) {
   const box = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const tell = () => frame.current?.contentWindow?.postMessage({ type: "chauffeur:fit", mode: fit, zoom }, "*");
+  useEffect(tell, [fit, zoom]);
   const [size, setSize] = useState({ width: 0, height: 0 });
   useEffect(() => {
     const element = box.current;
@@ -153,10 +172,22 @@ function HtmlFrame({ url, title, fit }: { url: string; title: string; fit: boole
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const scale = fitScale(size.width, fit);
+  const scale = fitScale(size.width, true);
+  const zoomed = useRef(onZoomed);
+  zoomed.current = onZoomed;
+  useEffect(() => {
+    // The frame's origin is opaque: its messages are known by their source.
+    const listen = (event: MessageEvent) => {
+      if (event.source !== frame.current?.contentWindow) return;
+      const reported = zoomReport(event.data);
+      if (reported) zoomed.current({ zoom: reported.zoom, scale: reported.scale * scale });
+    };
+    window.addEventListener("message", listen);
+    return () => window.removeEventListener("message", listen);
+  }, [scale]);
   return (
     <div ref={box} className="relative min-h-0 w-full flex-1 overflow-hidden bg-white">
-      <iframe src={url} title={title} className="absolute left-0 top-0 origin-top-left border-0 bg-white"
+      <iframe ref={frame} src={fittedUrl(url)} title={title} onLoad={tell} className="absolute left-0 top-0 origin-top-left border-0 bg-white"
         style={{ width: size.width / scale, height: size.height / scale, transform: scale === 1 ? undefined : `scale(${scale})` }}
         sandbox="allow-scripts" referrerPolicy="no-referrer" data-scale={scale} />
     </div>

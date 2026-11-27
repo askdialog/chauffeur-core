@@ -8457,6 +8457,21 @@ async fn a_workspaces_html_file_is_previewed_on_the_screens_origin_with_its_file
         .await
         .unwrap();
     assert_eq!(report.text().await.unwrap(), "<h1>Report</h1>");
+    // The deliverable reader asks for the script that fits a document to its frame; the file
+    // itself never gets it.
+    let fitted = http
+        .get(format!("{base}.chauffeur/report.html?fit=1"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(fitted.starts_with("<h1>Report</h1>") && fitted.contains("chauffeur:fit"));
+    assert_eq!(
+        std::fs::read_to_string(root.join(".chauffeur/report.html")).unwrap(),
+        "<h1>Report</h1>"
+    );
 
     // Nothing untyped, outside the workspace's roots, or under another secret.
     let wrong_secret = {

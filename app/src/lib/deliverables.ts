@@ -63,3 +63,21 @@ export const DOCUMENT_WIDTH = 1280;
 export function fitScale(width: number, fit: boolean): number {
   return fit && width > 0 && width < DOCUMENT_WIDTH ? width / DOCUMENT_WIDTH : 1;
 }
+
+/** How the daemon's script fits an HTML document to its frame: its width, or the whole page unless it
+ * is far longer than the frame. */
+export type FitMode = "width" | "page";
+
+/** The document's URL with the daemon's fitting script appended. */
+export function fittedUrl(url: string): string {
+  return `${url}${url.includes("?") ? "&" : "?"}fit=1`;
+}
+
+/** The zoom a framed document reports (`chauffeur:zoomed`): the reader's on top of the fit, and the
+ * scale the page ends up at; null for any other message. */
+export function zoomReport(data: unknown): { zoom: number; scale: number } | null {
+  if (typeof data !== "object" || data === null) return null;
+  const { type, zoom, scale } = data as Record<string, unknown>;
+  if (type !== "chauffeur:zoomed" || typeof zoom !== "number" || typeof scale !== "number") return null;
+  return zoom > 0 && scale > 0 ? { zoom, scale } : null;
+}

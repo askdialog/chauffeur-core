@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { DOCUMENT_WIDTH, deliverableDownloadUrl, fitScale, parseDeliverable, versionPath } from "./deliverables";
+import { DOCUMENT_WIDTH, deliverableDownloadUrl, fitScale, fittedUrl, parseDeliverable, versionPath, zoomReport } from "./deliverables";
 
 const path = ".chauffeur/artifacts/data-loop/index.html";
 test("a document keeps its source identity and only distinct exports", () => {
@@ -42,4 +42,17 @@ test("an HTML document in a narrow pane is laid out at a laptop's width and scal
   expect(fitScale(1600, true)).toBe(1);
   expect(fitScale(640, false)).toBe(1);
   expect(fitScale(0, true)).toBe(1);
+});
+
+test("an HTML document is framed with the daemon's fitting script", () => {
+  expect(fittedUrl("http://127.0.0.1:1/files/s/w/a.html")).toBe("http://127.0.0.1:1/files/s/w/a.html?fit=1");
+  expect(fittedUrl("http://127.0.0.1:1/files/s/w/a.html?x=1")).toBe("http://127.0.0.1:1/files/s/w/a.html?x=1&fit=1");
+});
+
+test("only a well-formed zoom report from the framed document is taken", () => {
+  expect(zoomReport({ type: "chauffeur:zoomed", zoom: 1.25, scale: 0.6 })).toEqual({ zoom: 1.25, scale: 0.6 });
+  expect(zoomReport({ type: "chauffeur:zoomed", zoom: "2", scale: 1 })).toBeNull();
+  expect(zoomReport({ type: "chauffeur:zoomed", zoom: 0, scale: 1 })).toBeNull();
+  expect(zoomReport({ type: "other", zoom: 1, scale: 1 })).toBeNull();
+  expect(zoomReport(null)).toBeNull();
 });
