@@ -1418,3 +1418,142 @@ async fn active_canvases_share_current_views_across_sockets_and_leave_independen
         .unwrap();
     participants(&mut other, 0).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_design_link_shows_its_title_screens_and_image_to_anyone_who_has_it() {
+    let s = server().await;
+    let http = reqwest::Client::new();
+    let carol = "Bearer dev:carol@example.com";
+    let create = |body: serde_json::Value| {
+        http.post(format!("{}/v1/shares", s.base))
+            .header("authorization", carol)
+            .json(&body)
+            .send()
+    };
+    let share: ShareStatus =
+        create(serde_json::json!({"title": "Checkout <v2>", "reviewers": ["alice@example.com"]}))
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    for (path, body) in [
+        ("a.html", "<p>a</p>"),
+        ("b.html", "<p>b</p>"),
+        (
+            "canvas.json",
+            r#"{"pages": [{"name": "Cart", "sections": [{"title": "", "screens": [{"file": "a.html"}]}]}, {"name": "Pay", "sections": [{"title": "", "screens": [{"file": "b.html"}]}]}]}"#,
+        ),
+    ] {
+        let put = http
+            .put(format!("{}/v1/shares/{}/files/{path}", s.base, share.id))
+            .header("authorization", carol)
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(put.status(), 204);
+    }
+    let page = || async {
+        http.get(format!("{}/s/{}", s.base, share.id))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+    };
+
+    // Signed out, before any image: the title, the pages and screens, the owner.
+    let html = page().await;
+    assert!(
+        html.contains("<meta property=\"og:title\" content=\"Checkout &lt;v2&gt;\" />"),
+        "{html}"
+    );
+    assert!(
+        html.contains("Cart, Pay · 2 screens · shared by Carol on Chauffeur"),
+        "{html}"
+    );
+    assert!(!html.contains("og:image"));
+    let image_url = format!("{}/s/{}/preview.png", s.base, share.id);
+    assert_eq!(http.get(&image_url).send().await.unwrap().status(), 404);
+
+    // Only the owner sends the image, and only a PNG.
+    let png: &[u8] = b"\x89PNG\r\n\x1a\nrest";
+    let put_preview = |who: &'static str, body: &'static [u8]| {
+        http.put(format!("{}/v1/shares/{}/preview", s.base, share.id))
+            .header("authorization", who)
+            .body(body)
+            .send()
+    };
+    assert_eq!(
+        put_preview("Bearer dev:alice@example.com", png)
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    assert_eq!(put_preview(carol, b"<svg/>").await.unwrap().status(), 400);
+    assert_eq!(put_preview(carol, png).await.unwrap().status(), 204);
+
+    // Then anyone who has the link sees it; it is never a design file.
+    let html = page().await;
+    assert!(
+        html.contains(&format!(
+            "content=\"https://design.example/s/{}/preview.png?v=",
+            share.id
+        )),
+        "{html}"
+    );
+    assert!(html.contains("summary_large_image"));
+    let image = http.get(&image_url).send().await.unwrap();
+    assert_eq!(image.status(), 200);
+    assert_eq!(image.headers()["content-type"], "image/png");
+    assert_eq!(image.bytes().await.unwrap().as_ref(), png);
+    let as_file = http
+        .get(format!(
+            "{}/v1/shares/{}/files/.preview.png",
+            s.base, share.id
+        ))
+        .header("cookie", session_cookie(&s.base, "alice@example.com").await)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(as_file.status(), 404);
+
+    // A document's share shows nothing and takes no image.
+    let document: ShareStatus = create(serde_json::json!({"title": "Plan", "document": "plan.md"}))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let html = http
+        .get(format!("{}/s/{}", s.base, document.id))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(!html.contains("og:title"));
+    let refused = http
+        .put(format!("{}/v1/shares/{}/preview", s.base, document.id))
+        .header("authorization", carol)
+        .body(png)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 400);
+
+    // Stopped, the link shows nothing more.
+    let stopped = http
+        .delete(format!("{}/v1/shares/{}", s.base, share.id))
+        .header("authorization", carol)
+        .send()
+        .await
+        .unwrap();
+    assert!(stopped.status().is_success());
+    assert!(!page().await.contains("og:title"));
+    assert_eq!(http.get(&image_url).send().await.unwrap().status(), 404);
+}

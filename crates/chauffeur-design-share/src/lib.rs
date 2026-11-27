@@ -42,6 +42,7 @@ use tokio::sync::mpsc;
 
 pub mod files;
 pub mod google;
+mod link_preview;
 pub mod mail;
 mod mentions;
 mod mobile;
@@ -324,7 +325,13 @@ impl Service {
             )
             .route("/v1/me", get(me))
             .route("/v1/mentions/daemon", get(mentions_upgrade))
-            .route("/s/{id}", get(page))
+            .route("/s/{id}", get(design_page))
+            .route("/s/{id}/preview.png", get(preview_image))
+            .route(
+                "/v1/shares/{id}/preview",
+                axum::routing::put(put_preview)
+                    .layer(DefaultBodyLimit::max(files::MAX_PREVIEW_BYTES + 1024)),
+            )
             .route("/w/{id}", get(page))
             .route("/assets/{*path}", get(asset))
             .with_state(self.clone())
@@ -1177,14 +1184,86 @@ async fn reviewer_upgrade(
 }
 
 async fn page(State(service): State<Arc<Service>>, UrlPath(_id): UrlPath<String>) -> Response {
+    page_response(service.page_html())
+}
+
+fn page_response(html: String) -> Response {
     (
         [
             (header::CACHE_CONTROL, "no-store"),
             (header::X_FRAME_OPTIONS, "DENY"),
         ],
-        Html(service.page_html()),
+        Html(html),
     )
         .into_response()
+}
+
+/// A design share's page, with what a link preview shows of it (see
+/// docs/adr/design-link-previews.md): its title, its pages and screens, and the image the owner's
+/// daemon rendered of its first screens. A document's share, a stopped one or an unknown link
+/// shows none of it.
+async fn design_page(
+    State(service): State<Arc<Service>>,
+    UrlPath(id): UrlPath<String>,
+) -> Response {
+    let html = service.page_html();
+    let html = match service.link_preview(&id) {
+        Some(preview) => preview.into_page(html),
+        None => html,
+    };
+    page_response(html)
+}
+
+/// The image of a design share's link preview, to anyone who has the link: what a chat app
+/// fetches to unfurl it, signed in or not.
+async fn preview_image(
+    State(service): State<Arc<Service>>,
+    UrlPath(id): UrlPath<String>,
+) -> Response {
+    let not_found = || (StatusCode::NOT_FOUND, "not found").into_response();
+    let Ok(share) = service.share(&id) else {
+        return not_found();
+    };
+    if share.stopped() || share.document.is_some() {
+        return not_found();
+    }
+    let Some((bytes, _)) = service.files.preview(&id) else {
+        return not_found();
+    };
+    (
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=300"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::REFERRER_POLICY, "no-referrer"),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+/// The owner's daemon sends the link preview's image of a design share.
+async fn put_preview(
+    State(service): State<Arc<Service>>,
+    headers: HeaderMap,
+    UrlPath(id): UrlPath<String>,
+    body: Bytes,
+) -> Result<StatusCode, Reject> {
+    let (_, share) = service.owned(&headers, &id).await?;
+    if share.stopped() {
+        return Err(Reject(StatusCode::GONE, "This share was stopped".into()));
+    }
+    if share.document.is_some() {
+        return Err(Reject(
+            StatusCode::BAD_REQUEST,
+            "Only a design's link has a preview".into(),
+        ));
+    }
+    service
+        .files
+        .write_preview(&id, &body)
+        .map_err(|reason| Reject(StatusCode::BAD_REQUEST, reason))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The page's own files, from its build; hashed names, cached for long.
