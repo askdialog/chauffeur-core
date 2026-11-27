@@ -30,6 +30,9 @@ const CAPTURE_SCRIPT: &str = chauffeur_protocol::design_share::DESIGN_CAPTURE_SC
 /// Appended with the capture script to a slide the deck reader frames (`?deck=1`): retyping
 /// its texts, its arrows sent to the reader (docs/adr/slide-decks.md).
 const DECK_READER_SCRIPT: &str = include_str!("deck_reader.js");
+/// Fits a deliverable's HTML document to the reader's frame when the app asks (`?fit=1`).
+const DELIVERABLE_FIT_SCRIPT: &str = include_str!("deliverable_fit.js");
+const FIT_QUERY: &str = "fit=1";
 
 /// What a screen may load: anything over https (CDNs, fonts), its own files, inline code; never
 /// plain http, so never localhost (the daemon, the user's dev servers). Only the app may frame it.
@@ -346,6 +349,10 @@ async fn file_handler(
             bytes.extend_from_slice(script.as_bytes());
             bytes.extend_from_slice(b"</script>\n");
         }
+    } else if media_type.starts_with("text/html") && asks(query.as_deref(), FIT_QUERY) {
+        bytes.extend_from_slice(b"\n<script>");
+        bytes.extend_from_slice(DELIVERABLE_FIT_SCRIPT.as_bytes());
+        bytes.extend_from_slice(b"</script>\n");
     }
     (
         [
