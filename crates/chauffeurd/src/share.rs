@@ -41,6 +41,8 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 /// Larger files stay on the Mac (the service refuses them too).
 const MAX_FILE_BYTES: u64 = 25 * 1024 * 1024;
 const SCAN_DEPTH: usize = 8;
+/// A shared design's link preview is made again at most this often: it costs a headless Chrome.
+const PREVIEW_EVERY: Duration = Duration::from_secs(300);
 /// Never uploaded: the exports (PNGs the user made), and the comments (they go over the socket).
 const SKIPPED_DIRS: [&str; 1] = ["exports"];
 /// How long a workspace's list of files serves to find linked files before it is read again.
@@ -1290,6 +1292,11 @@ impl Shares {
         // The linked files the last look found: a reviewer's comment on one is kept on its path.
         let mut carried: Option<Arc<Carried>> = None;
         let mut interval = tokio::time::interval(SCAN_EVERY);
+        // The link preview's image (a design's only): made once per connection, then again after
+        // changes, at most every `PREVIEW_EVERY`, one at a time.
+        let mut preview_stale = file_of(&row.chat_id).is_none();
+        let mut preview_at: Option<tokio::time::Instant> = None;
+        let mut preview_task: Option<tokio::task::JoinHandle<()>> = None;
         loop {
             tokio::select! {
                 _ = async {
@@ -1366,6 +1373,23 @@ impl Shares {
                         .await;
                     }
                     *listing = Some(now);
+                    if file_of(&row.chat_id).is_none() && (!uploaded.is_empty() || !removed.is_empty()) {
+                        preview_stale = true;
+                    }
+                    if preview_stale
+                        && preview_task.as_ref().is_none_or(|task| task.is_finished())
+                        && preview_at.is_none_or(|at| at.elapsed() >= PREVIEW_EVERY)
+                    {
+                        preview_stale = false;
+                        preview_at = Some(tokio::time::Instant::now());
+                        preview_task = Some(tokio::spawn(send_preview(
+                            self.d(),
+                            self.http.clone(),
+                            format!("{base}/v1/shares/{}/preview", row.share_id),
+                            row.chat_id.clone(),
+                            token.clone(),
+                        )));
+                    }
                     if !uploaded.is_empty() || !removed.is_empty() {
                         sink.send(say(&FromDaemon::Changed { changed: uploaded, removed }))
                             .await
@@ -1473,6 +1497,34 @@ impl Shares {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Renders a shared design's link preview and sends it (see docs/adr/design-link-previews.md).
+/// Best effort: without Chrome, or when the service refuses it, the link shows its title alone.
+async fn send_preview(
+    daemon: Arc<Daemon>,
+    http: reqwest::Client,
+    url: String,
+    chat_id: String,
+    token: String,
+) {
+    let bytes = match crate::design_export::link_preview(&daemon, &chat_id).await {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::info!(%error, chat = chat_id, "no link preview for a shared design");
+            return;
+        }
+    };
+    match http.put(&url).bearer_auth(token).body(bytes).send().await {
+        Ok(response) if response.status().is_success() => {}
+        Ok(response) => {
+            tracing::warn!(status = %response.status(), chat = chat_id, "the share service refused a link preview");
+        }
+        Err(error) => {
+            tracing::warn!(error = %refusal(error), chat = chat_id, "could not send a link preview");
         }
     }
 }

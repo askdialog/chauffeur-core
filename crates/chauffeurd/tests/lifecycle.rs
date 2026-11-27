@@ -23163,3 +23163,157 @@ async fn session_notifications_are_off_until_turned_on_and_leave_the_sound_alone
     let text = std::fs::read_to_string(d.settings.path()).unwrap();
     assert!(text.contains("sessions = true"), "{text}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shared_design_sends_its_link_preview_rendered_from_its_first_screens() {
+    use chauffeur_design_share::{Auth, Config, Service, data_paths, store::Store};
+    use chauffeur_protocol::client::ShareStartParams;
+    use chauffeur_protocol::model::ChatKind;
+
+    let service_dir = tempfile::tempdir().unwrap();
+    let (db, files) = data_paths(service_dir.path());
+    let service = Service::new(
+        Store::open(&db).unwrap(),
+        files,
+        Auth::InsecureDev,
+        Config {
+            public_url: "https://design.example".into(),
+            workspace_url: None,
+            cookie_domain: None,
+            member_domain: Some("example.com".into()),
+            site_url: None,
+            session_key: None,
+            web_client_id: None,
+            web_dir: None,
+            secure_cookies: false,
+            mailer: chauffeur_design_share::mail::Mailer::Off,
+        },
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let router = service.router();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+
+    let f = fixture_with(
+        49960,
+        &format!(
+            "[design_share]\nurl = \"{base}/\"\n\n[office]\ndev_email = \"Alice@example.com\"\n"
+        ),
+    );
+    let d = &f.daemon;
+    let log = f.root.join("sidecar.log");
+    d.chats
+        .sidecar
+        .use_binary(briefing_sidecar(&f.root, &log, "unused"));
+    d.designs.use_chrome(fake_chrome(&f.root));
+    tokio::spawn(chauffeurd::canvas::DesignServer::serve(f.daemon.clone()));
+    let ws = d
+        .workspaces
+        .create(CreateWorkspaceParams::default())
+        .await
+        .unwrap()
+        .workspace;
+    let chat = d
+        .chats
+        .create(CreateChatParams {
+            workspace: ws.id.clone(),
+            kind: Some(ChatKind::Design),
+            title: Some("Checkout".into()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let dir = PathBuf::from(&ws.path)
+        .join(".chauffeur/designs")
+        .join(&chat.id);
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["cart.html", "pay.html"] {
+        std::fs::write(dir.join(name), format!("<p>{name}</p>")).unwrap();
+    }
+    std::fs::write(
+        dir.join("canvas.json"),
+        r#"{"pages": [{"name": "Flow", "sections": [{"title": "", "screens": [{"file": "cart.html"}, {"file": "pay.html"}]}]}]}"#,
+    )
+    .unwrap();
+    for _ in 0..100 {
+        if d.designs.base_url(&ws.id, &chat.id).is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let share = d
+        .shares
+        .start(&ShareStartParams {
+            chat: chat.id.clone(),
+            reviewers: vec!["bob@example.com".into()],
+            team: None,
+        })
+        .await
+        .unwrap()
+        .share
+        .expect("a share");
+
+    // The image reaches the service, and anyone with the link sees it named on the page.
+    let http = reqwest::Client::new();
+    let image = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let response = http
+                .get(format!("{base}/s/{}/preview.png", share.id))
+                .send()
+                .await
+                .unwrap();
+            if response.status() == 200 {
+                break response.bytes().await.unwrap();
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .expect("the link preview sent");
+    assert!(image.starts_with(b"\x89PNG"));
+    let page = http
+        .get(format!("{base}/s/{}", share.id))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(page.contains("og:image"), "{page}");
+    assert!(page.contains("2 screens"), "{page}");
+
+    // What Chrome drew: the two screens, from the daemon's own server, at 1200 × 630. The fake
+    // Chrome left the page beside the PNG, in the temporary folder.
+    let left: Vec<PathBuf> = std::fs::read_dir(std::env::temp_dir())
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name().is_some_and(|n| {
+                let n = n.to_string_lossy();
+                n.starts_with("chauffeur-preview-")
+                    && (n.ends_with(".png.page.html") || n.ends_with(".png.url"))
+            })
+        })
+        .collect();
+    let mine: Vec<(PathBuf, String)> = left
+        .iter()
+        .filter(|p| p.to_string_lossy().ends_with(".page.html"))
+        .filter_map(|p| Some((p.clone(), std::fs::read_to_string(p).ok()?)))
+        .filter(|(_, html)| html.contains(&chat.id))
+        .collect();
+    let drawn = mine
+        .first()
+        .map(|(_, html)| html.clone())
+        .expect("the page Chrome was given");
+    for (page, _) in &mine {
+        let _ = std::fs::remove_file(page);
+        let _ = std::fs::remove_file(page.to_string_lossy().replace(".page.html", ".url"));
+    }
+    assert!(
+        drawn.contains("cart.html") && drawn.contains("pay.html"),
+        "{drawn}"
+    );
+    assert!(drawn.contains("width:1200px;height:630px"), "{drawn}");
+}

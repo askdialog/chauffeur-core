@@ -10,6 +10,10 @@ use chauffeur_protocol::design_share::{DESIGN_CAPTURE_SCRIPT, ShareFile};
 
 /// Larger files are refused and not served.
 pub const MAX_FILE_BYTES: usize = chauffeur_design::MAX_FILE_BYTES as usize;
+/// Larger link previews are refused: one is a 1200 × 630 PNG.
+pub const MAX_PREVIEW_BYTES: usize = 5 * 1024 * 1024;
+const PREVIEW_FILE: &str = ".preview.png";
+const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 const LIST_DEPTH: usize = 8;
 const LIST_MAX: usize = 2000;
 
@@ -69,6 +73,48 @@ impl Files {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(error.to_string()),
         }
+    }
+
+    /// The link preview's image (see docs/adr/design-link-previews.md): a dotfile of the share's
+    /// folder, so that it goes with the share and is never listed nor served as a design file.
+    fn preview_path(&self, share_id: &str) -> Option<PathBuf> {
+        Some(self.share_dir(share_id)?.join(PREVIEW_FILE))
+    }
+
+    /// Keeps the link preview's image, a PNG; anything else is refused.
+    pub fn write_preview(&self, share_id: &str, bytes: &[u8]) -> Result<(), String> {
+        if bytes.len() > MAX_PREVIEW_BYTES {
+            return Err(format!(
+                "a preview is at most {} MB",
+                MAX_PREVIEW_BYTES / 1024 / 1024
+            ));
+        }
+        if !bytes.starts_with(PNG_SIGNATURE) {
+            return Err("a preview is a PNG".into());
+        }
+        let path = self.preview_path(share_id).ok_or("not a share's folder")?;
+        let parent = path.parent().ok_or("a file needs a folder")?;
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let tmp = parent.join(".preview.png.tmp");
+        std::fs::write(&tmp, bytes)
+            .and_then(|()| std::fs::rename(&tmp, &path))
+            .map_err(|error| error.to_string())
+    }
+
+    /// The link preview's image and when it was written, in milliseconds; none before the
+    /// daemon sent one.
+    pub fn preview(&self, share_id: &str) -> Option<(Vec<u8>, u64)> {
+        let path = self.preview_path(share_id)?;
+        let meta = std::fs::symlink_metadata(&path).ok()?;
+        if !meta.is_file() || meta.len() as usize > MAX_PREVIEW_BYTES {
+            return None;
+        }
+        let modified_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_millis() as u64);
+        Some((std::fs::read(&path).ok()?, modified_ms))
     }
 
     /// Removes everything of a stopped share.

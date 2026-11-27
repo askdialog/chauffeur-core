@@ -127,6 +127,139 @@ pub async fn export(daemon: &Daemon, params: &DesignExportParams) -> Result<Desi
     })
 }
 
+/// The link preview's image of a shared design (see docs/adr/design-link-previews.md): its first
+/// screens side by side on a 1200 × 630 PNG, the size chat apps show. None when the design has
+/// no screen yet; an error without Chrome or before the screens are served.
+pub async fn link_preview(daemon: &Daemon, chat_id: &str) -> Result<Option<Vec<u8>>> {
+    let chat = daemon.chats.resolve(chat_id)?;
+    if chat.kind != ChatKind::Design {
+        return Ok(None);
+    }
+    let workspace = daemon.workspaces.row(&chat.workspace_id)?;
+    let dir = crate::design::folder_of(daemon, &workspace.path, &chat)
+        .map_err(|error| Error::Internal(anyhow::anyhow!("the design folder: {error}")))?;
+    let base = daemon
+        .designs
+        .base_url(&workspace.id, &chat.id)
+        .ok_or_else(|| Error::Unavailable("the screens are not served yet".into()))?;
+    let canvas = crate::canvas::read_canvas(&chat.id, Path::new(&dir), Some(&base));
+    let Some(page) = PreviewPage::lay_out(&first_screens(&canvas)) else {
+        return Ok(None);
+    };
+    let chrome = match daemon.designs.fake_chrome() {
+        Some(fake) => fake,
+        None => find_chrome(daemon.shell_env.vars().get("PATH").map(String::as_str))
+            .ok_or_else(|| Error::Unavailable(NO_CHROME.into()))?,
+    };
+    let token = daemon.designs.exports.add(page.html());
+    let url = daemon
+        .designs
+        .export_url(&token)
+        .expect("the listener is up: it gave the screens' base URL");
+    let out = std::env::temp_dir().join(format!("chauffeur-preview-{}.png", random_hex()));
+    let rendered = run_chrome(
+        &chrome,
+        vec![
+            format!("--window-size={PREVIEW_WIDTH},{PREVIEW_HEIGHT}"),
+            "--force-device-scale-factor=1".into(),
+            format!("--screenshot={}", out.display()),
+            url,
+        ],
+        &out,
+        png_complete,
+    )
+    .await;
+    daemon.designs.exports.forget(&token);
+    let bytes = rendered.and_then(|()| {
+        std::fs::read(&out)
+            .map_err(|error| Error::Internal(anyhow::anyhow!("the preview's PNG: {error}")))
+    });
+    let _ = std::fs::remove_file(&out);
+    bytes.map(Some)
+}
+
+/// The canvas's screens in its order, present ones only: its pages', then the unsorted ones.
+fn first_screens(canvas: &CanvasResult) -> Vec<CanvasScreen> {
+    canvas
+        .pages
+        .iter()
+        .flat_map(|page| page.sections.iter())
+        .flat_map(|section| section.screens.iter())
+        .chain(canvas.unsorted.iter())
+        .filter(|screen| screen.url.is_some() && screen.width > 0 && screen.height > 0)
+        .take(PREVIEW_MAX_SCREENS)
+        .cloned()
+        .collect()
+}
+
+/// A link preview's page: the first screens at the height of the image, in a row, all shrunk
+/// alike when they would not fit its width; no more screens once they would be shrunk below
+/// half.
+pub struct PreviewPage {
+    /// Each screen and the scale it is drawn at.
+    screens: Vec<(CanvasScreen, f64)>,
+}
+
+pub const PREVIEW_WIDTH: u32 = 1200;
+pub const PREVIEW_HEIGHT: u32 = 630;
+const PREVIEW_PADDING: f64 = 40.0;
+const PREVIEW_GAP: f64 = 32.0;
+const PREVIEW_MAX_SCREENS: usize = 3;
+
+impl PreviewPage {
+    pub fn lay_out(screens: &[CanvasScreen]) -> Option<PreviewPage> {
+        let height = f64::from(PREVIEW_HEIGHT) - 2.0 * PREVIEW_PADDING;
+        let room = f64::from(PREVIEW_WIDTH) - 2.0 * PREVIEW_PADDING;
+        let row_width = |screens: &[CanvasScreen]| {
+            screens
+                .iter()
+                .map(|s| f64::from(s.width) * height / f64::from(s.height))
+                .sum::<f64>()
+                + PREVIEW_GAP * screens.len().saturating_sub(1) as f64
+        };
+        let mut kept = screens.len().min(PREVIEW_MAX_SCREENS);
+        while kept > 1 && row_width(&screens[..kept]) > 2.0 * room {
+            kept -= 1;
+        }
+        let kept = &screens[..kept];
+        if kept.is_empty() {
+            return None;
+        }
+        // The gaps keep their size: only the screens shrink.
+        let gaps = PREVIEW_GAP * kept.len().saturating_sub(1) as f64;
+        let shrink = ((room - gaps) / (row_width(kept) - gaps)).min(1.0);
+        Some(PreviewPage {
+            screens: kept
+                .iter()
+                .map(|s| (s.clone(), shrink * height / f64::from(s.height)))
+                .collect(),
+        })
+    }
+
+    pub fn html(&self) -> String {
+        let mut html = format!(
+            "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"light\"><style>\
+html,body{{margin:0;width:{PREVIEW_WIDTH}px;height:{PREVIEW_HEIGHT}px;overflow:hidden;background:#f3f4f6}}\
+body{{display:flex;align-items:center;justify-content:center;gap:{PREVIEW_GAP}px}}\
+.s{{overflow:hidden;background:#fff;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.18);flex:none}}\
+iframe{{border:0;display:block;transform-origin:0 0}}\
+</style></head><body>"
+        );
+        for (screen, scale) in &self.screens {
+            html.push_str(&format!(
+                "<div class=\"s\" style=\"width:{:.1}px;height:{:.1}px\"><iframe src=\"{}\" width=\"{}\" height=\"{}\" style=\"transform:scale({scale:.4})\"></iframe></div>",
+                f64::from(screen.width) * scale,
+                f64::from(screen.height) * scale,
+                escape(screen.url.as_deref().unwrap_or_default()),
+                screen.width,
+                screen.height,
+            ));
+        }
+        html.push_str("</body></html>");
+        html
+    }
+}
+
 /// The screens asked for, in that order, each one of the canvas and present in the folder.
 fn pick(canvas: &CanvasResult, files: &[String]) -> Result<Vec<CanvasScreen>> {
     let all: HashMap<String, &CanvasScreen> = canvas
@@ -590,6 +723,55 @@ mod tests {
             url: present.then(|| format!("http://127.0.0.1:9/s/w/c/{file}")),
             modified_ms: present.then_some(1),
         }
+    }
+
+    #[test]
+    fn a_link_preview_shows_the_first_present_screens_at_its_height() {
+        let canvas = CanvasResult {
+            chat: "c".into(),
+            dir: String::new(),
+            pages: vec![chauffeur_protocol::client::CanvasPage {
+                name: "Main".into(),
+                sections: vec![chauffeur_protocol::client::CanvasSection {
+                    title: String::new(),
+                    screens: vec![
+                        screen("missing.html", None, 390, 844, false),
+                        screen("a.html", None, 390, 844, true),
+                        screen("b.html", None, 390, 844, true),
+                    ],
+                }],
+            }],
+            unsorted: vec![
+                screen("c.html", None, 390, 844, true),
+                screen("d.html", None, 390, 844, true),
+            ],
+            error: None,
+        };
+        let first: Vec<String> = first_screens(&canvas).into_iter().map(|s| s.file).collect();
+        assert_eq!(first, ["a.html", "b.html", "c.html"]);
+
+        // Three phones fit at the image's height: 550 px tall, unshrunk.
+        let page = PreviewPage::lay_out(&first_screens(&canvas)).unwrap();
+        assert_eq!(page.screens.len(), 3);
+        let (phone, scale) = &page.screens[0];
+        assert!((f64::from(phone.height) * scale - 550.0).abs() < 0.01);
+        assert!(page.html().contains("transform:scale(0.6517)"));
+
+        // Desktop screens are shrunk alike to the width, and a third would be too small.
+        let desktops: Vec<CanvasScreen> = (0..3)
+            .map(|i| screen(&format!("d{i}.html"), None, 1440, 900, true))
+            .collect();
+        let page = PreviewPage::lay_out(&desktops).unwrap();
+        assert_eq!(page.screens.len(), 2);
+        let row: f64 = page
+            .screens
+            .iter()
+            .map(|(s, scale)| f64::from(s.width) * scale)
+            .sum::<f64>()
+            + 32.0;
+        assert!((row - (f64::from(PREVIEW_WIDTH) - 80.0)).abs() < 0.01);
+
+        assert!(PreviewPage::lay_out(&[]).is_none());
     }
 
     #[test]
