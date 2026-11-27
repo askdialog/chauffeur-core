@@ -7,7 +7,7 @@ export type MenuAction = "close" | "up" | "down" | "pick";
 
 /**
  * What a key does in an open menu: Esc closes it, ↑↓ move, ↵ or Tab pick the selected row. Tab
- * with Shift is not a pick: ⇧Tab opens the saved prompts. Null for any other key.
+ * with Shift is not a pick: ⇧Tab opens the saved prompts by default. Null for any other key.
  */
 export function menuKey(key: Pick<KeyboardEvent, "key" | "shiftKey" | "ctrlKey" | "metaKey" | "altKey">): MenuAction | null {
   if (key.key === "Escape") return "close";

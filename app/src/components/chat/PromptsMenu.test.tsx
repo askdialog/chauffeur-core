@@ -6,7 +6,7 @@ import { deferred, domTest } from "@/test/dom";
 
 const file = import.meta.path;
 
-type Key = { key: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; keyCode?: number; repeat?: boolean };
+type Key = { key: string; code?: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; keyCode?: number; repeat?: boolean };
 
 /** A chat's composer whose daemon holds `prompts` (read again on each `prompts.list`). */
 async function setup(render: (children: React.ReactNode) => Promise<void>, prompts: () => Prompt[] | Promise<Prompt[]>, draft = "") {
@@ -267,4 +267,31 @@ domTest("Tab takes the suggestion and the / menu's command; ⇧Tab takes neither
   await c.pressInMenu({ key: "Tab" });
   expect(menu()).toBeNull();
   expect(c.composer()).toBe("/comAgreed, carry on|");
+});
+
+domTest("other keys given to prompts.open open the menu, and ⇧Tab then no longer does", file, async ({ render, until }) => {
+  const { setOverrides } = await import("@/lib/shortcuts");
+  const { isMac } = await import("@/lib/keys");
+  setOverrides({ "prompts.open": "⇧⌘P" });
+  try {
+    const c = await setup(render, () => saved, "Hello");
+    await c.select(5);
+    await c.pressInComposer(shiftTab);
+    expect(menu()).toBeNull();
+    expect(c.composer()).toBe("Hello|");
+
+    const ownKeys = { key: "P", code: "KeyP", shiftKey: true, ...(isMac ? { metaKey: true } : { ctrlKey: true }) };
+    expect(await c.pressInComposer(ownKeys)).toBe(true);
+    await until(() => rows().length === 2);
+    expect(document.activeElement).toBe(filter());
+    // Its key again, or ⇧Tab, keeps the focus in the menu.
+    expect(await c.pressInMenu(ownKeys)).toBe(true);
+    expect(await c.pressInMenu(shiftTab)).toBe(true);
+    expect(document.activeElement).toBe(filter());
+    await c.pressInMenu({ key: "Enter" });
+    expect(c.composer()).toBe("HelloAgreed, carry on|");
+    expect(c.sent).toEqual([]);
+  } finally {
+    setOverrides({});
+  }
 });

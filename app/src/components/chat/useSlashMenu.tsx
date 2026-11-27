@@ -18,7 +18,7 @@ type SlashKeyEvent = Pick<
 /**
  * The `/` menu of a composer: open while the message is a lone `/word`, it lists the agent's
  * commands matching the word (Claude's commands and skills, Codex's skills). ↑↓ move, ↵ or Tab
- * (without Shift: ⇧Tab opens the saved prompts) insert the command, Esc closes it.
+ * (without Shift: ⇧Tab opens the saved prompts by default) insert the command, Esc closes it.
  */
 export function useSlashMenu(
   text: string,
@@ -99,7 +99,7 @@ export function useSlashMenu(
       )}
     </ComposerMenu>
   ) : null;
-  /** Closes the menu until the text changes (⇧Tab opening the prompts in its place). */
+  /** Closes the menu until the text changes (the saved prompts opening in its place). */
   const close = () => {
     if (open) setDismissed(text);
   };

@@ -126,10 +126,9 @@ import { usePromptsMenu } from "./usePromptsMenu";
 import { TimelineRail } from "./TimelineRail";
 import { ChatFind, textRanges } from "./ChatFind";
 import { hasMod, kbd, stepTab } from "../../lib/keys";
-import { chatJump, onceIn, tabKey } from "../../lib/shortcuts";
+import { chatJump, onceIn, pressed, tabKey } from "../../lib/shortcuts";
 import { dismissedSuggestions, shownSuggestion, type Suggestion, suggestionKey } from "@/lib/suggestions";
 import { hasSlackMessageLink } from "@/lib/connectors";
-import { opensPrompts } from "@/lib/prompts";
 
 type ChatPanelProps = {
   workspace: WorkspaceInfo;
@@ -1843,7 +1842,7 @@ export const ComposerBox = memo(function ComposerBox({
           }}
           onPaste={attachments.onPaste}
           onKeyDown={(e) => {
-            if (opensPrompts(e)) {
+            if (pressed(e, "prompts.open")) {
               e.preventDefault();
               slash.close();
               prompts.show();

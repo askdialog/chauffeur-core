@@ -26,10 +26,10 @@ const press = (
 ) => ({ key, code: "", metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, target: null, ...over }) as Press;
 
 describe("the registry", () => {
-  test("every default parses and no two shortcuts share a key, on either platform", () => {
+  test("every default but the composer's ⇧Tab is a binding, and no two shortcuts share a key, on either platform", () => {
     for (const mac of [true, false]) {
       for (const id of SHORTCUT_IDS) {
-        for (const keys of keysOf(id, mac, {})) expect(parseBinding(keys)).not.toBeNull();
+        for (const keys of keysOf(id, mac, {})) expect(id === "prompts.open" || parseBinding(keys) !== null).toBe(true);
         expect(conflictsOf(id, mac, {})).toEqual([]);
       }
     }
@@ -46,6 +46,8 @@ describe("the registry", () => {
     expect(labelOf("view.toggle-terminal", false, {})).toBe("Ctrl+`");
     expect(labelOf("view.diff", true, {})).toBe("⌥⌘2");
     expect(labelOf("view.diff", false, {})).toBe("Alt+2");
+    expect(labelOf("prompts.open", true, {})).toBe("⇧Tab");
+    expect(labelOf("prompts.open", false, {})).toBe("Shift+Tab");
   });
 
   // The same cases as `bindings_name_modifiers_once_then_one_ascii_or_named_key` and
@@ -94,6 +96,16 @@ describe("default keys", () => {
     expect(zoom(press("=", { code: "Equal", metaKey: true, ctrlKey: true }))).toBeNull();
   });
 
+  test("⇧Tab alone opens the saved prompts, on either platform: not Tab, nor ⇧Tab with another modifier", () => {
+    for (const mac of [true, false]) {
+      expect(pressed(press("Tab", { shiftKey: true }), "prompts.open", mac, {})).toBe(true);
+      expect(pressed(press("Tab"), "prompts.open", mac, {})).toBe(false);
+      for (const modifier of ["metaKey", "ctrlKey", "altKey"]) {
+        expect(pressed(press("Tab", { shiftKey: true, [modifier]: true }), "prompts.open", mac, {})).toBe(false);
+      }
+    }
+  });
+
   test("digits by their place, Shift or not", () => {
     expect(pressed(press("&", { code: "Digit1", ctrlKey: true }), "workspace.goto", false, {})).toBe(true);
     expect(pressed(press("1", { code: "Digit1", ctrlKey: true, shiftKey: true }), "workspace.goto", false, {})).toBe(true);
@@ -121,6 +133,11 @@ describe("the user's keys", () => {
     expect(pressed(press("t", { metaKey: true }), "chat.new", true, overrides)).toBe(false);
     expect(pressed(press("J", { metaKey: true, shiftKey: true }), "chat.new", true, overrides)).toBe(true);
     expect(pressed(press("j", { metaKey: true }), "chat.new", true, overrides)).toBe(false);
+    // ⇧Tab, the saved prompts' default, no longer opens them once they have other keys.
+    for (const mac of [true, false]) {
+      expect(pressed(press("Tab", { shiftKey: true }), "prompts.open", mac, { "prompts.open": "⌥P" })).toBe(false);
+      expect(pressed(press("p", { code: "KeyP", altKey: true }), "prompts.open", mac, { "prompts.open": "⌥P" })).toBe(true);
+    }
   });
 
   test("in the terminal outside macOS, the shell keeps the default keys but not the ones the user gave", () => {

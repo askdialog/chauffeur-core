@@ -1,4 +1,4 @@
-// A menu above the composer: the `/` menu's commands, the saved prompts' menu (⇧Tab). A click picks
+// A menu above the composer: the `/` menu's commands, the saved prompts' menu (⇧Tab by default). A click picks
 // a row without taking the focus from where the menu's owner keeps it.
 
 import { type ReactNode, type Ref, useEffect, useRef } from "react";

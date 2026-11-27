@@ -1,13 +1,14 @@
-// The saved prompts' menu of a chat's composer (docs/adr/saved-prompts.md): ⇧Tab opens it above the
-// composer, its filter field takes the keys typed meanwhile, and ↵ hands the chosen prompt's text
-// to the composer, never sending it.
+// The saved prompts' menu of a chat's composer (docs/adr/saved-prompts.md): its shortcut,
+// `prompts.open` (⇧Tab by default), opens it above the composer, its filter field takes the keys
+// typed meanwhile, and ↵ hands the chosen prompt's text to the composer, never sending it.
 
 import type { Prompt } from "@chauffeur/protocol";
 import { Search } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { stepMatch } from "@/lib/chatFind";
 import { menuKey } from "@/lib/composerMenu";
-import { matchPrompts, opensPrompts } from "@/lib/prompts";
+import { matchPrompts } from "@/lib/prompts";
+import { pressed } from "@/lib/shortcuts";
 import { errorMessage } from "@/lib/rpc";
 import { client, openSettings } from "@/state/app";
 import { Kbd, Spinner } from "@/components/ui";
@@ -88,8 +89,8 @@ export function usePromptsMenu(insert: (text: string) => void, leave: () => void
     if (nativeEvent.isComposing || nativeEvent.keyCode === 229) return event.stopPropagation();
     // Taken already: a subagent's panel closing on Esc.
     if (nativeEvent.defaultPrevented) return;
-    // The focus stays in the menu.
-    if (opensPrompts(event)) return event.preventDefault();
+    // The focus stays in the menu: on its key again, and on ⇧Tab, which would leave it.
+    if (pressed(nativeEvent, "prompts.open") || (event.key === "Tab" && event.shiftKey)) return event.preventDefault();
     const action = menuKey(event);
     if (!action) return;
     event.preventDefault();
