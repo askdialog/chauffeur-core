@@ -57,11 +57,9 @@ export function ComposerMenu<T>({
               role="option"
               aria-selected={index === active}
               data-index={index}
-              // Keep the focus where it is.
-              onMouseDown={(event) => {
-                event.preventDefault();
-                onPick(item);
-              }}
+              // Keep the focus where it is; picked on click, so that a screen reader's activation picks too.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onPick(item)}
               onMouseEnter={() => onHover(index)}
               className={cx(
                 "flex w-full items-baseline gap-2 px-3 py-1.5 text-left text-[12.5px]",

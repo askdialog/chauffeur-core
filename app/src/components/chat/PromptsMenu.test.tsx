@@ -169,7 +169,9 @@ domTest("the menu reads the prompts at each opening, filters them by name and te
   await c.pressInComposer(shiftTab);
   await until(() => rows().length === 3);
   await act(async () => {
-    document.querySelectorAll("[data-testid=prompts-menu] [role=option]")[2]?.dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, cancelable: true }) as unknown as Event);
+    const option = document.querySelectorAll<HTMLButtonElement>("[data-testid=prompts-menu] [role=option]")[2];
+    option?.dispatchEvent(new window.MouseEvent("mousedown", { bubbles: true, cancelable: true }) as unknown as Event);
+    option?.click();
   });
   expect(menu()).toBeNull();
   expect(c.composer()).toBe("Hello Yes, go ahead|world");
