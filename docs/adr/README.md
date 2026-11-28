@@ -194,6 +194,7 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [File workspaces by their exact repository set](exact-repository-section-matches.md) | 2026-11-20 | accepted |
 | [Codex Security audits in a workspace](codex-security-audits.md) | 2026-11-23 | accepted |
 | [Follow a participant on a shared design canvas](follow-design-view.md) | 2026-11-23 | accepted |
+| [The user's own prompts, inserted from the composer with ⇧Tab](saved-prompts.md) | 2026-11-23 | accepted |
 | [An exploration's agent ensures a declared login through a tool, not the CLI](session-ensure-tool-in-explorations.md) | 2026-11-23 | accepted |
 | [A design chat started from a chat runs on that chat's agent](design-from-a-chat-keeps-its-agent.md) | 2026-11-24 | accepted |
 | [A history exploration opens its latest imported session](import-history-latest-session-open.md) | 2026-11-24 | accepted |
