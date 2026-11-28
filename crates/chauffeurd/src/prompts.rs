@@ -149,15 +149,18 @@ pub fn save(daemon: &Daemon, params: &PromptSaveParams) -> Result<Vec<Prompt>> {
             ),
         ));
     }
-    if std::fs::symlink_metadata(&target).is_ok() && !(own_listed && same_file(&own_file, &target))
-    {
-        return Err(name_error(
+    let not_a_prompt = || {
+        name_error(
             Error::ConflictWith,
             format!(
                 "The prompts folder holds a {name}.md that is not a prompt (a folder, a link, or \
                  not UTF-8): choose another name"
             ),
-        ));
+        )
+    };
+    let replaces_own = own_listed && same_file(&own_file, &target);
+    if std::fs::symlink_metadata(&target).is_ok() && !replaces_own {
+        return Err(not_a_prompt());
     }
     std::fs::create_dir_all(&root).context("could not create the prompts folder")?;
     // A new file of a random name (`O_EXCL`): never a link someone left at a name known ahead,
@@ -168,8 +171,19 @@ pub fn save(daemon: &Daemon, params: &PromptSaveParams) -> Result<Vec<Prompt>> {
         .tempfile_in(&root)
         .and_then(|mut tmp| tmp.write_all(params.text.as_bytes()).map(|()| tmp))
         .with_context(|| format!("could not write the prompt {name}"))?;
-    tmp.persist(&target)
-        .with_context(|| format!("could not write the prompt {name}"))?;
+    // A new name is installed without replacing anything, so that a file put there since the
+    // check above is never overwritten; only the prompt's own file is replaced.
+    let persisted = if replaces_own {
+        tmp.persist(&target)
+    } else {
+        tmp.persist_noclobber(&target)
+    };
+    match persisted {
+        Err(e) if e.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(not_a_prompt());
+        }
+        result => result.with_context(|| format!("could not write the prompt {name}"))?,
+    };
     if let Some(previous) = previous {
         let old = file(&root, previous);
         // Another spelling of the same name (its case, its accents' encoding) names the file just
