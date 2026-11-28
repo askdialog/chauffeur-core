@@ -188,12 +188,17 @@ pub fn save(daemon: &Daemon, params: &PromptSaveParams) -> Result<Vec<Prompt>> {
         let old = file(&root, previous);
         // Another spelling of the same name (its case, its accents' encoding) names the file just
         // written on macOS: renaming takes the new spelling, removing would remove the prompt.
-        if same_file(&old, &target) {
+        let removed = if same_file(&old, &target) {
             std::fs::rename(&old, &target)
         } else {
-            std::fs::remove_file(&old)
-        }
-        .with_context(|| format!("could not remove the prompt's previous name, {previous}"))?;
+            // The previous name stays: the new file goes, so that the prompt is not listed twice
+            // and saving again renames it.
+            std::fs::remove_file(&old).inspect_err(|_| {
+                let _ = std::fs::remove_file(&target);
+            })
+        };
+        removed
+            .with_context(|| format!("could not remove the prompt's previous name, {previous}"))?;
     }
     list(daemon)
 }
