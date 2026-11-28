@@ -65,7 +65,7 @@ export function useSlashMenu(
     return true;
   };
 
-  let message: React.ReactNode = null;
+  let message: React.ReactNode;
   if (list?.loading ?? true) {
     message = (
       <>

@@ -9,6 +9,7 @@ use std::sync::Mutex;
 
 use anyhow::Context;
 use chauffeur_protocol::prompts::{Prompt, PromptSaveParams};
+use serde_json::json;
 
 use crate::{Daemon, Error, Result};
 
@@ -32,13 +33,8 @@ fn file(root: &Path, name: &str) -> PathBuf {
 /// nothing.
 pub fn list(daemon: &Daemon) -> Result<Vec<Prompt>> {
     let entries = match std::fs::read_dir(root(daemon)) {
-        Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(anyhow::Error::from(error)
-                .context("could not read the prompts folder")
-                .into());
-        }
+        entries => entries.context("could not read the prompts folder")?,
     };
     // An entry the folder fails to give is an error: save and delete decide on the whole list.
     let entries = entries
@@ -95,10 +91,6 @@ fn refusal(name: &str) -> Option<String> {
     }
 }
 
-fn name_error(error: fn(String, serde_json::Value) -> Error, message: String) -> Error {
-    error(message, serde_json::json!({ "field": "name" }))
-}
-
 /// Whether two paths name one file: on a file system that ignores case and Unicode normalization
 /// (macOS), two spellings of a name do.
 fn same_file(a: &Path, b: &Path) -> bool {
@@ -114,7 +106,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 pub fn save(daemon: &Daemon, params: &PromptSaveParams) -> Result<Vec<Prompt>> {
     let name = params.name.as_str();
     if let Some(message) = refusal(name) {
-        return Err(name_error(Error::BadRequestWith, message));
+        return Err(Error::BadRequestWith(message, json!({ "field": "name" })));
     }
     let _writes = WRITES.lock().unwrap();
     let existing = list(daemon)?;
@@ -134,31 +126,30 @@ pub fn save(daemon: &Daemon, params: &PromptSaveParams) -> Result<Vec<Prompt>> {
     let root = root(daemon);
     let target = file(&root, name);
     let own = previous.unwrap_or(name);
-    let own_file = file(&root, own);
     let own_listed = existing.iter().any(|p| p.name == own);
     if let Some(other) = existing.iter().find(|p| {
         p.name != own
             && (p.name.to_lowercase() == name.to_lowercase()
                 || same_file(&file(&root, &p.name), &target))
     }) {
-        return Err(name_error(
-            Error::ConflictWith,
+        return Err(Error::ConflictWith(
             format!(
                 "Another prompt is already named \"{}\": choose another name",
                 other.name
             ),
+            json!({ "field": "name" }),
         ));
     }
     let not_a_prompt = || {
-        name_error(
-            Error::ConflictWith,
+        Error::ConflictWith(
             format!(
                 "The prompts folder holds a {name}.md that is not a prompt (a folder, a link, or \
                  not UTF-8): choose another name"
             ),
+            json!({ "field": "name" }),
         )
     };
-    let replaces_own = own_listed && same_file(&own_file, &target);
+    let replaces_own = own_listed && same_file(&file(&root, own), &target);
     if std::fs::symlink_metadata(&target).is_ok() && !replaces_own {
         return Err(not_a_prompt());
     }
@@ -207,7 +198,9 @@ pub fn save(daemon: &Daemon, params: &PromptSaveParams) -> Result<Vec<Prompt>> {
 pub fn delete(daemon: &Daemon, name: &str) -> Result<Vec<Prompt>> {
     let _writes = WRITES.lock().unwrap();
     if !list(daemon)?.iter().any(|p| p.name == name) {
-        return Err(Error::NotFound(format!("No prompt is named \"{name}\"")));
+        return Err(Error::NotFound(format!(
+            "No prompt is named \"{name}\" to delete: it was deleted or renamed meanwhile"
+        )));
     }
     std::fs::remove_file(file(&root(daemon), name))
         .with_context(|| format!("could not delete the prompt {name}"))?;
