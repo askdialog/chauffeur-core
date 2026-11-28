@@ -78,6 +78,12 @@ export function isNotImplemented(error: unknown): boolean {
   return error instanceof RpcCallError && /not implemented/i.test(error.message);
 }
 
+/** The form field a daemon's refusal is about (its `data.field`), if it names one. */
+export function fieldOf(error: unknown): string | null {
+  if (!(error instanceof RpcCallError) || typeof error.data !== "object" || error.data === null || !("field" in error.data)) return null;
+  return typeof error.data.field === "string" ? error.data.field : null;
+}
+
 export function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);

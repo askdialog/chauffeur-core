@@ -118,6 +118,9 @@ async fn handle_other(daemon: &Arc<Daemon>, call: ClientCall) -> Result<Value> {
         ClientCall::IdentityState(_) => to_value(crate::identity::state(daemon)?),
         ClientCall::IdentitySignIn(_) => to_value(crate::identity::sign_in(daemon).await?),
         ClientCall::IdentitySignOut(_) => to_value(crate::identity::sign_out(daemon)?),
+        ClientCall::PromptsList(_) => to_value(crate::prompts::list(daemon)?),
+        ClientCall::PromptsSave(p) => to_value(crate::prompts::save(daemon, &p)?),
+        ClientCall::PromptsDelete(p) => to_value(crate::prompts::delete(daemon, &p.name)?),
         ClientCall::CloudTransferStart(_) | ClientCall::CloudTransferCancel(_) => {
             unreachable!("reentrant transfer entry points are dispatched separately")
         }

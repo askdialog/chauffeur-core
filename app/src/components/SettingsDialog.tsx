@@ -3,7 +3,7 @@
 // at once; the rest of settings.toml opens in the editor from General.
 
 import type { AppSettings, ErrorReports, Forge, KeepAwake, OllamaPull, Palette, RepoSetting, SearchStatus, SettingsUpdate, ShortcutId, UpdateStatus } from "@chauffeur/protocol";
-import { ArrowRightLeft, Bell, CircleUser, Bot, Coffee, Cpu, ExternalLink, FileText, FolderGit2, GitBranch, Info, Keyboard, KeyRound, Layers, Palette as PaletteIcon, Play, Plus, Power, Package, Search, Settings2, Smartphone, Type, X } from "lucide-react";
+import { ArrowRightLeft, Bell, CircleUser, Bot, Coffee, Cpu, ExternalLink, FileText, FolderGit2, GitBranch, Info, Keyboard, KeyRound, Layers, MessageSquareText, Palette as PaletteIcon, Play, Plus, Power, Package, Search, Settings2, Smartphone, Type, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { effectiveLoadout, type ModelChoice } from "@/lib/models";
 import { GithubSetup } from "./GithubSetup";
@@ -19,6 +19,7 @@ import { ExtensionMarketplace } from "./ExtensionMarketplace";
 import { MobileSettings } from "./MobileSettings";
 import { AccountSettings } from "./AccountSettings";
 import { BrandsSettings } from "./BrandsSettings";
+import { PromptsSettings } from "./PromptsSettings";
 import { searchSettings, type SettingsSection } from "@/lib/settingsSearch";
 import { MEMBERS_ONLY_SECTIONS } from "@/lib/members";
 import { errorMessage } from "@/lib/rpc";
@@ -71,6 +72,7 @@ const SECTIONS: Array<{ id: Section; label: string; icon: ReactNode }> = [
   { id: "llms", label: "LLMs", icon: <Settings2 size={13} /> },
   { id: "daily-review", label: "Daily review", icon: <FileText size={13} /> },
   { id: "brands", label: "Brands", icon: <PaletteIcon size={13} /> },
+  { id: "prompts", label: "Prompts", icon: <MessageSquareText size={13} /> },
   { id: "agents", label: "Agents", icon: <Bot size={13} /> },
   { id: "local-models", label: "Local models", icon: <Cpu size={13} /> },
   { id: "search", label: "Search", icon: <Search size={13} /> },
@@ -82,7 +84,7 @@ const SECTIONS: Array<{ id: Section; label: string; icon: ReactNode }> = [
 
 const SECTION_GROUPS: Array<{ label: string; sections: Section[] }> = [
   { label: "Preferences", sections: ["general", "appearance", "keyboard", "notifications", "sleep"] },
-  { label: "Work", sections: ["workspaces", "agents", "llms", "local-models", "search", "compaction", "daily-review", "brands"] },
+  { label: "Work", sections: ["workspaces", "agents", "llms", "local-models", "search", "compaction", "daily-review", "brands", "prompts"] },
   { label: "Connections", sections: ["account", "transfer", "mobile", "github", "linear", "slack", "extensions"] },
   { label: "Application", sections: ["about"] },
 ];
@@ -265,6 +267,7 @@ export function SettingsDialog() {
                 {section === "linear" && <Linear settings={settings} update={update} busy={busy} />}
                 {section === "compaction" && <Compaction settings={settings} update={update} busy={busy} />}
                 {section === "brands" && <BrandsSettings />}
+                {section === "prompts" && <PromptsSettings />}
                 {section === "about" && <About />}
                 {error && <p className="text-[12px] text-danger selectable">{error}</p>}
               </div>

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { PROTOCOL_VERSION, type EventEnvelope } from "@chauffeur/protocol";
-import { DaemonClient, DISCONNECTED, RpcCallError, type SocketLike } from "./rpc";
+import { DaemonClient, DISCONNECTED, fieldOf, RpcCallError, type SocketLike } from "./rpc";
 
 /** An in-memory WebSocket: the test plays the daemon. */
 class FakeSocket implements SocketLike {
@@ -397,4 +397,11 @@ test("manual retry preserves queued calls and never duplicates an active connect
     client.retry();
     expect(sockets).toHaveLength(1);
   } finally { client.stop(); }
+});
+
+test("a refusal names its form field only through its data", () => {
+  expect(fieldOf(new RpcCallError("prompts.save", { code: 400, message: "bad", data: { field: "name" } }))).toBe("name");
+  expect(fieldOf(new RpcCallError("prompts.save", { code: 500, message: "disk full" }))).toBeNull();
+  expect(fieldOf(new RpcCallError("prompts.save", { code: 400, message: "bad", data: { field: 1 } }))).toBeNull();
+  expect(fieldOf(new Error("name"))).toBeNull();
 });

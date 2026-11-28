@@ -1108,6 +1108,22 @@ methods! {
         #[access(User)]
         #[relay(Local)]
         BrandsSetDefault(crate::deck::BrandDefaultParams) -> crate::deck::BrandsResult,
+        /// The user's saved prompts, read from their folder on every call, sorted by name
+        /// ignoring case (docs/adr/saved-prompts.md).
+        #[serde(rename = "prompts.list")]
+        #[access(User)]
+        #[relay(Local)]
+        PromptsList(EmptyParams) -> Vec<crate::prompts::Prompt>,
+        /// Writes a prompt, replacing the text of one with the same name; with `previous`, renames
+        /// that one.
+        #[serde(rename = "prompts.save")]
+        #[access(User)]
+        #[relay(Local)]
+        PromptsSave(crate::prompts::PromptSaveParams) -> Vec<crate::prompts::Prompt>,
+        #[serde(rename = "prompts.delete")]
+        #[access(User)]
+        #[relay(Local)]
+        PromptsDelete(crate::prompts::PromptParams) -> Vec<crate::prompts::Prompt>,
         /// The brand a chat builds with, from its next session.
         #[serde(rename = "chat.set_brand")]
         #[access(Any)]

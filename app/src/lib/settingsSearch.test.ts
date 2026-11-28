@@ -13,3 +13,9 @@ test("empty and unmatched queries return no unrelated options", () => {
   expect(searchSettings("unfindable-setting", true)).toEqual([]);
   expect(searchSettings("font sound", true)).toEqual([]);
 });
+
+test("saved prompts are found under prompts, snippets and saved replies", () => {
+  for (const query of ["prompts", "snippets", "saved replies"]) {
+    expect(searchSettings(query, false).map((r) => r.section)).toEqual(["prompts"]);
+  }
+});

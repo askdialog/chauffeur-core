@@ -1,6 +1,6 @@
 import { MEMBERS_ONLY_SECTIONS } from "./members";
 
-export type SettingsSection = "brands" | "account" | "extensions" | "slack" | "transfer" | "mobile" | "general" | "github" | "daily-review" | "appearance" | "keyboard" | "notifications" | "workspaces" | "llms" | "agents" | "local-models" | "search" | "sleep" | "linear" | "compaction" | "about";
+export type SettingsSection = "brands" | "prompts" | "account" | "extensions" | "slack" | "transfer" | "mobile" | "general" | "github" | "daily-review" | "appearance" | "keyboard" | "notifications" | "workspaces" | "llms" | "agents" | "local-models" | "search" | "sleep" | "linear" | "compaction" | "about";
 
 export interface SettingsOption {
   section: SettingsSection;
@@ -48,6 +48,7 @@ export const SETTINGS_OPTIONS: readonly SettingsOption[] = [
   { section: "compaction", label: "Compaction threshold", target: "jev-threshold", keywords: "context percentage compact from"  },
   { section: "search", label: "Search by meaning", target: "search-semantic", keywords: "semantic ollama"  },
   { section: "search", label: "Embedding model", target: "search-embedding-model", keywords: "ollama embeddinggemma"  },
+  { section: "prompts", label: "Saved prompts", target: "prompt-new", keywords: "snippets saved replies"  },
 ];
 
 /** All query words must match; member-only options never appear outside a member session. */

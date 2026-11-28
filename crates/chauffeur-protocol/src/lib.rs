@@ -11,6 +11,7 @@
 //! - [`claudecode`]: the import from Claude Code.
 //! - [`conductor`]: the import from Conductor.
 //! - [`routines`]: prompts the daemon runs by itself at set times.
+//! - [`prompts`]: the user's saved prompts.
 //! - [`rpc`]: the JSON-RPC 2.0 envelopes.
 //! - [`methods`]: how a method enum is declared; [`access`]: who may call a client method and
 //!   whether it is relayed; [`generate`]: the method maps written to TypeScript.
@@ -41,6 +42,7 @@ pub mod identity;
 pub mod model;
 pub mod office;
 pub mod peer;
+pub mod prompts;
 pub mod reviews;
 pub mod routines;
 pub mod rpc;

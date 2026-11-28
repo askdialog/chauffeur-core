@@ -87,6 +87,20 @@ if bun scripts/app-call.ts slack.context '{"link":"chauffeur://slack/aaaaaaaaaaa
   echo "a signed-out daemon imported Slack context"; exit 1
 fi
 grep -q 'Connecte ton compte' "$T/slack-error"
+echo "== prompts. saved prompts are files of the prompts folder the app names, edits and deletes"
+bun scripts/app-call.ts prompts.list '{}' | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r == [], r'
+if [[ -e "$CHAUFFEUR_HOME/prompts" ]]; then echo "listing the prompts made their folder"; exit 1; fi
+bun scripts/app-call.ts prompts.save '{"name":"yes","text":"Yes, go ahead"}' >/dev/null
+bun scripts/app-call.ts prompts.save '{"name":"Compact","text":"Compact:\n- keep the decisions\n"}' >/dev/null
+cmp <(printf 'Yes, go ahead') "$CHAUFFEUR_HOME/prompts/yes.md"
+cmp <(printf 'Compact:\n- keep the decisions\n') "$CHAUFFEUR_HOME/prompts/Compact.md"
+printf 'Written by hand\n' > "$CHAUFFEUR_HOME/prompts/agreed.md"
+printf 'not a prompt' > "$CHAUFFEUR_HOME/prompts/notes.txt"
+bun scripts/app-call.ts prompts.save '{"name":"go","text":"Go","previous":"yes"}' | python3 -c 'import sys,json; r=json.load(sys.stdin); assert r == [{"name":"agreed","text":"Written by hand"},{"name":"Compact","text":"Compact:\n- keep the decisions"},{"name":"go","text":"Go"}], r'
+if [[ -e "$CHAUFFEUR_HOME/prompts/yes.md" ]]; then echo "a renamed prompt kept its old file"; exit 1; fi
+refuses 'Another prompt is already named "go"' bun scripts/app-call.ts prompts.save '{"name":"GO","text":"t"}'
+bun scripts/app-call.ts prompts.delete '{"name":"go"}' | python3 -c 'import sys,json; r=json.load(sys.stdin); assert [p["name"] for p in r] == ["agreed","Compact"], r'
+refuses 'No prompt is named "go"' bun scripts/app-call.ts prompts.delete '{"name":"go"}'
 echo "== errors. --json prints the daemon's error on stdout and exits by its kind"
 set +e; missing=$(c --json show no-such-workspace 2>/dev/null); status=$?; set -e
 [ "$status" = 3 ] || { echo "a missing workspace exited with $status"; exit 1; }
