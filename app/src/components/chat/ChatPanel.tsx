@@ -122,10 +122,11 @@ import { QueuePanel } from "./QueuePanel";
 import { TasksPanel } from "./TasksPanel";
 import { isDoubleEsc, NO_RECALL, type Recall, recall, recallable } from "@/lib/promptHistory";
 import { useSlashMenu } from "./useSlashMenu";
+import { usePromptsMenu } from "./usePromptsMenu";
 import { TimelineRail } from "./TimelineRail";
 import { ChatFind, textRanges } from "./ChatFind";
 import { hasMod, kbd, stepTab } from "../../lib/keys";
-import { chatJump, onceIn, tabKey } from "../../lib/shortcuts";
+import { chatJump, onceIn, pressed, tabKey } from "../../lib/shortcuts";
 import { dismissedSuggestions, shownSuggestion, type Suggestion, suggestionKey } from "@/lib/suggestions";
 import { hasSlackMessageLink } from "@/lib/connectors";
 
@@ -1702,7 +1703,7 @@ function WorkingFooter({
   );
 }
 
-const ComposerBox = memo(function ComposerBox({
+export const ComposerBox = memo(function ComposerBox({
   draftKey,
   working,
   disabled,
@@ -1761,6 +1762,10 @@ const ComposerBox = memo(function ComposerBox({
     setText(`/${command.name} `);
     area.current?.focus();
   });
+  const prompts = usePromptsMenu(
+    (prompt) => area.current?.insert(prompt),
+    () => area.current?.focus(),
+  );
   // Set aside (Esc, or taken with Tab), for this chat, until the next one arrives. Typing only hides
   // it: it shows again once the composer is empty.
   const [dismissed, setDismissed] = useState(() => dismissedSuggestions.get(draftKey));
@@ -1824,6 +1829,7 @@ const ComposerBox = memo(function ComposerBox({
           </div>
         )}
         {slash.menu}
+        {prompts.menu}
         <ImageStrip images={images} reading={reading} onRemove={attachments.remove} className="px-2.5 pt-2.5" />
         <ComposerEditor
           ref={area}
@@ -1836,6 +1842,12 @@ const ComposerBox = memo(function ComposerBox({
           }}
           onPaste={attachments.onPaste}
           onKeyDown={(e) => {
+            if (pressed(e, "prompts.open")) {
+              e.preventDefault();
+              slash.close();
+              prompts.show();
+              return;
+            }
             const offer = suggestionKey(ghost, {
               key: e.key,
               shiftKey: e.shiftKey,
@@ -1868,6 +1880,8 @@ const ComposerBox = memo(function ComposerBox({
             }
             if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
               e.preventDefault();
+              // A held ↵ sends once: its repeats would send what a menu just inserted with it.
+              if (e.repeat) return;
               // ⌘⏎ while the agent works: wait for the end of its turn instead of steering it.
               void submit(hasMod(e) && working ? "queue" : "steer");
             } else if (e.key === "Escape" && working) {

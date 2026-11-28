@@ -6,7 +6,8 @@
 // Keys other handlers read themselves (find in a chat, ⌘[ / ⌘] between workspaces, the Files editor's
 // ⌘S, ⇧⌘W of the macOS menu)
 // are listed as fixed, so that a key given to a shortcut that they already take shows as a conflict.
-// Typing keys (the composer's ↵, a list's arrows) are not shortcuts here.
+// Typing keys (the composer's ↵, a list's arrows) are not shortcuts here. A default may go without
+// ⌘, ⌃ or ⌥ (⇧Tab opens the saved prompts in the composer); keys the user gives may not.
 
 import type { ShortcutId } from "@chauffeur/protocol";
 import { asElement, fromTerminal, inForeignEditor, isMac, kbd } from "./keys";
@@ -125,6 +126,7 @@ export const SHORTCUTS: Record<Id, Shortcut> = {
   "model.pick": { label: "Pick a favorite model", where: "The composer", mac: digits("⌃⌘"), fixed: true, range: "⌃⌘1–9" },
   "model.effort": { label: "Next effort level", where: "The composer", mac: ["⇧⌘/"] },
   "model.fast": { label: "Fast mode on or off", where: "The composer", mac: ["⇧⌘E"] },
+  "prompts.open": { label: "Insert a saved prompt", where: "The composer", mac: ["⇧Tab"] },
   "files.save": { label: "Save the file", where: "The Files editor", mac: ["⌘S"], fixed: true },
 };
 
@@ -185,12 +187,8 @@ const US_CODES: Record<string, string> = {
   "=": "Equal",
 };
 
-/**
- * A binding's modifiers and key; null when it is not one: modifiers among ⌃ ⌥ ⇧ ⌘ (each once, ⌘, ⌃
- * or ⌥ among them), then one key, a printable ASCII character or a named one. The daemon checks the
- * same (`binding_error` in settings.rs).
- */
-export function parseBinding(keys: string): Binding | null {
+/** Keys' modifiers and key, as a default or a binding writes them; null when they are not keys. */
+function parseKeys(keys: string): Binding | null {
   const chars = Array.from(keys);
   const modifiers: string[] = [];
   while (chars.length > 0 && "⌃⌥⇧⌘".includes(chars[0])) {
@@ -199,7 +197,7 @@ export function parseBinding(keys: string): Binding | null {
   }
   const key = chars.join("");
   const valid = /^[\x21-\x7e]$/.test(key) || FUNCTION_KEY.test(key) || key in NAMED;
-  if (!valid || !(modifiers.includes("⌘") || modifiers.includes("⌃") || modifiers.includes("⌥"))) return null;
+  if (!valid) return null;
   return {
     ctrl: modifiers.includes("⌃"),
     alt: modifiers.includes("⌥"),
@@ -210,11 +208,21 @@ export function parseBinding(keys: string): Binding | null {
 }
 
 /**
+ * A binding's modifiers and key; null when it is not one: modifiers among ⌃ ⌥ ⇧ ⌘ (each once, ⌘, ⌃
+ * or ⌥ among them), then one key, a printable ASCII character or a named one. The daemon checks the
+ * same (`binding_error` in settings.rs).
+ */
+export function parseBinding(keys: string): Binding | null {
+  const binding = parseKeys(keys);
+  return binding && (binding.cmd || binding.ctrl || binding.alt) ? binding : null;
+}
+
+/**
  * The one way of writing `keys` on this platform, to compare two: outside macOS, as Ctrl and Alt
  * (⌃ being both, ⌥⌘ the same Ctrl+Alt).
  */
 function canonical(keys: string, mac: boolean): string | null {
-  const binding = parseBinding(keys);
+  const binding = parseKeys(keys);
   if (!binding) return null;
   const { ctrl, alt, shift, cmd, key } = binding;
   if (mac) return `${ctrl ? "⌃" : ""}${alt ? "⌥" : ""}${shift ? "⇧" : ""}${cmd ? "⌘" : ""}${key}`;
@@ -264,7 +272,7 @@ function matches({ ctrl, alt, shift, cmd, key }: Binding, event: Press, mac: boo
 export function pressed(event: Press & Pick<Event, "target">, id: Id, mac = isMac, overrides = active): boolean {
   if (SHORTCUTS[id].terminal === "shell" && overrides[id as ShortcutId] === undefined && fromTerminal(event, mac)) return false;
   return keysOf(id, mac, overrides).some((keys) => {
-    const binding = parseBinding(keys);
+    const binding = parseKeys(keys);
     return binding !== null && matches(binding, event, mac);
   });
 }
@@ -371,7 +379,7 @@ export function rebind(overrides: Overrides, id: ShortcutId, keys: string, mac =
 
 /** The keys `keys` answers to, each written one way: a digit without ⇧ takes it with ⇧ too (`matches`). */
 function covered(keys: string, mac: boolean): string[] {
-  const binding = parseBinding(keys);
+  const binding = parseKeys(keys);
   const one = canonical(keys, mac);
   if (!binding || !one) return [];
   return /^[0-9]$/.test(binding.key) && !binding.shift ? [one, canonical(`⇧${keys}`, mac)!] : [one];

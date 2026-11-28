@@ -3,9 +3,11 @@
 import type { SlashCommand } from "@chauffeur/protocol";
 import { useEffect, useMemo, useState } from "react";
 import { matchCommands, slashQuery } from "@/lib/commands";
-import { hasMod } from "@/lib/keys";
+import { stepMatch } from "@/lib/chatFind";
+import { menuKey } from "@/lib/composerMenu";
 import { type CommandsSource, commandsKey, loadCommands, useApp } from "@/state/app";
-import { SlashMenu } from "./SlashMenu";
+import { Spinner } from "@/components/ui";
+import { ComposerMenu } from "./ComposerMenu";
 
 /** What the menu reads of a key press: a DOM event or React's. */
 type SlashKeyEvent = Pick<
@@ -16,7 +18,7 @@ type SlashKeyEvent = Pick<
 /**
  * The `/` menu of a composer: open while the message is a lone `/word`, it lists the agent's
  * commands matching the word (Claude's commands and skills, Codex's skills). ↑↓ move, ↵ or Tab
- * insert the command, Esc closes it.
+ * (without Shift: ⇧Tab opens the saved prompts by default) insert the command, Esc closes it.
  */
 export function useSlashMenu(
   text: string,
@@ -48,37 +50,58 @@ export function useSlashMenu(
 
   const onKeyDown = (e: SlashKeyEvent): boolean => {
     if (!open || e.isComposing) return false;
-    if (e.key === "Escape") {
+    const action = menuKey(e);
+    if (action === "close") {
       e.preventDefault();
       setDismissed(text);
       return true;
     }
-    if (matches.length === 0) return false;
-    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      const step = e.key === "ArrowDown" ? 1 : -1;
-      setActive((i) => (i + step + matches.length) % matches.length);
-      return true;
-    }
-    if ((e.key === "Tab" && !e.ctrlKey) || (e.key === "Enter" && !e.shiftKey && !hasMod(e))) {
-      e.preventDefault();
+    if (!action || matches.length === 0) return false;
+    e.preventDefault();
+    if (action === "pick") {
       const command = matches[Math.min(active, matches.length - 1)];
       if (command) pick(command);
-      return true;
-    }
-    return false;
+    } else setActive((i) => stepMatch(i, matches.length, action === "down" ? 1 : -1));
+    return true;
   };
 
+  let message: React.ReactNode = null;
+  if (list?.loading ?? true) {
+    message = (
+      <>
+        <Spinner /> Listing the agent's commands…
+      </>
+    );
+  } else if (list?.error) {
+    message = `Could not list the commands: ${list.error}`;
+  } else {
+    message = `No command matches /${query ?? ""}`;
+  }
+
   const menu = open ? (
-    <SlashMenu
-      query={query ?? ""}
-      commands={matches}
+    <ComposerMenu
+      testId="slash-menu"
+      items={matches}
+      keyOf={(command) => command.name}
       active={active}
-      loading={list?.loading ?? true}
-      error={list?.error ?? null}
+      message={message}
       onPick={pick}
       onHover={setActive}
-    />
+    >
+      {(command) => (
+        <>
+          <span className="shrink-0 font-medium text-fg">/{command.name}</span>
+          {command.argument_hint && (
+            <span className="max-w-[35%] shrink-0 truncate font-mono text-[11px] text-faint">{command.argument_hint}</span>
+          )}
+          <span className="min-w-0 truncate text-[12px] text-muted">{command.description}</span>
+        </>
+      )}
+    </ComposerMenu>
   ) : null;
-  return { menu, onKeyDown };
+  /** Closes the menu until the text changes (the saved prompts opening in its place). */
+  const close = () => {
+    if (open) setDismissed(text);
+  };
+  return { menu, onKeyDown, close };
 }

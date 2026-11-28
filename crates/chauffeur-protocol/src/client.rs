@@ -4342,6 +4342,8 @@ pub enum ShortcutId {
     ModelEffort,
     #[serde(rename = "model.fast")]
     ModelFast,
+    #[serde(rename = "prompts.open")]
+    PromptsOpen,
 }
 
 impl ShortcutId {
