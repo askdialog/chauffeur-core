@@ -202,3 +202,4 @@ A decision that replaces an earlier one is a new ADR. The earlier one keeps its 
 | [Esc gives the interrupted message back to the composer, and Esc twice empties it](esc-gives-back-the-message-and-double-esc-empties.md) | 2026-11-25 | accepted |
 | [Codex is updated from Chauffeur, in Settings › Agents and beside the error it causes](update-codex-from-chauffeur.md) | 2026-11-26 | accepted |
 | [A design share's link shows a preview of the design to anyone who has it](design-link-previews.md) | 2026-11-27 | accepted |
+| [Each workspace has a board its agent keeps: steps and a note](workspace-board.md) | 2026-11-28 | proposed, awaiting Justin |
